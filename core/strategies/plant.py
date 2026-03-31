@@ -13,6 +13,8 @@ class PlantStrategy(BaseStrategy):
 
     def _check_and_close_info_page(self, rect: tuple) -> bool:
         """检测并关闭个人信息页面，返回是否成功关闭"""
+        if self.stopped:
+            return False
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return False
@@ -20,23 +22,31 @@ class PlantStrategy(BaseStrategy):
             cv_img, "btn_info_close", threshold=0.6)
         if info_close:
             self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
-            time.sleep(0.3)
+            for _ in range(3):
+                if self.stopped:
+                    return False
+                time.sleep(0.1)
             return True
         return False
 
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
                                 buy_qty: int) -> list[str]:
         """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
-        if not lands:
+        if not lands or self.stopped:
             return []
         all_actions = []
 
         # 点击前先检测并关闭个人信息页面
         self._check_and_close_info_page(rect)
+        if self.stopped:
+            return all_actions
 
         # 点击第一块剩余的空地
         self.click(lands[0].x, lands[0].y, "点击空地")
-        time.sleep(0.3)
+        for _ in range(3):
+            if self.stopped:
+                return all_actions
+            time.sleep(0.1)
 
         # 查找种子
         seed_det = None
@@ -51,14 +61,20 @@ class PlantStrategy(BaseStrategy):
             if seed_dets:
                 seed_det = seed_dets[0]
                 break
-            time.sleep(0.3)
+            for _ in range(3):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.1)
 
         if not seed_det:
             # 还是没有种子，这块地也可能不是空地
             logger.info(f"剩余地块中仍未找到种子，跳过 {lands[0]}")
             self.click_blank(rect)
-            time.sleep(0.3)
-            if len(lands) > 1:
+            for _ in range(3):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.1)
+            if len(lands) > 1 and not self.stopped:
                 return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty)
             return all_actions
 
