@@ -2,7 +2,7 @@
 
 基于 OpenCV 视觉识别的 QQ 经典农场（微信小程序）自动化工具。纯本地运行，不依赖游戏接口，零封号风险。
 
-**项目来源**：该项目基于 `https://github.com/Z7ANN/qq-farm-auto` 开发
+**项目来源**：该项目全部代码来自 `https://github.com/Z7ANN/qq-farm-auto`，仅在基础上进行了部分修改以适应个人账号的土地情况
 
 ## 工作原理
 
