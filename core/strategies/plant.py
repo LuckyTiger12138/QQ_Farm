@@ -452,8 +452,17 @@ class PlantStrategy(BaseStrategy):
             if seed_dets:
                 det = seed_dets[0]
                 logger.info(f"购买流程：找到 '{crop_name}' ({det.confidence:.0%})")
+                if self.stopped:
+                    logger.info("购买流程：收到停止信号，取消购买")
+                    self._close_shop(rect)
+                    return None
                 self.click(det.x, det.y, f"选择{crop_name}")
-                time.sleep(1.0)  # 等待购买弹窗出现
+                for _ in range(10):
+                    if self.stopped:
+                        logger.info("购买流程：等待弹窗时收到停止信号，取消")
+                        self._close_shop(rect)
+                        return None
+                    time.sleep(0.1)
                 break
             else:
                 logger.warning(f"购买流程：商店中未找到 'shop_{crop_name}' 模板")
@@ -494,8 +503,16 @@ class PlantStrategy(BaseStrategy):
 
                 confirm = self.find_by_name(dets, "btn_buy_confirm")
                 if confirm:
+                    if self.stopped:
+                        logger.info("购买流程：点击确认前收到停止信号，取消")
+                        self._close_shop(rect)
+                        return None
                     self.click(confirm.x, confirm.y, f"确定购买{crop_name}×{buy_qty}")
-                    time.sleep(0.3)  # 等待购买完成动画
+                    for _ in range(3):
+                        if self.stopped:
+                            logger.info("购买流程：等待购买完成时收到停止信号")
+                            break
+                        time.sleep(0.1)
                     self._close_shop(rect)
                     return f"购买{crop_name}×{buy_qty}"
 
