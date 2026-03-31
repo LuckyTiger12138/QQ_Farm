@@ -373,8 +373,9 @@ class BotEngine(QObject):
                     self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
                     action_desc = "关闭个人信息页面"
                 else:
-                    self.popup.click_blank(rect)
-                    action_desc = "点击空白退出个人信息页面"
+                    # 找不到关闭按钮，可能是模板匹配问题，等待下一轮检测
+                    logger.debug("个人信息页面：未找到 btn_info_close，等待下轮检测")
+                    action_desc = "等待关闭个人信息页面"
             elif scene == Scene.BUY_CONFIRM:
                 action_desc = self.popup.handle_popup(detections)
             elif scene == Scene.SHOP_PAGE:
