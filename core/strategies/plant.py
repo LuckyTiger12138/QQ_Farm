@@ -30,7 +30,7 @@ class PlantStrategy(BaseStrategy):
         return False
 
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
-                                buy_qty: int, total_lands: int = 0) -> list[str]:
+                                buy_qty: int, total_lands: int = 0, skip_count: int = 0) -> list[str]:
         """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
         if not lands or self.stopped:
             return []
@@ -42,7 +42,7 @@ class PlantStrategy(BaseStrategy):
             return all_actions
 
         # 计算当前是第几块地
-        current_num = total_lands - len(lands) + 1 if total_lands > 0 else 1
+        current_num = skip_count + 1
         # 点击第一块剩余的空地
         self.click(lands[0].x, lands[0].y, f"点击空地 ({current_num}/{total_lands or len(lands)})")
         for _ in range(3):
@@ -77,7 +77,7 @@ class PlantStrategy(BaseStrategy):
                     return all_actions
                 time.sleep(0.1)
             if len(lands) > 1 and not self.stopped:
-                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, len(lands))
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, skip_count + 1)
             return all_actions
 
         # 找到种子，按住拖拽到所有剩余空地
@@ -133,6 +133,7 @@ class PlantStrategy(BaseStrategy):
         lands.sort(key=lambda d: d.confidence, reverse=True)  # 按置信度排序
         if not lands:
             return all_actions
+        total_lands = len(lands)  # 保存总数用于进度显示
         logger.info(f"找到 {len(lands)} 块空地，最高置信度：{lands[0].confidence:.0%}")
 
         # 点击空地前先检测并关闭个人信息页面
@@ -141,7 +142,7 @@ class PlantStrategy(BaseStrategy):
             return all_actions
 
         # 第二步：点击第一块空地，弹出种子列表
-        self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{len(lands)})")
+        self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")
         for _ in range(3):
             if self.stopped:
                 return all_actions
@@ -182,7 +183,7 @@ class PlantStrategy(BaseStrategy):
                     time.sleep(0.1)
                 # 从剩余的空地中继续播种（排除第一块）
                 if len(lands) > 1 and not self.stopped:
-                    return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, len(lands))
+                    return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, 1)
                 return all_actions
             logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
             buy_result = self._buy_seeds(rect, crop_name, buy_qty)
