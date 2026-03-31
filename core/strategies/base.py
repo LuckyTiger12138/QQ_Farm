@@ -1,4 +1,5 @@
 """策略基类 — 公共方法"""
+import os
 import time
 from loguru import logger
 
@@ -60,4 +61,25 @@ class BaseStrategy:
     def click_blank(self, rect: tuple):
         """点击天空区域关闭弹窗"""
         w, h = rect[2], rect[3]
-        self.click(w // 2, int(h * 0.15), "点击空白处")
+        # X 轴 +5% 错开，避免误触个人信息按钮
+        x, y = int(w * 0.55), int(h * 0.15)
+        self.click(x, y, "点击空白处")
+        # 截图标记点击位置
+        import cv2
+        import numpy as np
+        from PIL import Image as PILImage
+        from core.screen_capture import ScreenCapture
+        sc = ScreenCapture()
+        pil_img = sc.capture_region(rect)
+        if pil_img is not None:
+            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            # 画红点标记点击位置
+            cv2.circle(cv_img, (x, y), 10, (0, 0, 255), -1)
+            # 保存截图
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"blank_click_{ts}.png"
+            filepath = os.path.join(sc._save_dir, filename)
+            pil_img_marked = PILImage.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            from utils.image_utils import save_screenshot
+            save_screenshot(pil_img_marked, filepath)
+            logger.info(f"点击空白处位置：({x}, {y})，截图已保存：{filepath}")
