@@ -96,6 +96,14 @@ python tools/template_collector.py
 python tools/import_seeds.py
 ```
 
+**导入工具功能说明：**
+- 自动从 GitHub 仓库 `Penty-d/qq-farm-bot-ui` 获取最新种子图片
+- 同时生成 `seed_`（播种列表）和 `shop_`（商店卡片）两种模板
+- 与本地模板对比，跳过已存在的文件，避免重复下载
+- 支持代理访问（默认使用 Clash 代理 `http://127.0.0.1:7890`）
+- 自动处理网络错误，支持重试机制
+- 生成的文件名使用正确的中文，例如 `seed_小麦.png` 和 `shop_小麦.png`
+
 ### 2. 启动
 
 ```bash
