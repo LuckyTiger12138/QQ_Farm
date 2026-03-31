@@ -50,6 +50,20 @@ class PlantStrategy(BaseStrategy):
                 return all_actions
             time.sleep(0.1)
 
+        # 检测是否已播种（通过施肥按钮）
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is not None and self._is_already_planted(cv_img):
+            logger.info(f"播种流程：检测到施肥按钮，这块地已播种，跳过")
+            self.click_blank(rect)
+            for _ in range(3):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.1)
+            # 从剩余的空地中继续播种（排除第一块）
+            if len(lands) > 1 and not self.stopped:
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, skip_count + 1)
+            return all_actions
+
         # 查找种子
         seed_det = None
         for attempt in range(2):
@@ -119,6 +133,16 @@ class PlantStrategy(BaseStrategy):
 
         return all_actions
 
+    def _is_already_planted(self, cv_img) -> bool:
+        """检查地块是否已播种（通过检测施肥按钮）"""
+        # 检测施肥按钮，如果存在说明这块地已经播种了
+        fertilize_templates = ["bth_feiliao_pt", "bth_feiliao2_yj", "btn_fertilize_popup"]
+        for tpl_name in fertilize_templates:
+            result = self.cv_detector.detect_single_template(cv_img, tpl_name, threshold=0.7)
+            if result:
+                return True
+        return False
+
     def plant_all(self, rect: tuple, crop_name: str,
                   buy_qty: int = 50) -> list[str]:
         """快速播种所有空地：点击空地弹出种子列表 → 按住种子拖拽到所有空地"""
@@ -148,7 +172,21 @@ class PlantStrategy(BaseStrategy):
                 return all_actions
             time.sleep(0.1)
 
-        # 第三步：找到目标种子
+        # 第三步：检测是否已播种（通过施肥按钮）
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is not None and self._is_already_planted(cv_img):
+            logger.info(f"播种流程：检测到施肥按钮，这块地已播种，跳过")
+            self.click_blank(rect)
+            for _ in range(3):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.1)
+            # 从剩余的空地中继续播种（排除第一块）
+            if len(lands) > 1 and not self.stopped:
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, 1)
+            return all_actions
+
+        # 第四步：找到目标种子
         seed_det = None
         for attempt in range(2):
             if self.stopped:
