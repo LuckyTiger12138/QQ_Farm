@@ -367,6 +367,14 @@ class BotEngine(QObject):
                 self.log_message.emit(f"当前种植: {self._resolve_crop_name()}")
             elif scene == Scene.POPUP:
                 action_desc = self.popup.handle_popup(detections)
+            elif scene == Scene.INFO_PAGE:
+                info_close = self.popup.find_by_name(detections, "btn_info_close")
+                if info_close:
+                    self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
+                    action_desc = "关闭个人信息页面"
+                else:
+                    self.popup.click_blank(rect)
+                    action_desc = "点击空白退出个人信息页面"
             elif scene == Scene.BUY_CONFIRM:
                 action_desc = self.popup.handle_popup(detections)
             elif scene == Scene.SHOP_PAGE:

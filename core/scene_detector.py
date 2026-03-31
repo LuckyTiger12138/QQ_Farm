@@ -15,6 +15,7 @@ class Scene(str, Enum):
     BUY_CONFIRM = "buy_confirm"
     POPUP = "popup"
     LEVEL_UP = "level_up"
+    INFO_PAGE = "info_page"  # 个人信息页面
     UNKNOWN = "unknown"
 
 
@@ -22,6 +23,10 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
                    cv_image: np.ndarray) -> Scene:
     """根据检测结果识别当前场景"""
     names = {d.name for d in detections}
+
+    # 个人信息页面（优先级高，需要先检测）
+    if "btn_info" in names:
+        return Scene.INFO_PAGE
 
     if {"btn_buy_confirm", "btn_buy_max"} & names:
         return Scene.BUY_CONFIRM
