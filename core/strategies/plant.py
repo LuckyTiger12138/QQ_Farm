@@ -11,6 +11,80 @@ from core.strategies.base import BaseStrategy
 
 class PlantStrategy(BaseStrategy):
 
+    def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
+                                buy_qty: int) -> list[str]:
+        """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
+        if not lands:
+            return []
+        all_actions = []
+
+        # 点击第一块剩余的空地
+        self.click(lands[0].x, lands[0].y, "点击空地")
+        time.sleep(0.3)
+
+        # 查找种子
+        seed_det = None
+        for attempt in range(2):
+            if self.stopped:
+                return all_actions
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                return all_actions
+            seed_dets = self.cv_detector.detect_single_template(
+                cv_img, f"seed_{crop_name}", threshold=0.8)
+            if seed_dets:
+                seed_det = seed_dets[0]
+                break
+            time.sleep(0.3)
+
+        if not seed_det:
+            # 还是没有种子，这块地也可能不是空地
+            logger.info(f"剩余地块中仍未找到种子，跳过 {lands[0]}")
+            self.click_blank(rect)
+            time.sleep(0.3)
+            if len(lands) > 1:
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty)
+            return all_actions
+
+        # 找到种子，按住拖拽到所有剩余空地
+        logger.info(f"播种流程：找到种子 '{crop_name}'，拖拽播种 {len(lands)} 块地")
+        if not self.action_executor:
+            return all_actions
+
+        seed_abs_x, seed_abs_y = self.action_executor.relative_to_absolute(
+            seed_det.x, seed_det.y)
+        pyautogui.moveTo(seed_abs_x, seed_abs_y, duration=0.05)
+        time.sleep(0.1)
+        if self.stopped:
+            return all_actions
+        pyautogui.mouseDown()
+        time.sleep(0.05)
+
+        planted_count = 0
+        for land in lands:
+            if self.stopped:
+                pyautogui.mouseUp()
+                logger.info("播种流程：拖拽中途停止")
+                return all_actions
+            abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
+            pyautogui.moveTo(abs_x, abs_y, duration=0.1)
+            planted_count += 1
+
+        pyautogui.mouseUp()
+        logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
+        all_actions.append(f"播种{crop_name}×{planted_count}")
+
+        # 验证：检查是否弹出商店
+        time.sleep(0.5)
+        cv_check, _, _ = self.capture(rect)
+        if cv_check is not None:
+            shop_close = self.cv_detector.detect_single_template(
+                cv_check, "btn_shop_close", threshold=0.8)
+            if shop_close:
+                self._close_shop_and_buy(rect, crop_name, buy_qty, all_actions)
+
+        return all_actions
+
     def plant_all(self, rect: tuple, crop_name: str,
                   buy_qty: int = 50) -> list[str]:
         """快速播种所有空地：点击空地弹出种子列表 → 按住种子拖拽到所有空地"""
@@ -47,12 +121,19 @@ class PlantStrategy(BaseStrategy):
             time.sleep(0.3)
 
         if not seed_det:
-            # 没找到种子，直接去商店买（种子列表弹窗不影响商店按钮）
+            # 没找到种子，检查仓库是否有种子
             logger.info(f"播种流程：未找到 '{crop_name}' 种子，检查仓库...")
             warehouse_result = self.check_warehouse_seeds(rect, crop_name)
             if warehouse_result["has_seed"]:
-                logger.info(f"仓库中有 '{crop_name}' 种子，重新尝试播种")
-                return self.plant_all(rect, crop_name, buy_qty)
+                # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
+                # 跳过这块地，点击空白处关闭弹窗后返回
+                logger.info(f"仓库有种子但弹窗未显示，'{lands[0]}' 可能不是空地，跳过")
+                self.click_blank(rect)
+                time.sleep(0.3)
+                # 从剩余的空地中继续播种（排除第一块）
+                if len(lands) > 1:
+                    return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty)
+                return all_actions
             logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
             buy_result = self._buy_seeds(rect, crop_name, buy_qty)
             if buy_result:
