@@ -11,12 +11,28 @@ from core.strategies.base import BaseStrategy
 
 class PlantStrategy(BaseStrategy):
 
+    def _check_and_close_info_page(self, rect: tuple) -> bool:
+        """检测并关闭个人信息页面，返回是否成功关闭"""
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is None:
+            return False
+        info_close = self.cv_detector.detect_single_template(
+            cv_img, "btn_info_close", threshold=0.6)
+        if info_close:
+            self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
+            time.sleep(0.3)
+            return True
+        return False
+
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
                                 buy_qty: int) -> list[str]:
         """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
         if not lands:
             return []
         all_actions = []
+
+        # 点击前先检测并关闭个人信息页面
+        self._check_and_close_info_page(rect)
 
         # 点击第一块剩余的空地
         self.click(lands[0].x, lands[0].y, "点击空地")
@@ -100,6 +116,9 @@ class PlantStrategy(BaseStrategy):
         if not lands:
             return all_actions
         logger.info(f"找到 {len(lands)} 块空地，最高置信度：{lands[0].confidence:.0%}")
+
+        # 点击空地前先检测并关闭个人信息页面
+        self._check_and_close_info_page(rect)
 
         # 第二步：点击第一块空地，弹出种子列表
         self.click(lands[0].x, lands[0].y, "点击空地")
@@ -430,6 +449,10 @@ class PlantStrategy(BaseStrategy):
         logger.info("购买流程：打开商店")
         if self.stopped:
             return None
+
+        # 打开商店前先检测并关闭个人信息页面
+        self._check_and_close_info_page(rect)
+
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return None
