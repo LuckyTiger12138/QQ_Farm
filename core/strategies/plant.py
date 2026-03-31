@@ -173,7 +173,7 @@ class PlantStrategy(BaseStrategy):
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
 
-        # 验证：检查是否弹出商店（种子用完）
+        # 验证：检查是否弹出商店（种子用完）或施肥弹窗
         time.sleep(0.5)
         cv_check, _, _ = self.capture(rect)
         if cv_check is not None:
@@ -182,12 +182,23 @@ class PlantStrategy(BaseStrategy):
             if shop_close:
                 logger.info("播种流程：种子用完，进入购买流程")
                 self._close_shop_and_buy(rect, crop_name, buy_qty, all_actions)
+                return all_actions
 
             fert = self.cv_detector.detect_single_template(
                 cv_check, "btn_fertilize_popup", threshold=0.7)
             if fert:
                 w, h = rect[2], rect[3]
                 self.click(w // 2, int(h * 0.15), "关闭施肥弹窗")
+                time.sleep(0.5)  # 等待点击后页面恢复
+                # 验证是否成功关闭，检查是否误开个人信息页面
+                cv_check2, dets2, _ = self.capture(rect)
+                if cv_check2 is not None:
+                    info_close = self.cv_detector.detect_single_template(
+                        cv_check2, "btn_info_close", threshold=0.6)
+                    if info_close:
+                        logger.info("播种流程：误开个人信息页面，关闭")
+                        self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
+                        time.sleep(0.3)
 
         return all_actions
 
