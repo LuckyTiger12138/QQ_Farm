@@ -135,10 +135,15 @@ class PlantStrategy(BaseStrategy):
 
         # 点击空地前先检测并关闭个人信息页面
         self._check_and_close_info_page(rect)
+        if self.stopped:
+            return all_actions
 
         # 第二步：点击第一块空地，弹出种子列表
         self.click(lands[0].x, lands[0].y, "点击空地")
-        time.sleep(0.3)
+        for _ in range(3):
+            if self.stopped:
+                return all_actions
+            time.sleep(0.1)
 
         # 第三步：找到目标种子
         seed_det = None
@@ -153,20 +158,28 @@ class PlantStrategy(BaseStrategy):
             if seed_dets:
                 seed_det = seed_dets[0]
                 break
-            time.sleep(0.3)
+            for _ in range(3):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.1)
 
         if not seed_det:
             # 没找到种子，检查仓库是否有种子
             logger.info(f"播种流程：未找到 '{crop_name}' 种子，检查仓库...")
+            if self.stopped:
+                return all_actions
             warehouse_result = self.check_warehouse_seeds(rect, crop_name)
             if warehouse_result["has_seed"]:
                 # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
                 # 跳过这块地，点击空白处关闭弹窗后返回
                 logger.info(f"仓库有种子但弹窗未显示，'{lands[0]}' 可能不是空地，跳过")
                 self.click_blank(rect)
-                time.sleep(0.3)
+                for _ in range(3):
+                    if self.stopped:
+                        return all_actions
+                    time.sleep(0.1)
                 # 从剩余的空地中继续播种（排除第一块）
-                if len(lands) > 1:
+                if len(lands) > 1 and not self.stopped:
                     return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty)
                 return all_actions
             logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
@@ -246,7 +259,10 @@ class PlantStrategy(BaseStrategy):
         for attempt in range(2):
             if self.stopped:
                 return actions_done
-            time.sleep(0.3)
+            for _ in range(3):
+                if self.stopped:
+                    return actions_done
+                time.sleep(0.1)
 
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
@@ -261,7 +277,10 @@ class PlantStrategy(BaseStrategy):
                 self.click(seed.x, seed.y, f"播种{crop_name}", ActionType.PLANT)
 
                 # 验证
-                time.sleep(0.5)
+                for _ in range(5):
+                    if self.stopped:
+                        return actions_done
+                    time.sleep(0.1)
                 cv_check, _, _ = self.capture(rect)
                 if cv_check is not None:
                     shop_close = self.cv_detector.detect_single_template(
@@ -435,7 +454,10 @@ class PlantStrategy(BaseStrategy):
         """购买完成后重新点空地播种"""
         if self.stopped:
             return
-        time.sleep(0.3)
+        for _ in range(3):
+            if self.stopped:
+                return
+            time.sleep(0.1)
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return
@@ -448,7 +470,10 @@ class PlantStrategy(BaseStrategy):
         land = lands[0]
         logger.info(f"播种流程：购买完成，重新点击空地 (置信度：{land.confidence:.0%})")
         self.click(land.x, land.y, "点击空地")
-        time.sleep(0.5)
+        for _ in range(5):
+            if self.stopped:
+                return
+            time.sleep(0.1)
         cv_img2, _, _ = self.capture(rect)
         if cv_img2 is None:
             return
@@ -492,7 +517,10 @@ class PlantStrategy(BaseStrategy):
                 cv_img, "btn_shop_close", threshold=0.8)
             if not shop_close:
                 logger.info(f"购买流程：等待商店加载 ({attempt+1}/5)")
-                time.sleep(0.5)  # 等待页面渲染
+                for _ in range(5):
+                    if self.stopped:
+                        return None
+                    time.sleep(0.1)
                 continue
 
             logger.info("购买流程：商店已打开，查找种子")
