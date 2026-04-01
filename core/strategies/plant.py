@@ -381,6 +381,7 @@ class PlantStrategy(BaseStrategy):
         pyautogui.mouseUp()
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
+        logger.info(f"播种流程：准备验证弹窗，planted_count={planted_count}")
 
         # 验证：检查是否弹出商店（种子用完）或施肥弹窗
         for _ in range(10):
@@ -399,6 +400,7 @@ class PlantStrategy(BaseStrategy):
             fert = self.cv_detector.detect_single_template(
                 cv_check, "btn_fertilize_popup", threshold=0.7)
             if fert:
+                logger.info("播种流程：检测到施肥弹窗，关闭")
                 w, h = rect[2], rect[3]
                 self.click(w // 2, int(h * 0.15), "关闭施肥弹窗")
                 time.sleep(0.5)  # 等待点击后页面恢复
@@ -412,6 +414,7 @@ class PlantStrategy(BaseStrategy):
                         self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
                         time.sleep(0.3)
 
+        logger.info(f"播种流程：验证完成，准备检查施肥")
         # 播种完成后，如果开启了自动施肥，立即对所有土地施肥
         logger.info(f"播种完成检查施肥：auto_fertilize={auto_fertilize}, self.auto_fertilize={self.auto_fertilize}, planted_count={planted_count}")
         if auto_fertilize and self.auto_fertilize and planted_count > 0:
