@@ -818,14 +818,17 @@ class PlantStrategy(BaseStrategy):
                 cv_check, dets_check, _ = self.capture(rect)
                 if cv_check is not None:
                     logger.debug(f"地块 {i+1} 检测：找到 {len(dets_check)} 个模板")
+                    # 输出所有检测到的模板名称用于调试
+                    template_names = [d.name for d in dets_check[:10]]
+                    logger.debug(f"地块 {i+1} 检测到的模板：{template_names}")
                     fert_btn = self.cv_detector.detect_single_template(
                         cv_check, "bth_feiliao_pt", threshold=0.6)
                     if fert_btn:
                         # 已播种，记录地块位置
                         lands.append(land)
-                        logger.info(f"地块 {i+1} 已播种，找到施肥按钮")
+                        logger.info(f"地块 {i+1} 已播种，找到施肥按钮 ({fert_btn[0].confidence:.0%})")
                     else:
-                        logger.debug(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
+                        logger.info(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
 
                 # 点击空白处关闭弹窗
                 self.click_blank(rect)
