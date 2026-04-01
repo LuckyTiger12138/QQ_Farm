@@ -413,13 +413,14 @@ class BotEngine(QObject):
                 if self.popup.stopped:
                     logger.info("收到停止/暂停信号，中断当前操作")
                     break
-                info_close = self.popup.find_by_name(detections, "btn_info_close")
+                # 优先使用 btn_close，其次 btn_info_close，再使用 btn_rw_close
+                info_close = self.popup.find_any(detections, ["btn_close", "btn_info_close", "btn_rw_close"])
                 if info_close:
                     self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
                     action_desc = "关闭个人信息页面"
                 else:
                     # 找不到关闭按钮，可能是模板匹配问题，等待下一轮检测
-                    logger.debug("个人信息页面：未找到 btn_info_close，等待下轮检测")
+                    logger.debug("个人信息页面：未找到关闭按钮，等待下轮检测")
                     action_desc = "等待关闭个人信息页面"
             elif scene == Scene.BUY_CONFIRM:
                 action_desc = self.popup.handle_popup(detections)
