@@ -200,9 +200,10 @@ class BotEngine(QObject):
             if self._worker.isRunning():
                 logger.warning("任务未能及时停止")
 
+        # 4. 重置状态（在 Worker 完成后）
         self._is_busy = False
 
-        # 4. 重置策略停止标志（为下次启动做准备）
+        # 5. 重置策略停止标志（为下次启动做准备）
         for s in self._strategies:
             s._stop_requested = False
 

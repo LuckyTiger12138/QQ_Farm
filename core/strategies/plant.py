@@ -125,13 +125,13 @@ class PlantStrategy(BaseStrategy):
                 logger.info("播种流程：拖拽中途停止")
                 return all_actions
             abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
-            # 将 0.1s 移动拆分为 4 段 0.025s，每段前检查停止标志
-            for _ in range(4):
+            # 将 0.1s 移动拆分为 10 段 0.01s，每段前检查停止标志（快速响应）
+            for _ in range(10):
                 if self.stopped:
                     pyautogui.mouseUp()
                     logger.info("播种流程：拖拽中途停止")
                     return all_actions
-                pyautogui.moveTo(abs_x, abs_y, duration=0.025)
+                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
             planted_count += 1
 
         pyautogui.mouseUp()
@@ -283,13 +283,13 @@ class PlantStrategy(BaseStrategy):
                 logger.info("播种流程：拖拽中途停止")
                 return all_actions
             abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
-            # 将 0.1s 移动拆分为 4 段 0.025s，每段前检查停止标志
-            for _ in range(4):
+            # 将 0.1s 移动拆分为 10 段 0.01s，每段前检查停止标志（快速响应）
+            for _ in range(10):
                 if self.stopped:
                     pyautogui.mouseUp()
                     logger.info("播种流程：拖拽中途停止")
                     return all_actions
-                pyautogui.moveTo(abs_x, abs_y, duration=0.025)
+                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
             planted_count += 1
 
         # 松开鼠标
