@@ -44,11 +44,23 @@ class PlantStrategy(BaseStrategy):
         if self.stopped:
             return all_actions
 
+        # 每块地操作前先检查停止和一键收获按钮
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is not None:
+            # 优先检查停止
+            if self.stopped:
+                return all_actions
+            # 检查一键收获，优先收获
+            harvest_btn = self.find_by_name(dets, "btn_harvest")
+            if harvest_btn:
+                logger.info("播种流程：检测到一键收获按钮，中断播种优先收获")
+                return all_actions
+
         # 计算当前是第几块地
         current_num = skip_count + 1
         # 点击第一块剩余的空地
         self.click(lands[0].x, lands[0].y, f"点击空地 ({current_num}/{total_lands or len(lands)})")
-        for _ in range(5):
+        for _ in range(10):
             if self.stopped:
                 return all_actions
             time.sleep(0.05)
@@ -58,7 +70,7 @@ class PlantStrategy(BaseStrategy):
         if cv_img is not None and self._is_already_planted(cv_img):
             logger.info(f"播种流程：检测到施肥按钮，这块地已播种，跳过")
             self.click_blank(rect)
-            for _ in range(5):
+            for _ in range(10):
                 if self.stopped:
                     return all_actions
                 time.sleep(0.05)
@@ -77,6 +89,13 @@ class PlantStrategy(BaseStrategy):
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 return all_actions
+            # 每次查找前检查停止和收获
+            if self.stopped:
+                return all_actions
+            harvest_btn = self.find_by_name(dets, "btn_harvest")
+            if harvest_btn:
+                logger.info("播种流程：检测到一键收获按钮，中断播种优先收获")
+                return all_actions
             seed_dets = self.cv_detector.detect_single_template(
                 cv_img, f"seed_{crop_name}", threshold=0.8)
             if seed_dets:
@@ -91,7 +110,7 @@ class PlantStrategy(BaseStrategy):
             # 还是没有种子，这块地也可能不是空地
             logger.info(f"剩余地块中仍未找到种子，跳过 {lands[0]}")
             self.click_blank(rect)
-            for _ in range(5):
+            for _ in range(10):
                 if self.stopped:
                     return all_actions
                 time.sleep(0.05)
