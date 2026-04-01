@@ -36,11 +36,17 @@ class PopupStrategy(BaseStrategy):
         点取消后游戏不检测是否真的分享了，直接发放双倍奖励。
         """
         self.click(share_btn.x, share_btn.y, "点击分享 (双倍奖励)", ActionType.CLOSE_POPUP)
-        time.sleep(2.0)  # 等待微信分享窗口弹出
+        for _ in range(40):
+            if self.stopped:
+                return "停止"
+            time.sleep(0.05)
 
         # 按 Escape 关闭微信分享窗口（比找取消按钮更可靠）
         pyautogui.press("escape")
-        time.sleep(1.0)  # 等待窗口关闭，回到游戏
+        for _ in range(20):
+            if self.stopped:
+                return "停止"
+            time.sleep(0.05)
 
         logger.info("任务奖励：分享→取消，领取双倍奖励")
         return "领取双倍任务奖励"
@@ -60,6 +66,9 @@ class PopupStrategy(BaseStrategy):
             close_btn = shop_close[0] if shop_close else self.find_by_name(dets, "btn_close")
             if close_btn:
                 self.click(close_btn.x, close_btn.y, "关闭商店", ActionType.CLOSE_POPUP)
-                time.sleep(0.3)
+                for _ in range(6):
+                    if self.stopped:
+                        return
+                    time.sleep(0.05)
             else:
                 return

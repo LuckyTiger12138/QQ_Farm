@@ -136,8 +136,10 @@ class BotEngine(QObject):
         sky_x = w // 2
         sky_y = int(h * 0.05)
         for _ in range(2):
-            self.action_executor.click(
-                *self.action_executor.relative_to_absolute(sky_x, sky_y))
+            if self.popup.stopped:
+                return
+            # 使用策略的 click 方法，自动检查停止标志
+            self.popup.click(sky_x, sky_y, "清屏")
             time.sleep(0.3)
 
 
@@ -185,11 +187,16 @@ class BotEngine(QObject):
         # 2. 停止调度器（停止定时器）
         self.scheduler.stop()
 
-        # 3. 等待当前正在运行的 Worker 完成（最多等待 2 秒）
+        # 3. 等待当前正在运行的 Worker 完成（最多等待 5 秒）
         if self._worker and self._worker.isRunning():
             logger.info("等待当前任务完成...")
-            self._worker.quit()
-            self._worker.wait(2000)
+            # 不要调用 quit()，它只是退出事件循环，不会停止正在执行的代码
+            # 等待线程自然退出（通过检查_stop_requested 标志）
+            elapsed = 0
+            while self._worker.isRunning() and elapsed < 5000:
+                time.sleep(0.1)
+                elapsed += 100
+
             if self._worker.isRunning():
                 logger.warning("任务未能及时停止")
 
@@ -335,7 +342,8 @@ class BotEngine(QObject):
             return result
 
         # 清屏：点击天空区域关闭残留弹窗/菜单
-        self._clear_screen(rect)
+        if not self.popup.stopped:
+            self._clear_screen(rect)
 
         idle_rounds = 0
         max_idle = 3
@@ -368,6 +376,9 @@ class BotEngine(QObject):
             elif scene == Scene.POPUP:
                 action_desc = self.popup.handle_popup(detections)
             elif scene == Scene.INFO_PAGE:
+                if self.popup.stopped:
+                    logger.info("收到停止/暂停信号，中断当前操作")
+                    break
                 info_close = self.popup.find_by_name(detections, "btn_info_close")
                 if info_close:
                     self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")

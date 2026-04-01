@@ -112,6 +112,13 @@ class CVDetector:
                 )
                 results.extend(matches)
 
+        # 过滤掉置信度异常的结果（inf, nan, >1.0）
+        results = [r for r in results
+                   if not (r.confidence != r.confidence or  # nan 检查
+                           r.confidence == float('inf') or
+                           r.confidence == float('-inf') or
+                           r.confidence > 1.0)]
+
         # 去重（NMS - 非极大值抑制）
         results = self._nms(results, iou_threshold=0.5)
         # 按置信度排序
@@ -135,6 +142,13 @@ class CVDetector:
             )
             results.extend(matches)
 
+        # 过滤掉置信度异常的结果（inf, nan, >1.0）
+        results = [r for r in results
+                   if not (r.confidence != r.confidence or  # nan 检查
+                           r.confidence == float('inf') or
+                           r.confidence == float('-inf') or
+                           r.confidence > 1.0)]
+
         results = self._nms(results, iou_threshold=0.5)
         results.sort(key=lambda r: r.confidence, reverse=True)
         return results
@@ -154,6 +168,12 @@ class CVDetector:
                     results = self._match_template(
                         screenshot, gray_screen, tpl, threshold
                     )
+                    # 过滤掉置信度异常的结果（inf, nan, >1.0）
+                    results = [r for r in results
+                               if not (r.confidence != r.confidence or  # nan 检查
+                                       r.confidence == float('inf') or
+                                       r.confidence == float('-inf') or
+                                       r.confidence > 1.0)]
                     results = self._nms(results, iou_threshold=0.5)
                     results.sort(key=lambda r: r.confidence, reverse=True)
                     return results
