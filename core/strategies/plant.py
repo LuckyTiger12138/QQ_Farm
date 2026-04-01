@@ -413,12 +413,17 @@ class PlantStrategy(BaseStrategy):
                         time.sleep(0.3)
 
         # 播种完成后，如果开启了自动施肥，立即对所有土地施肥
+        logger.info(f"播种完成检查施肥：auto_fertilize={auto_fertilize}, self.auto_fertilize={self.auto_fertilize}, planted_count={planted_count}")
         if auto_fertilize and self.auto_fertilize and planted_count > 0:
             logger.info("播种完成，开始对所有土地施肥...")
             # 传入 is_test=True 让它检测所有土地并施肥
             fert_actions = self.fertilize_all(rect, lands=None, is_test=True)
             if fert_actions:
                 all_actions.extend(fert_actions)
+            else:
+                logger.info("施肥流程未执行任何操作")
+        else:
+            logger.info("施肥条件不满足，跳过施肥")
 
         return all_actions
 
