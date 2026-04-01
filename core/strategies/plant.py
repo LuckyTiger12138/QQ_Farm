@@ -29,6 +29,8 @@ class PlantStrategy(BaseStrategy):
         super().__init__(cv_detector)
         self.auto_buy_seed = False  # 是否自动购买种子
         self.auto_fertilize = False  # 是否自动施肥
+        self._purchase_count = 0  # 本轮播种购买次数
+        self._max_purchase_per_round = 1  # 每轮最多购买次数
 
     def _check_and_close_info_page(self, rect: tuple) -> bool:
         """检测并关闭个人信息页面或任务菜单，返回是否成功关闭"""
@@ -236,6 +238,9 @@ class PlantStrategy(BaseStrategy):
         Returns:
             操作列表，如果施肥则包含施肥操作
         """
+        # 重置购买计数器（新一轮播种）
+        self._purchase_count = 0
+
         all_actions = []
 
         # 第一步：截屏找所有空地
@@ -315,6 +320,11 @@ class PlantStrategy(BaseStrategy):
 
             # 只有开启自动买种时才检查仓库
             if self.auto_buy_seed:
+                # 安全策略：检查是否超过最大购买次数
+                if self._purchase_count >= self._max_purchase_per_round:
+                    logger.warning(f"播种流程：已达到最大购买次数 ({self._max_purchase_per_round})，停止购买")
+                    return all_actions
+
                 warehouse_result = self.check_warehouse_seeds(rect, crop_name)
                 if warehouse_result["has_seed"]:
                     # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
@@ -326,11 +336,13 @@ class PlantStrategy(BaseStrategy):
                             return all_actions
                         time.sleep(0.05)
                 else:
-                    logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
+                    logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买 (第{self._purchase_count + 1}次)")
                     buy_result = self._buy_seeds(rect, crop_name)
                     if buy_result:
+                        self._purchase_count += 1  # 增加购买计数
                         all_actions.append(buy_result)
                         # 买完后重新尝试播种
+                        logger.info(f"播种流程：购买完成，重新尝试播种 (已购买{self._purchase_count}次)")
                         return all_actions + self.plant_all(rect, crop_name)
             else:
                 logger.info("自动买种未开启，跳过种植")
@@ -670,9 +682,20 @@ class PlantStrategy(BaseStrategy):
             actions_done.append(f"播种{crop_name}")
 
     def _buy_seeds(self, rect: tuple, crop_name: str) -> str | None:
-        """购买种子流程：打开商店 → 用 shop_xx 模板匹配找种子 → 点击 → 确认购买"""
+        """购买种子流程：打开商店 → 用 shop_xx 模板匹配找种子 → 点击 → 确认购买
+
+        安全策略：
+        - 购买前验证仓库中种子数量
+        - 如果仓库已有足够种子，跳过购买
+        """
         logger.info("购买流程：打开商店")
         if self.stopped:
+            return None
+
+        # 安全策略：购买前再次检查仓库，确认是否真的需要购买
+        warehouse_result = self.check_warehouse_seeds(rect, crop_name)
+        if warehouse_result["has_seed"]:
+            logger.info(f"购买流程：仓库已有 '{crop_name}' 种子，跳过购买")
             return None
 
         # 打开商店前先检测并关闭个人信息页面
