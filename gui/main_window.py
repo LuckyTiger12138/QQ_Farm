@@ -142,14 +142,14 @@ class MainWindow(QMainWindow):
         self._btn_start = _make_btn("开始", "#16a34a", "#15803d")
         self._btn_pause = _make_btn("暂停", "#d97706", "#b45309")
         self._btn_stop = _make_btn("停止", "#dc2626", "#b91c1c")
-        self._btn_run_once = _make_btn("立即执行", "#2563eb", "#1d4ed8")
+        self._btn_test = _make_btn("测试", "#2563eb", "#1d4ed8")
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
         self._btn_start.clicked.connect(self._on_start)
         self._btn_pause.clicked.connect(self._on_pause)
         self._btn_stop.clicked.connect(self._on_stop)
-        self._btn_run_once.clicked.connect(self._on_run_once)
-        for b in (self._btn_start, self._btn_pause, self._btn_stop, self._btn_run_once):
+        self._btn_test.clicked.connect(self._on_test)
+        for b in (self._btn_start, self._btn_pause, self._btn_stop, self._btn_test):
             btn_row.addWidget(b)
         btn_row.addStretch()
         right_layout.addLayout(btn_row)
@@ -227,8 +227,9 @@ class MainWindow(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._btn_pause.setText("暂停")
 
-    def _on_run_once(self):
-        self.engine.run_once()
+    def _on_test(self):
+        """测试施肥流程"""
+        self.engine.test_fertilize()
 
     def _on_state_changed(self, state: str):
         self._status_panel.update_stats(self.engine.scheduler.get_stats())

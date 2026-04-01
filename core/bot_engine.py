@@ -52,6 +52,8 @@ class BotWorker(QThread):
                 result = self.engine.check_farm()
             elif self.task_type == "friend":
                 result = self.engine.check_friends()
+            elif self.task_type == "test_fertilize":
+                result = self.engine.test_fertilize_task()
             else:
                 result = {"success": False, "message": "未知任务类型"}
             self.finished.emit(result)
@@ -232,6 +234,39 @@ class BotEngine(QObject):
 
     def run_once(self):
         self._on_farm_check()
+
+    def test_fertilize(self):
+        """测试施肥流程"""
+        if self._is_busy:
+            logger.debug("上一轮操作尚未完成，跳过")
+            return
+        self._is_busy = True
+
+        # 创建测试 Worker
+        self._worker = BotWorker(self, "test_fertilize")
+        self._worker.finished.connect(self._on_task_finished)
+        self._worker.error.connect(self._on_task_error)
+        self._worker.start()
+
+    def test_fertilize_task(self) -> dict:
+        """执行施肥测试任务"""
+        result = {"success": False, "actions_done": [], "message": ""}
+
+        rect = self._prepare_window()
+        if not rect:
+            result["message"] = "窗口未找到"
+            return result
+
+        # 直接调用施肥方法
+        fa = self.plant.fertilize_all(rect)
+        if fa:
+            result["actions_done"].extend(fa)
+            result["success"] = True
+            result["message"] = f"施肥完成：{', '.join(fa)}"
+        else:
+            result["message"] = "施肥未完成，未找到已播种地块"
+
+        return result
 
     def _on_farm_check(self):
         if self._is_busy:
