@@ -774,7 +774,7 @@ class PlantStrategy(BaseStrategy):
         ps.set_capture_fn(self._capture_fn)
         ps.close_shop(rect)
 
-    def fertilize_all(self, rect: tuple, lands: list = None) -> list[str]:
+    def fertilize_all(self, rect: tuple, lands: list = None, is_test: bool = False) -> list[str]:
         """对所有已播种地块施用普通肥料
 
         流程：点击地块 → 弹出施肥选项 → 点击普通肥料 (bth_feiliao_pt) → 拖拽到所有地块
@@ -782,14 +782,15 @@ class PlantStrategy(BaseStrategy):
         Args:
             rect: 窗口区域
             lands: 已播种的地块列表（由 plant_all 传入），如果为 None 则尝试遍历所有地块检测
+            is_test: 是否为测试模式，测试模式下会遍历检测
 
         Returns:
             操作列表
         """
         all_actions = []
 
-        # 如果没有传入地块列表，尝试通过遍历检测
-        if lands is None:
+        # 如果没有传入地块列表且是测试模式，尝试通过遍历检测
+        if lands is None and is_test:
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 return all_actions
@@ -803,10 +804,10 @@ class PlantStrategy(BaseStrategy):
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，遍历检测已播种地块...")
 
-            # 点击每块地检测是否有施肥按钮（测试模式不检查停止标志）
-            for i, land in enumerate(land_dets[:5]):  # 最多检测 5 块
-                logger.info(f"检测地块 {i+1}/{min(5, len(land_dets))}，位置 ({land.x}, {land.y})")
-                self.click(land.x, land.y, f"检测地块 {i+1}/{min(5, len(land_dets))}")
+            # 点击每块地检测是否有施肥按钮
+            for i, land in enumerate(land_dets):  # 检测所有地块
+                logger.info(f"检测地块 {i+1}/{len(land_dets)}，位置 ({land.x}, {land.y})")
+                self.click(land.x, land.y, f"检测地块 {i+1}/{len(land_dets)}")
                 time.sleep(0.5)  # 等待点击生效
 
                 # 关闭可能弹出的个人信息页面
@@ -824,7 +825,7 @@ class PlantStrategy(BaseStrategy):
                         lands.append(land)
                         logger.info(f"地块 {i+1} 已播种，找到施肥按钮")
                     else:
-                        logger.info(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
+                        logger.debug(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
 
                 # 点击空白处关闭弹窗
                 self.click_blank(rect)
@@ -833,6 +834,10 @@ class PlantStrategy(BaseStrategy):
             if not lands:
                 logger.info("施肥流程：未找到已播种的地块")
                 return all_actions
+
+        elif lands is None:
+            logger.info("施肥流程：未提供地块列表且非测试模式")
+            return all_actions
 
         logger.info(f"施肥流程：对 {len(lands)} 块已播种地块施肥")
 

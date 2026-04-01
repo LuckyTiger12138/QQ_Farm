@@ -282,8 +282,8 @@ class BotEngine(QObject):
         self.log_message.emit(f"检测到 {len(land_dets)} 块土地，开始施肥测试...")
         logger.info(f"检测到 {len(land_dets)} 块土地，开始遍历检测已播种地块...")
 
-        # 直接调用施肥方法，让它遍历检测已播种地块
-        fa = self.plant.fertilize_all(rect, lands=None)
+        # 调用施肥方法，传入 is_test=True 让它遍历检测所有地块
+        fa = self.plant.fertilize_all(rect, lands=None, is_test=True)
         logger.info(f"施肥流程完成，执行了 {len(fa)} 个操作：{fa}")
         if fa:
             result["actions_done"].extend(fa)
