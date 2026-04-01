@@ -23,11 +23,15 @@ class PlantStrategy(BaseStrategy):
         if cv_img is None:
             return False
 
-        # 检查个人信息关闭按钮
-        info_close = self.cv_detector.detect_single_template(
-            cv_img, "btn_info_close", threshold=0.6)
-        if info_close:
-            self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
+        # 检查关闭按钮（优先 btn_close，其次 btn_info_close）
+        close_btn = self.cv_detector.detect_single_template(
+            cv_img, "btn_close", threshold=0.6)
+        if not close_btn:
+            close_btn = self.cv_detector.detect_single_template(
+                cv_img, "btn_info_close", threshold=0.6)
+
+        if close_btn:
+            self.click(close_btn[0].x, close_btn[0].y, "关闭个人信息页面")
             for _ in range(3):
                 if self.stopped:
                     return False
