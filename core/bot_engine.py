@@ -246,6 +246,9 @@ class BotEngine(QObject):
             # 等待一下让当前任务停止
             time.sleep(0.5)
 
+        # 暂停调度器，防止定时器触发干扰测试
+        self.scheduler.stop()
+
         self._is_busy = True
 
         # 创建测试 Worker
@@ -257,6 +260,7 @@ class BotEngine(QObject):
     def test_fertilize_task(self) -> dict:
         """执行施肥测试任务"""
         result = {"success": False, "actions_done": [], "message": ""}
+        logger.info("开始执行施肥测试任务...")
 
         rect = self._prepare_window()
         if not rect:
@@ -276,9 +280,11 @@ class BotEngine(QObject):
             return result
 
         self.log_message.emit(f"检测到 {len(land_dets)} 块土地，开始施肥测试...")
+        logger.info(f"检测到 {len(land_dets)} 块土地，开始遍历检测已播种地块...")
 
         # 直接调用施肥方法，让它遍历检测已播种地块
         fa = self.plant.fertilize_all(rect, lands=None)
+        logger.info(f"施肥流程完成，执行了 {len(fa)} 个操作：{fa}")
         if fa:
             result["actions_done"].extend(fa)
             result["success"] = True
