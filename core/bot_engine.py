@@ -592,15 +592,20 @@ class BotEngine(QObject):
                     action_desc = self.maintain.try_maintain(detections, features)
 
                 # P2 生产：播种（仅在未播种状态下执行）
+                logger.debug(f"播种检查：action_desc={action_desc}, auto_plant={features.get('auto_plant', True)}, _planted={self._planted}")
                 if not action_desc and features.get("auto_plant", True) and not self._planted:
+                    crop_name = self._resolve_crop_name()
+                    logger.info(f"开始播种：{crop_name}, auto_fertilize={features.get('auto_fertilize', False)}")
                     # 如果开启了自动施肥，传入 auto_fertilize=True，播种完成后自动施肥
-                    pa = self.plant.plant_all(rect, self._resolve_crop_name(),
+                    pa = self.plant.plant_all(rect, crop_name,
                                               auto_fertilize=features.get("auto_fertilize", False))
                     if pa:
                         result["actions_done"].extend(pa)
                         action_desc = pa[-1]
                         self._planted = True  # 标记已播种
                         self._fertilized = True  # 如果施肥了也标记为已施肥
+                    else:
+                        logger.info("播种流程未执行任何操作（可能没有空地）")
 
                 # P3 资源：扩建
                 if not action_desc and features.get("auto_upgrade", True):
