@@ -96,6 +96,8 @@ class BotEngine(QObject):
         self.scheduler = TaskScheduler()
         self._worker: BotWorker | None = None
         self._is_busy = False
+        self._planted = False  # 标记是否已播种完成，等待收获
+
 
         self.scheduler.farm_check_triggered.connect(self._on_farm_check)
         self.scheduler.friend_check_triggered.connect(self._on_friend_check)
@@ -417,17 +419,21 @@ class BotEngine(QObject):
                 # P0 收益：一键收获
                 if not action_desc and features.get("auto_harvest", True):
                     action_desc = self.harvest.try_harvest(detections)
+                    # 收获后重置播种状态，可以重新检测空地
+                    if action_desc:
+                        self._planted = False
 
                 # P1 维护：除草/除虫/浇水
                 if not action_desc:
                     action_desc = self.maintain.try_maintain(detections, features)
 
-                # P2 生产：播种
-                if not action_desc and features.get("auto_plant", True):
+                # P2 生产：播种（仅在未播种状态下执行）
+                if not action_desc and features.get("auto_plant", True) and not self._planted:
                     pa = self.plant.plant_all(rect, self._resolve_crop_name())
                     if pa:
                         result["actions_done"].extend(pa)
                         action_desc = pa[-1]
+                        self._planted = True  # 标记已播种
 
                 # P3 资源：扩建
                 if not action_desc and features.get("auto_upgrade", True):
