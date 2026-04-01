@@ -304,7 +304,7 @@ class BotEngine(QObject):
                 if cat in ("seed", "shop"):
                     continue
                 if cat == "land":
-                    thresh = 0.6
+                    thresh = 0.7
                 elif cat == "button":
                     thresh = 0.8
                 else:
