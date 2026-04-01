@@ -141,7 +141,8 @@ class PlantStrategy(BaseStrategy):
 
         # 依次拖到每块空地（每块地前 + 移动中检查停止）
         planted_count = 0
-        for land in lands:
+        total_count = len(lands)
+        for i, land in enumerate(lands, 1):
             if self.stopped:
                 pyautogui.mouseUp()
                 logger.info("播种流程：拖拽中途停止")
@@ -155,6 +156,9 @@ class PlantStrategy(BaseStrategy):
                     return all_actions
                 pyautogui.moveTo(abs_x, abs_y, duration=0.01)
             planted_count += 1
+            # 每播种 10 块地显示一次进度
+            if i % 10 == 0 or i == total_count:
+                logger.info(f"播种进度：{i}/{total_count} ({i*100//total_count}%)")
 
         pyautogui.mouseUp()
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
@@ -302,7 +306,8 @@ class PlantStrategy(BaseStrategy):
 
         # 依次拖到每块空地（每块地前 + 移动中检查停止）
         planted_count = 0
-        for land in lands:
+        total_count = len(lands)
+        for i, land in enumerate(lands, 1):
             if self.stopped:
                 pyautogui.mouseUp()
                 logger.info("播种流程：拖拽中途停止")
@@ -316,6 +321,9 @@ class PlantStrategy(BaseStrategy):
                     return all_actions
                 pyautogui.moveTo(abs_x, abs_y, duration=0.01)
             planted_count += 1
+            # 每播种 10 块地显示一次进度
+            if i % 10 == 0 or i == total_count:
+                logger.info(f"播种进度：{i}/{total_count} ({i*100//total_count}%)")
 
         # 松开鼠标
         pyautogui.mouseUp()
