@@ -210,8 +210,17 @@ class PlantStrategy(BaseStrategy):
                 return True
         return False
 
-    def plant_all(self, rect: tuple, crop_name: str) -> list[str]:
-        """快速播种所有空地：点击空地弹出种子列表 → 按住种子拖拽到所有空地"""
+    def plant_all(self, rect: tuple, crop_name: str, auto_fertilize: bool = False) -> list[str]:
+        """快速播种所有空地：点击空地弹出种子列表 → 按住种子拖拽到所有空地
+
+        Args:
+            rect: 窗口区域
+            crop_name: 作物名称
+            auto_fertilize: 是否自动施肥
+
+        Returns:
+            操作列表，如果施肥则包含施肥操作
+        """
         all_actions = []
 
         # 第一步：截屏找所有空地
@@ -381,6 +390,13 @@ class PlantStrategy(BaseStrategy):
                         logger.info("播种流程：误开个人信息页面，关闭")
                         self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
                         time.sleep(0.3)
+
+        # 播种完成后，如果开启了自动施肥，立即对相同地块施肥
+        if auto_fertilize and self.auto_fertilize and planted_count > 0:
+            logger.info("播种完成，开始施肥...")
+            fert_actions = self.fertilize_all(rect, lands)
+            if fert_actions:
+                all_actions.extend(fert_actions)
 
         return all_actions
 
@@ -758,32 +774,33 @@ class PlantStrategy(BaseStrategy):
         ps.set_capture_fn(self._capture_fn)
         ps.close_shop(rect)
 
-    def fertilize_all(self, rect: tuple) -> list[str]:
-        """对所有已播种但未施肥的地块施用普通肥料
+    def fertilize_all(self, rect: tuple, lands: list = None) -> list[str]:
+        """对所有已播种地块施用普通肥料
 
-        流程：点击空地 → 检测施肥按钮 → 点击普通肥料 (bth_feiliao_pt) → 拖拽到所有地块
+        流程：点击地块 → 弹出施肥选项 → 点击普通肥料 (bth_feiliao_pt) → 拖拽到所有地块
+
+        Args:
+            rect: 窗口区域
+            lands: 已播种的地块列表（由 plant_all 返回），如果为 None 则尝试检测
         """
         all_actions = []
 
-        # 截屏找所有地块（检测施肥按钮）
-        cv_img, dets, _ = self.capture(rect)
-        if cv_img is None:
-            return all_actions
+        # 如果没有传入地块列表，尝试检测
+        if lands is None:
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                return all_actions
+            # 检测所有非空地的地块（已播种）
+            lands = [d for d in dets if d.name.startswith("land_") and "empty" not in d.name]
 
-        # 找所有已播种但未施肥的地块（有施肥按钮但没有肥料）
-        fertilized_lands = []
-        for d in dets:
-            if d.name.startswith("land_") and "empty" not in d.name:
-                fertilized_lands.append(d)
-
-        if not fertilized_lands:
+        if not lands:
             logger.info("施肥流程：未找到已播种的地块")
             return all_actions
 
-        logger.info(f"施肥流程：找到 {len(fertilized_lands)} 块已播种地块")
+        logger.info(f"施肥流程：对 {len(lands)} 块已播种地块施肥")
 
         # 点击第一块地，打开施肥选项
-        self.click(fertilized_lands[0].x, fertilized_lands[0].y, "点击已播种地块")
+        self.click(lands[0].x, lands[0].y, "点击已播种地块")
         for _ in range(5):
             if self.stopped:
                 return all_actions
