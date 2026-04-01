@@ -253,8 +253,8 @@ class PlantStrategy(BaseStrategy):
                 time.sleep(0.05)
 
         if not seed_det:
-            # 没找到种子，先关闭种子弹窗，再检查仓库
-            logger.info(f"播种流程：未找到 '{crop_name}' 种子，关闭弹窗后检查仓库...")
+            # 没找到种子，先关闭种子弹窗
+            logger.info(f"播种流程：未找到 '{crop_name}' 种子，关闭弹窗...")
             self.click_blank(rect)
             for _ in range(10):
                 if self.stopped:
@@ -262,26 +262,28 @@ class PlantStrategy(BaseStrategy):
                 time.sleep(0.05)
             if self.stopped:
                 return all_actions
-            warehouse_result = self.check_warehouse_seeds(rect, crop_name)
-            if warehouse_result["has_seed"]:
-                # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
-                # 重新点击空地打开弹窗
-                logger.info(f"仓库有种子，重新点击空地打开弹窗")
-                self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")
-                for _ in range(5):
-                    if self.stopped:
-                        return all_actions
-                    time.sleep(0.05)
-            else:
-                logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
-                if self.auto_buy_seed:
+
+            # 只有开启自动买种时才检查仓库
+            if self.auto_buy_seed:
+                warehouse_result = self.check_warehouse_seeds(rect, crop_name)
+                if warehouse_result["has_seed"]:
+                    # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
+                    # 重新点击空地打开弹窗
+                    logger.info(f"仓库有种子，重新点击空地打开弹窗")
+                    self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")
+                    for _ in range(5):
+                        if self.stopped:
+                            return all_actions
+                        time.sleep(0.05)
+                else:
+                    logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
                     buy_result = self._buy_seeds(rect, crop_name)
                     if buy_result:
                         all_actions.append(buy_result)
                         # 买完后重新尝试播种
                         return all_actions + self.plant_all(rect, crop_name)
-                else:
-                    logger.info("自动买种未开启，跳过购买")
+            else:
+                logger.info("自动买种未开启，跳过种植")
             return all_actions
 
         # 第四步：按住种子，拖拽到每块空地
