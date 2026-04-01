@@ -237,9 +237,15 @@ class BotEngine(QObject):
 
     def test_fertilize(self):
         """测试施肥流程"""
+        # 测试按钮可以中断当前任务
         if self._is_busy:
-            logger.debug("上一轮操作尚未完成，跳过")
-            return
+            logger.info("中断当前任务，开始施肥测试...")
+            # 设置停止标志，等待当前任务停止
+            for s in self._strategies:
+                s._stop_requested = True
+            # 等待一下让当前任务停止
+            time.sleep(0.5)
+
         self._is_busy = True
 
         # 创建测试 Worker
