@@ -1,6 +1,6 @@
 # QQ Farm Vision Bot
 
-基于 OpenCV 视觉识别的 QQ 经典农场（微信小程序）自动化工具。纯本地运行，不依赖游戏接口，零封号风险。
+基于 OpenCV 视觉识别的 QQ 经典农场（微信小程序/QQ 小程序）自动化工具。纯本地运行，不依赖游戏接口，零封号风险。
 
 **项目来源**：基于 [Z7ANN/qq-farm-auto](https://github.com/Z7ANN/qq-farm-auto) 修改，适配个人账号的土地情况并优化窗口查找逻辑。
 
@@ -48,7 +48,7 @@
 
 - Windows 10/11
 - Python 3.10+
-- PC 端微信，打开 QQ 经典农场小程序
+- PC 端微信或 PC 版 QQ，打开 QQ 经典农场小程序
 
 ## 安装
 
@@ -61,14 +61,14 @@ Windows 用户直接双击运行 `setup.bat`，自动完成依赖安装和桌面
 ```bash
 git clone https://gitee.com/luckytiger12138/qq-farm.git
 cd qq-farm
-pip install -r requirements.txt
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 ```
 
 ## 快速开始
 
 ### 1. 采集模板（首次使用必须）
 
-打开微信小程序中的 QQ 经典农场，然后运行：
+打开微信或 QQ 中的 QQ 经典农场小程序，然后运行：
 
 ```bash
 python tools/template_collector.py
@@ -272,7 +272,7 @@ qq-farm-auto/
 
 **Q: 找不到游戏窗口？**
 
-1. 确保 PC 端微信已打开 QQ 经典农场小程序
+1. 确保 PC 端微信或 QQ 已打开 QQ 经典农场小程序
 2. 可在设置 → 其他 → 游戏路径 中配置快捷方式，Bot 会自动启动游戏
 3. 窗口关键词默认是 "QQ 经典农场"，如果实际窗口标题不同（如 "QQ 农场助手"），请在设置中修改窗口关键词
 4. 程序支持模糊匹配，如关键词 "QQ 经典农场" 可以匹配到包含 "QQ 农场" 的窗口
