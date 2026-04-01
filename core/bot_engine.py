@@ -153,6 +153,10 @@ class BotEngine(QObject):
 
 
     def start(self) -> bool:
+        # 重置状态
+        self._planted = False
+        self._fertilized = False
+
         self.cv_detector.load_templates()
         tpl_count = sum(len(v) for v in self.cv_detector._templates.values())
         if tpl_count == 0:
@@ -579,6 +583,7 @@ class BotEngine(QObject):
 
             # ---- 农场主页操作 ----
             elif scene == Scene.FARM_OVERVIEW:
+                logger.debug(f"农场主页操作：auto_harvest={features.get('auto_harvest', True)}, _planted={self._planted}")
                 # P0 收益：一键收获
                 if not action_desc and features.get("auto_harvest", True):
                     action_desc = self.harvest.try_harvest(detections)
