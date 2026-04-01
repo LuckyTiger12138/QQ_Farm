@@ -804,8 +804,10 @@ class PlantStrategy(BaseStrategy):
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，遍历检测已播种地块...")
 
-            # 点击每块地检测是否有施肥按钮
-            for i, land in enumerate(land_dets):  # 检测所有地块
+            # 点击每块地检测是否有施肥按钮（找空地，点击后检测施肥按钮）
+            for i, land in enumerate(land_dets):
+                if not land.name.startswith("land_empty"):
+                    continue  # 跳过非空地
                 logger.info(f"检测地块 {i+1}/{len(land_dets)}，位置 ({land.x}, {land.y})")
                 self.click(land.x, land.y, f"检测地块 {i+1}/{len(land_dets)}")
                 time.sleep(0.5)  # 等待点击生效
