@@ -30,7 +30,7 @@ class PlantStrategy(BaseStrategy):
         return False
 
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
-                                buy_qty: int, total_lands: int = 0, skip_count: int = 0) -> list[str]:
+                                total_lands: int = 0, skip_count: int = 0) -> list[str]:
         """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
         if not lands or self.stopped:
             return []
@@ -63,7 +63,7 @@ class PlantStrategy(BaseStrategy):
             if len(lands) > 1:
                 if self.stopped:
                     return all_actions
-                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, skip_count + 1)
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, skip_count + 1)
             return all_actions
 
         # 查找种子
@@ -95,7 +95,7 @@ class PlantStrategy(BaseStrategy):
             if len(lands) > 1:
                 if self.stopped:
                     return all_actions
-                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, skip_count + 1)
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, skip_count + 1)
             return all_actions
 
         # 找到种子，按住拖拽到所有剩余空地
@@ -205,7 +205,7 @@ class PlantStrategy(BaseStrategy):
             if len(lands) > 1:
                 if self.stopped:
                     return all_actions
-                return self._plant_remaining_lands(rect, lands[1:], crop_name, buy_qty, total_lands, 1)
+                return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, 1)
             return all_actions
 
         # 第四步：找到目标种子
@@ -330,7 +330,7 @@ class PlantStrategy(BaseStrategy):
         return all_actions
 
     def _plant_one(self, rect: tuple, land_det: DetectResult,
-                   crop_name: str, buy_qty: int) -> list[str]:
+                   crop_name: str) -> list[str]:
         """播种单块空地"""
         actions_done = []
         self.click(land_det.x, land_det.y, "点击空地")
@@ -366,7 +366,7 @@ class PlantStrategy(BaseStrategy):
                         cv_check, "btn_shop_close", threshold=0.8)
                     if shop_close:
                         logger.info("播种流程：种子已用完，进入购买流程")
-                        self._close_shop_and_buy(rect, crop_name, buy_qty, actions_done)
+                        self._close_shop_and_buy(rect, crop_name, actions_done)
                         return actions_done
 
                     fert = self.cv_detector.detect_single_template(
@@ -391,7 +391,7 @@ class PlantStrategy(BaseStrategy):
 
             if scene == Scene.SHOP_PAGE:
                 logger.info("播种流程：检测到商店页面，种子已用完")
-                self._close_shop_and_buy(rect, crop_name, buy_qty, actions_done)
+                self._close_shop_and_buy(rect, crop_name, actions_done)
                 return actions_done
 
         else:
