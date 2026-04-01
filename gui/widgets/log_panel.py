@@ -1,7 +1,7 @@
 """日志面板 - 深色终端风格"""
 from PyQt6.QtWidgets import QTextEdit, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QApplication
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtCore import Qt
 
 
 class LogPanel(QWidget):
@@ -68,6 +68,10 @@ class LogPanel(QWidget):
         """复制所有日志到剪贴板"""
         clipboard = QApplication.clipboard()
         clipboard.setText(self._log_text.toPlainText())
+        # 显示复制成功提示
+        original_text = self._btn_copy.text()
+        self._btn_copy.setText("已复制!")
+        QTimer.singleShot(1500, lambda: self._btn_copy.setText(original_text))
 
     def _select_all(self):
         """全选日志"""
@@ -76,6 +80,7 @@ class LogPanel(QWidget):
     def _clear_log(self):
         """清空日志"""
         self._log_text.clear()
+        self.append_log("日志已清空")
 
     def append_log(self, message: str):
         if "ERROR" in message or "✗" in message:
