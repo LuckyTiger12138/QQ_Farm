@@ -60,6 +60,7 @@ class PlantingConfig(BaseModel):
     player_level: int = 10
     window_width: int = 581
     window_height: int = 1054
+    game_shortcut_path: str = ""  # 游戏快捷方式路径，用于自动启动
 
 
 class AppConfig(BaseModel):

@@ -1,8 +1,10 @@
 """设置面板 - 紧凑布局，实时生效"""
+import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QCheckBox, QComboBox,
-    QGroupBox, QFormLayout, QGridLayout,
+    QGroupBox, QFormLayout, QGridLayout, QPushButton,
+    QFileDialog,
 )
 from PyQt6.QtCore import pyqtSignal
 
@@ -88,6 +90,17 @@ class SettingsPanel(QWidget):
         mf.setSpacing(5)
         self._window_keyword = QLineEdit()
         mf.addRow("窗口关键词:", self._window_keyword)
+
+        # 游戏快捷方式路径
+        row_shortcut = QHBoxLayout()
+        self._game_shortcut = QLineEdit()
+        self._game_shortcut.setPlaceholderText("选择 QQ 农场小程序快捷方式...")
+        row_shortcut.addWidget(self._game_shortcut)
+        self._btn_browse = QPushButton("浏览...")
+        self._btn_browse.setFixedWidth(70)
+        row_shortcut.addWidget(self._btn_browse)
+        mf.addRow("游戏路径:", row_shortcut)
+
         row_sched = QHBoxLayout()
         self._farm_interval = QSpinBox()
         self._farm_interval.setRange(1, 120)
@@ -104,15 +117,29 @@ class SettingsPanel(QWidget):
         row_sched.addStretch()
         mf.addRow("检查间隔:", row_sched)
         misc_group.setLayout(mf)
+        self._btn_browse.clicked.connect(self._on_browse_shortcut)
         layout.addWidget(misc_group)
 
         layout.addStretch()
+
+    def _on_browse_shortcut(self):
+        """选择游戏快捷方式文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择游戏快捷方式",
+            "",
+            "快捷方式 (*.lnk);;所有文件 (*.*)"
+        )
+        if file_path:
+            self._game_shortcut.setText(file_path)
+            self._auto_save()
 
     def _connect_auto_save(self):
         self._player_level.valueChanged.connect(self._auto_save)
         self._strategy_combo.currentIndexChanged.connect(self._auto_save)
         self._crop_combo.currentIndexChanged.connect(self._auto_save)
         self._window_keyword.editingFinished.connect(self._auto_save)
+        self._game_shortcut.editingFinished.connect(self._auto_save)
         self._farm_interval.valueChanged.connect(self._auto_save)
         self._friend_interval.valueChanged.connect(self._auto_save)
         for cb in (self._cb_harvest, self._cb_plant, self._cb_water,
@@ -130,6 +157,7 @@ class SettingsPanel(QWidget):
         if 0 <= idx < len(self._crop_names):
             c.planting.preferred_crop = self._crop_names[idx]
         c.window_title_keyword = self._window_keyword.text().strip()
+        c.planting.game_shortcut_path = self._game_shortcut.text().strip()
         c.schedule.farm_check_minutes = self._farm_interval.value()
         c.schedule.friend_check_minutes = self._friend_interval.value()
         c.features.auto_harvest = self._cb_harvest.isChecked()
@@ -189,6 +217,7 @@ class SettingsPanel(QWidget):
                 self._crop_names.index(c.planting.preferred_crop))
         self._on_level_changed(c.planting.player_level)
         self._window_keyword.setText(c.window_title_keyword)
+        self._game_shortcut.setText(c.planting.game_shortcut_path)
         self._farm_interval.setValue(c.schedule.farm_check_minutes)
         self._friend_interval.setValue(c.schedule.friend_check_minutes)
         self._cb_harvest.setChecked(c.features.auto_harvest)

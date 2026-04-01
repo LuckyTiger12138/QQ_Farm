@@ -150,9 +150,9 @@ class BotEngine(QObject):
             self.log_message.emit("未找到模板图片，请先运行模板采集工具")
             return False
 
-        window = self.window_manager.find_window(self.config.window_title_keyword)
+        window = self.window_manager.find_window(self.config.window_title_keyword, auto_launch=True, shortcut_path=self.config.planting.game_shortcut_path)
         if not window:
-            self.log_message.emit("未找到QQ农场窗口，请先打开微信小程序中的QQ农场")
+            self.log_message.emit("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场")
             return False
 
         w, h = self.config.planting.window_width, self.config.planting.window_height
