@@ -412,10 +412,11 @@ class PlantStrategy(BaseStrategy):
                         self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
                         time.sleep(0.3)
 
-        # 播种完成后，如果开启了自动施肥，立即对相同地块施肥
+        # 播种完成后，如果开启了自动施肥，立即对所有土地施肥
         if auto_fertilize and self.auto_fertilize and planted_count > 0:
-            logger.info("播种完成，开始施肥...")
-            fert_actions = self.fertilize_all(rect, lands)
+            logger.info("播种完成，开始对所有土地施肥...")
+            # 传入 is_test=True 让它检测所有土地并施肥
+            fert_actions = self.fertilize_all(rect, lands=None, is_test=True)
             if fert_actions:
                 all_actions.extend(fert_actions)
 
@@ -803,7 +804,7 @@ class PlantStrategy(BaseStrategy):
         Args:
             rect: 窗口区域
             lands: 地块列表，如果为 None 则检测所有土地
-            is_test: 是否为测试模式，测试模式下会遍历所有地块
+            is_test: 是否为测试模式（测试模式会遍历检测所有地块，正式模式直接使用传入的 lands）
 
         Returns:
             操作列表
@@ -813,9 +814,9 @@ class PlantStrategy(BaseStrategy):
         fertilizer_det = None  # 保存检测到的肥料按钮位置
         fertilizer_name = None  # 保存肥料名称
 
-        # 如果没有传入地块列表且是测试模式，遍历检测所有地块
-        if lands is None and is_test:
-            logger.info(f"施肥流程（测试模式）：is_test={is_test}, lands={lands}")
+        # 如果没有传入地块列表或者是测试模式，遍历检测所有地块找肥料按钮
+        if lands is None or is_test:
+            logger.info(f"施肥流程：is_test={is_test}, lands={lands}")
             logger.info(f"施肥流程：_capture_fn={self._capture_fn is not None}, stopped={self.stopped}")
             logger.info(f"施肥流程：action_executor={self.action_executor is not None}")
             cv_img, dets, _ = self.capture(rect)
