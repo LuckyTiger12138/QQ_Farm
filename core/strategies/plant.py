@@ -16,12 +16,14 @@ class PlantStrategy(BaseStrategy):
         self.auto_fertilize = False  # 是否自动施肥
 
     def _check_and_close_info_page(self, rect: tuple) -> bool:
-        """检测并关闭个人信息页面，返回是否成功关闭"""
+        """检测并关闭个人信息页面或任务菜单，返回是否成功关闭"""
         if self.stopped:
             return False
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return False
+
+        # 检查个人信息关闭按钮
         info_close = self.cv_detector.detect_single_template(
             cv_img, "btn_info_close", threshold=0.6)
         if info_close:
@@ -31,6 +33,19 @@ class PlantStrategy(BaseStrategy):
                     return False
                 time.sleep(0.1)
             return True
+
+        # 检查任务菜单按钮 (btn_rw)，有则点击空白处关闭
+        btn_rw = self.cv_detector.detect_single_template(
+            cv_img, "btn_rw", threshold=0.6)
+        if btn_rw:
+            logger.info("检测到任务菜单，点击空白处关闭")
+            self.click_blank(rect)
+            for _ in range(3):
+                if self.stopped:
+                    return False
+                time.sleep(0.1)
+            return True
+
         return False
 
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
