@@ -803,17 +803,15 @@ class PlantStrategy(BaseStrategy):
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，遍历检测已播种地块...")
 
-            # 点击每块地检测是否有施肥按钮
+            # 点击每块地检测是否有施肥按钮（测试模式不检查停止标志）
             for i, land in enumerate(land_dets[:5]):  # 最多检测 5 块
                 logger.info(f"检测地块 {i+1}/{min(5, len(land_dets))}，位置 ({land.x}, {land.y})")
                 self.click(land.x, land.y, f"检测地块 {i+1}/{min(5, len(land_dets))}")
-                for _ in range(10):
-                    if self.stopped:
-                        return all_actions
-                    time.sleep(0.05)
+                time.sleep(0.5)  # 等待点击生效
 
                 # 关闭可能弹出的个人信息页面
                 self._check_and_close_info_page(rect)
+                time.sleep(0.3)
 
                 # 检测施肥按钮
                 cv_check, dets_check, _ = self.capture(rect)
@@ -830,10 +828,7 @@ class PlantStrategy(BaseStrategy):
 
                 # 点击空白处关闭弹窗
                 self.click_blank(rect)
-                for _ in range(5):
-                    if self.stopped:
-                        return all_actions
-                    time.sleep(0.05)
+                time.sleep(0.3)
 
             if not lands:
                 logger.info("施肥流程：未找到已播种的地块")
