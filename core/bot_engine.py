@@ -161,10 +161,14 @@ class BotEngine(QObject):
 
         w, h = self.config.planting.window_width, self.config.planting.window_height
         if w > 0 and h > 0:
+            # 等待游戏自适应完成
+            time.sleep(2)
             self.window_manager.resize_window(w, h)
             time.sleep(0.5)
-            window = self.window_manager.refresh_window_info(self.config.window_title_keyword)
-            self.log_message.emit(f"窗口已调整为 {window.width}x{window.height}")
+            # 使用缓存的窗口信息，不重新搜索
+            window = self.window_manager._cached_window
+            if window:
+                self.log_message.emit(f"窗口已调整为 {window.width}x{window.height}")
 
         rect = (window.left, window.top, window.width, window.height)
         self.action_executor = ActionExecutor(
@@ -268,11 +272,19 @@ class BotEngine(QObject):
     # ============================================================
 
     def _prepare_window(self) -> tuple | None:
-        window = self.window_manager.refresh_window_info(
-            self.config.window_title_keyword,
-            auto_launch=True,
-            shortcut_path=self.config.planting.game_shortcut_path
-        )
+        # 优先使用缓存窗口，找不到再搜索
+        window = self.window_manager._cached_window
+        if not window:
+            window = self.window_manager.refresh_window_info(
+                self.config.window_title_keyword,
+                auto_launch=True,
+                shortcut_path=self.config.planting.game_shortcut_path
+            )
+        else:
+            # 刷新缓存窗口的最新位置
+            self.window_manager.find_window(self.config.window_title_keyword)
+            window = self.window_manager._cached_window
+
         if not window:
             return None
         self.window_manager.activate_window()

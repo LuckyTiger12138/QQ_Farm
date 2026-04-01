@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 import pygetwindow as gw
+from PyQt6.QtCore import QCoreApplication
 
 
 @dataclass
@@ -41,69 +42,86 @@ class WindowManager:
     def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "") -> WindowInfo | None:
         """通过标题关键词查找窗口，可选自动启动游戏"""
         try:
-            # 先精确搜索
+            # 使用用户填写的关键词精确搜索
             windows = gw.getWindowsWithTitle(title_keyword)
 
-            # 没找到则模糊搜索
+            if windows:
+                w = windows[0]
+                return self._create_window_info(w)
+
+            # 没找到则模糊搜索（包含关键词所有部分）
             if not windows:
+                kw = title_keyword.lower().replace(" ", "")
                 all_windows = gw.getAllWindows()
                 for w in all_windows:
-                    t = w.title.lower()
-                    kw = title_keyword.lower()
-                    # 支持部分匹配：QQ 农场 能匹配 QQ 经典农场
-                    if kw in t or all(k in t for k in kw.split()):
+                    title = w.title.lower().replace(" ", "")
+                    # 包含关键词的所有字符（如"QQ 农场"能匹配"QQ 经典农场"）
+                    if all(c in title for c in kw):
                         windows = [w]
                         break
 
-            # 再试一次：只用"农场"关键词
+            # 再试一次：包含"农场"（排除"助手"）
             if not windows:
                 for w in gw.getAllWindows():
-                    if "农场" in w.title:
+                    if "农场" in w.title and "助手" not in w.title:
                         windows = [w]
                         logger.info(f"通过'农场'关键词找到窗口：{w.title}")
                         break
 
             # 如果还是没找到且启用了自动启动
             if not windows and auto_launch and shortcut_path:
-                logger.info("未找到游戏窗口，尝试启动游戏...")
+                logger.info(f"未找到窗口 '{title_keyword}'，尝试启动游戏...")
                 if self.launch_game(shortcut_path):
-                    # 等待游戏启动
+                    # 等待游戏启动（最多 30 秒）
                     logger.info("等待游戏启动（最多 30 秒）...")
                     for i in range(60):
                         time.sleep(0.5)
+                        QCoreApplication.processEvents()
+
+                        # 优先使用用户填写的关键词
                         windows = gw.getWindowsWithTitle(title_keyword)
                         if windows:
                             logger.info(f"游戏已启动，检测到窗口")
                             break
-                    else:
-                        # 尝试用模糊搜索再检测一次
+
+                        # 降级模糊搜索（排除助手窗口）
                         for w in gw.getAllWindows():
-                            if "农场" in w.title:
+                            if "农场" in w.title and "助手" not in w.title:
                                 windows = [w]
+                                logger.info(f"检测到窗口：{w.title}")
                                 break
-                        if not windows:
-                            logger.warning("等待超时，未能检测到游戏窗口")
-                            return None
+                        if windows:
+                            break
+                    else:
+                        # 超时后列出所有窗口帮助调试
+                        all_titles = [w.title for w in gw.getAllWindows() if w.title.strip()]
+                        logger.warning(f"等待超时，当前窗口列表：{all_titles}")
+                        return None
 
             if not windows:
                 logger.warning(f"未找到包含 '{title_keyword}' 的窗口")
                 return None
 
             w = windows[0]
-            info = WindowInfo(
-                hwnd=w._hWnd,
-                title=w.title,
-                left=w.left,
-                top=w.top,
-                width=w.width,
-                height=w.height,
-            )
-            self._cached_window = info
-            logger.debug(f"找到窗口：{info.title} ({info.width}x{info.height})")
-            return info
+            return self._create_window_info(w)
+
         except Exception as e:
             logger.error(f"查找窗口失败：{e}")
             return None
+
+    def _create_window_info(self, w) -> WindowInfo:
+        """创建窗口信息对象"""
+        info = WindowInfo(
+            hwnd=w._hWnd,
+            title=w.title,
+            left=w.left,
+            top=w.top,
+            width=w.width,
+            height=w.height,
+        )
+        self._cached_window = info
+        logger.debug(f"找到窗口：{info.title} ({info.width}x{info.height})")
+        return info
 
     def get_window_rect(self) -> tuple[int, int, int, int] | None:
         """获取缓存窗口的区域 (left, top, width, height)"""
