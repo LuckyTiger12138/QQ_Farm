@@ -33,6 +33,7 @@ class DetectResult:
 # 模板类别定义
 TEMPLATE_CATEGORIES = {
     "btn": "button",
+    "bth": "button",  # 施肥按钮等特殊按钮
     "icon": "status_icon",
     "crop": "crop",
     "ui": "ui_element",

@@ -200,18 +200,25 @@ class BotEngine(QObject):
         # 2. 停止调度器（停止定时器）
         self.scheduler.stop()
 
-        # 3. 等待当前正在运行的 Worker 完成（最多等待 5 秒）
+        # 3. 循环等待当前正在运行的 Worker 完成，直到成功停止
         if self._worker and self._worker.isRunning():
             logger.info("等待当前任务完成...")
-            # 不要调用 quit()，它只是退出事件循环，不会停止正在执行的代码
-            # 等待线程自然退出（通过检查_stop_requested 标志）
-            elapsed = 0
-            while self._worker.isRunning() and elapsed < 5000:
-                time.sleep(0.1)
-                elapsed += 100
+            retry_count = 0
+            while self._worker.isRunning():
+                # 每次等待 5 秒
+                elapsed = 0
+                while self._worker.isRunning() and elapsed < 5000:
+                    time.sleep(0.1)
+                    elapsed += 100
 
-            if self._worker.isRunning():
-                logger.warning("任务未能及时停止")
+                if self._worker.isRunning():
+                    retry_count += 1
+                    logger.warning(f"任务未能及时停止 (第{retry_count}次重试)，继续尝试停止...")
+                    # 重试停止流程：再次设置停止标志
+                    for s in self._strategies:
+                        s._stop_requested = True
+
+            logger.info(f"任务已停止，共重试 {retry_count} 次")
 
         # 4. 重置状态（在 Worker 完成后）
         self._is_busy = False
@@ -237,30 +244,95 @@ class BotEngine(QObject):
 
     def test_fertilize(self):
         """测试施肥流程"""
-        # 测试按钮可以中断当前任务
-        if self._is_busy:
-            logger.info("中断当前任务，开始施肥测试...")
-            # 设置停止标志，等待当前任务停止
-            for s in self._strategies:
-                s._stop_requested = True
-            # 等待一下让当前任务停止
-            time.sleep(0.5)
+        logger.info("=== 开始施肥测试 ===")
 
-        # 暂停调度器，防止定时器触发干扰测试
+        # 先设置 _is_busy，阻止新任务启动
+        self._is_busy = True
+
+        # 停止调度器，防止定时器触发干扰测试
         self.scheduler.stop()
 
-        self._is_busy = True
+        # 设置停止标志，停止任何正在运行的任务
+        for s in self._strategies:
+            s._stop_requested = True
+
+        # 等待当前任务停止（最多等待 10 秒）
+        elapsed = 0
+        while elapsed < 10000:
+            time.sleep(0.1)
+            elapsed += 100
+            # 等待 Worker 停止
+            if not (self._worker and self._worker.isRunning()):
+                break
+
+        # 额外等待一下确保任务完全退出
+        time.sleep(0.5)
+
+        # 先初始化窗口和 action_executor（如果尚未初始化）
+        rect = self._prepare_window()
+        if not rect:
+            logger.warning("测试施肥：窗口未找到")
+            self.log_message.emit("窗口未找到，请先打开 QQ 农场")
+            self._is_busy = False
+            return
+
+        # 如果 action_executor 为空，创建新的实例
+        if not self.action_executor:
+            self.action_executor = ActionExecutor(
+                window_rect=rect,
+                delay_min=self.config.safety.random_delay_min,
+                delay_max=self.config.safety.random_delay_max,
+                click_offset=self.config.safety.click_offset_range,
+            )
+            logger.info("创建新的 action_executor")
+
+        # 重置策略停止标志，让测试任务可以正常执行
+        for s in self._strategies:
+            s._stop_requested = False
+
+        # 重新初始化策略依赖（确保 _capture_fn 和 action_executor 已设置）
+        self._init_strategies()
+
+        # 确保 action_executor 已设置（双重检查）
+        for s in self._strategies:
+            if not s.action_executor:
+                s.action_executor = self.action_executor
+                logger.info(f"修复 {s.__class__.__name__} 的 action_executor")
+
+        logger.info(f"action_executor={self.action_executor is not None}, rect={rect}")
 
         # 创建测试 Worker
         self._worker = BotWorker(self, "test_fertilize")
-        self._worker.finished.connect(self._on_task_finished)
+        # 测试完成后只重置 _is_busy，不触发其他逻辑
+        self._worker.finished.connect(lambda r: self._on_test_finished(r))
         self._worker.error.connect(self._on_task_error)
         self._worker.start()
+
+    def _on_test_finished(self, result: dict):
+        """测试任务完成后的处理"""
+        self._is_busy = False
+        logger.info(f"施肥测试完成：{result.get('message', '无结果')}")
+        # 测试完成后不自动恢复调度器，保持停止状态
 
     def test_fertilize_task(self) -> dict:
         """执行施肥测试任务"""
         result = {"success": False, "actions_done": [], "message": ""}
         logger.info("开始执行施肥测试任务...")
+
+        # 重置策略停止标志（确保测试任务可以正常执行）
+        for s in self._strategies:
+            s._stop_requested = False
+
+        # 确保 action_executor 已设置
+        for s in self._strategies:
+            if not s.action_executor:
+                s.action_executor = self.action_executor
+
+        # 双重检查 PlantStrategy 的 action_executor
+        if not self.plant.action_executor:
+            self.plant.action_executor = self.action_executor
+            logger.info("修复 PlantStrategy.action_executor")
+        logger.info(f"PlantStrategy: action_executor={self.plant.action_executor is not None}, stopped={self.plant.stopped}")
 
         rect = self._prepare_window()
         if not rect:
@@ -268,15 +340,23 @@ class BotEngine(QObject):
             return result
 
         # 先检测所有地块（land_开头的模板）
+        logger.info(f"开始截屏检测，窗口区域：{rect}")
         cv_img, dets, _ = self._capture_and_detect(rect, prefix="test", save=False)
         if cv_img is None:
             result["message"] = "截屏失败"
+            logger.warning("施肥测试：截屏返回 None")
             return result
+
+        logger.info(f"检测到 {len(dets)} 个模板")
+        if dets:
+            template_summary = ", ".join(f"{d.name}({d.confidence:.0%})" for d in dets[:10])
+            logger.info(f"检测到的模板：{template_summary}")
 
         # 找所有土地（包括空地和已播种）
         land_dets = [d for d in dets if d.name.startswith("land_")]
         if not land_dets:
             result["message"] = "未找到任何地块"
+            logger.warning(f"施肥测试：未找到 land_ 开头的模板，检测到 {len(dets)} 个模板")
             return result
 
         self.log_message.emit(f"检测到 {len(land_dets)} 块土地，开始施肥测试...")
@@ -362,6 +442,12 @@ class BotEngine(QObject):
                             categories: list[str] | None = None,
                             save: bool = True
                             ) -> tuple[np.ndarray | None, list[DetectResult], PILImage.Image | None]:
+        # 确保模板已加载
+        if not self.cv_detector._loaded:
+            logger.info("模板未加载，重新加载模板...")
+            self.cv_detector.load_templates()
+            logger.info(f"已加载 {len(self.cv_detector._templates)} 个类别的模板")
+
         if save:
             image, _ = self.screen_capture.capture_and_save(rect, prefix)
         else:

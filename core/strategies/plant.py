@@ -8,6 +8,21 @@ from core.cv_detector import DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
 
+# 作物检测阈值配置（默认 0.8，特殊作物单独配置）
+CROP_THRESHOLDS = {
+    "蘑菇": 0.70,  # 降低 10%，更容易检测到
+}
+
+
+def get_seed_threshold(crop_name: str) -> float:
+    """获取指定作物的种子检测阈值"""
+    return CROP_THRESHOLDS.get(crop_name, 0.8)
+
+
+def get_shop_threshold(crop_name: str) -> float:
+    """获取指定作物的商店种子检测阈值"""
+    return CROP_THRESHOLDS.get(crop_name, 0.6)
+
 
 class PlantStrategy(BaseStrategy):
     def __init__(self, cv_detector: CVDetector):
@@ -117,7 +132,7 @@ class PlantStrategy(BaseStrategy):
                 logger.info("播种流程：检测到一键收获按钮，中断播种优先收获")
                 return all_actions
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=0.8)
+                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name))
             if seed_dets:
                 seed_det = seed_dets[0]
                 break
@@ -264,6 +279,12 @@ class PlantStrategy(BaseStrategy):
             return all_actions
 
         # 第四步：找到目标种子
+        # 为每种作物设置单独的阈值，蘑菇阈值降低 5%（0.75 而不是 0.8）
+        crop_thresholds = {
+            "蘑菇": 0.75,  # 默认 0.8 降低 5%
+        }
+        seed_threshold = crop_thresholds.get(crop_name, 0.8)
+
         seed_det = None
         for attempt in range(2):
             if self.stopped:
@@ -272,7 +293,7 @@ class PlantStrategy(BaseStrategy):
             if cv_img is None:
                 return all_actions
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=0.8)
+                cv_img, f"seed_{crop_name}", threshold=seed_threshold)
             if seed_dets:
                 seed_det = seed_dets[0]
                 break
@@ -419,7 +440,7 @@ class PlantStrategy(BaseStrategy):
                 return actions_done
 
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=0.8)
+                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name))
 
             if seed_dets:
                 seed = seed_dets[0]
@@ -563,7 +584,7 @@ class PlantStrategy(BaseStrategy):
 
             # 查找 seed_作物名 模板（仓库中使用更高阈值 0.95 避免误报）
             seed_det = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=0.95)
+                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name) * 1.2)  # 仓库检测阈值提高 20%
 
             if seed_det:
                 conf = min(seed_det[0].confidence, 1.0)  # 限制最大值用于显示
@@ -633,7 +654,7 @@ class PlantStrategy(BaseStrategy):
         if cv_img2 is None:
             return
         seed_dets = self.cv_detector.detect_single_template(
-            cv_img2, f"seed_{crop_name}", threshold=0.85)
+            cv_img2, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name) * 1.05)  # 购买后阈值提高 5%
         if seed_dets:
             self.click(seed_dets[0].x, seed_dets[0].y,
                        f"播种{crop_name}", ActionType.PLANT)
@@ -682,7 +703,7 @@ class PlantStrategy(BaseStrategy):
 
             logger.info("购买流程：商店已打开，查找种子")
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"shop_{crop_name}", threshold=0.6)
+                cv_img, f"shop_{crop_name}", threshold=get_shop_threshold(crop_name))
 
             if seed_dets:
                 det = seed_dets[0]
@@ -775,112 +796,164 @@ class PlantStrategy(BaseStrategy):
         ps.close_shop(rect)
 
     def fertilize_all(self, rect: tuple, lands: list = None, is_test: bool = False) -> list[str]:
-        """对所有已播种地块施用普通肥料
+        """对所有地块施用普通肥料
 
-        流程：点击地块 → 弹出施肥选项 → 点击普通肥料 (bth_feiliao_pt) → 拖拽到所有地块
+        流程：点击地块 → 检测是否有普通肥料按钮 → 有就拖拽施肥
 
         Args:
             rect: 窗口区域
-            lands: 已播种的地块列表（由 plant_all 传入），如果为 None 则尝试遍历所有地块检测
-            is_test: 是否为测试模式，测试模式下会遍历检测
+            lands: 地块列表，如果为 None 则检测所有土地
+            is_test: 是否为测试模式，测试模式下会遍历所有地块
 
         Returns:
             操作列表
         """
         all_actions = []
+        land_dets = None  # 保存所有检测到的土地
+        fertilizer_det = None  # 保存检测到的肥料按钮位置
+        fertilizer_name = None  # 保存肥料名称
 
-        # 如果没有传入地块列表且是测试模式，尝试通过遍历检测
+        # 如果没有传入地块列表且是测试模式，遍历检测所有地块
         if lands is None and is_test:
+            logger.info(f"施肥流程（测试模式）：is_test={is_test}, lands={lands}")
+            logger.info(f"施肥流程：_capture_fn={self._capture_fn is not None}, stopped={self.stopped}")
+            logger.info(f"施肥流程：action_executor={self.action_executor is not None}")
             cv_img, dets, _ = self.capture(rect)
+            logger.info(f"施肥流程：capture 返回 cv_img={cv_img is not None}, dets={len(dets) if dets else 0}")
             if cv_img is None:
+                logger.warning("施肥流程：截屏失败")
                 return all_actions
 
-            # 遍历所有土地模板，点击检测是否已播种
-            lands = []
             land_dets = [d for d in dets if d.name.startswith("land_")]
+            logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地（原始检测 {len(dets)} 个模板）")
             if not land_dets:
                 logger.info("施肥流程：未找到任何地块")
                 return all_actions
 
-            logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，遍历检测已播种地块...")
+            logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，开始点击检测...")
+            logger.info(f"施肥流程：stopped={self.stopped}, action_executor={self.action_executor is not None}")
 
-            # 点击每块地检测是否有施肥按钮（找空地，点击后检测施肥按钮）
+            # 点击每块地，检测是否有施肥按钮
             for i, land in enumerate(land_dets):
-                if not land.name.startswith("land_empty"):
-                    continue  # 跳过非空地
+                if self.stopped:
+                    logger.info("施肥流程：收到停止信号，退出检测")
+                    return all_actions
                 logger.info(f"检测地块 {i+1}/{len(land_dets)}，位置 ({land.x}, {land.y})")
-                self.click(land.x, land.y, f"检测地块 {i+1}/{len(land_dets)}")
-                time.sleep(0.5)  # 等待点击生效
+                logger.info(f"点击前检查：stopped={self.stopped}, action_executor={self.action_executor is not None}")
+                click_result = self.click(land.x, land.y, f"点击地块 {i+1}/{len(land_dets)}")
+                logger.info(f"点击结果：{click_result}")
 
-                # 关闭可能弹出的个人信息页面
-                self._check_and_close_info_page(rect)
+                # 等待页面加载
                 time.sleep(0.3)
 
-                # 检测施肥按钮
+                # 先检测施肥按钮，如果有说明弹出的是施肥菜单，不需要关闭
                 cv_check, dets_check, _ = self.capture(rect)
                 if cv_check is not None:
-                    logger.debug(f"地块 {i+1} 检测：找到 {len(dets_check)} 个模板")
-                    # 输出所有检测到的模板名称用于调试
-                    template_names = [d.name for d in dets_check[:10]]
-                    logger.debug(f"地块 {i+1} 检测到的模板：{template_names}")
-                    fert_btn = self.cv_detector.detect_single_template(
-                        cv_check, "bth_feiliao_pt", threshold=0.6)
-                    if fert_btn:
-                        # 已播种，记录地块位置
-                        lands.append(land)
-                        logger.info(f"地块 {i+1} 已播种，找到施肥按钮 ({fert_btn[0].confidence:.0%})")
-                    else:
-                        logger.info(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
+                    # 检测肥料按钮（只使用普通肥料）
+                    fert_btn_pt = self.cv_detector.detect_single_template(
+                        cv_check, "bth_feiliao_pt", threshold=0.55)  # 降低阈值更容易检测到
+                    if fert_btn_pt:
+                        logger.info(f"地块 {i+1} 可施肥，找到普通肥料按钮 ({fert_btn_pt[0].confidence:.0%})")
+                        # 保存肥料按钮位置，找到肥料按钮后，对所有土地施肥（包括空地）
+                        fertilizer_det = fert_btn_pt[0]
+                        fertilizer_name = "普通肥料"
+                        lands = land_dets  # 使用所有检测到的土地
+                        logger.info(f"施肥流程：找到肥料按钮，将对所有 {len(lands)} 块土地施肥")
+                        # 不关闭弹窗，直接开始施肥流程
+                        break
+
+                    # 没找到肥料按钮，检测是否是个人信息页面
+                    self._check_and_close_info_page(rect)
+                    time.sleep(0.2)
+
+                    # 重新检测施肥按钮（可能关闭个人信息页面后肥料按钮才显示）
+                    cv_check, dets_check, _ = self.capture(rect)
+                    if cv_check is not None:
+                        logger.debug(f"地块 {i+1} 检测：找到 {len(dets_check)} 个模板")
+                        template_names = [d.name for d in dets_check[:15]]
+                        logger.info(f"地块 {i+1} 检测到的模板：{template_names}")
+
+                        fert_btn_pt = self.cv_detector.detect_single_template(
+                            cv_check, "bth_feiliao_pt", threshold=0.55)
+                        if fert_btn_pt:
+                            logger.info(f"地块 {i+1} 可施肥，找到普通肥料按钮 ({fert_btn_pt[0].confidence:.0%})")
+                            fertilizer_det = fert_btn_pt[0]
+                            fertilizer_name = "普通肥料"
+                            lands = land_dets
+                            logger.info(f"施肥流程：找到肥料按钮，将对所有 {len(lands)} 块土地施肥")
+                            break
+
+                logger.debug(f"地块 {i+1} 无可施肥按钮")
 
                 # 点击空白处关闭弹窗
                 self.click_blank(rect)
-                time.sleep(0.3)
+                time.sleep(0.5)
 
-            if not lands:
-                logger.info("施肥流程：未找到已播种的地块")
+            if not lands or lands != land_dets:
+                logger.info("施肥流程：所有地块都无可施肥按钮（空地或已施肥）")
                 return all_actions
+
+            # 找到肥料按钮，直接开始拖拽施肥（不关闭弹窗）
+            logger.info(f"施肥流程：发现肥料按钮，将对所有 {len(lands)} 块土地施肥...")
 
         elif lands is None:
             logger.info("施肥流程：未提供地块列表且非测试模式")
             return all_actions
 
-        logger.info(f"施肥流程：对 {len(lands)} 块已播种地块施肥")
-
-        # 点击第一块地，打开施肥选项
-        self.click(lands[0].x, lands[0].y, "点击已播种地块")
-        for _ in range(5):
-            if self.stopped:
-                return all_actions
-            time.sleep(0.05)
-
-        # 检测并关闭个人信息页面
-        self._check_and_close_info_page(rect)
-
-        # 查找普通肥料模板
-        cv_img, dets, _ = self.capture(rect)
-        if cv_img is None:
+        if not lands:
+            logger.info("施肥流程：无可施肥的地块")
             return all_actions
 
-        fertilizer_det = None
-        for attempt in range(2):
-            if self.stopped:
-                return all_actions
-            fertilizer_dets = self.cv_detector.detect_single_template(
-                cv_img, "bth_feiliao_pt", threshold=0.8)
-            if fertilizer_dets:
-                fertilizer_det = fertilizer_dets[0]
-                break
+        logger.info(f"施肥流程：对 {len(lands)} 块土地施肥")
+
+
+        # 如果还没有肥料按钮位置，需要重新检测（非测试模式或之前没保存）
+        if not fertilizer_det:
+            # 点击第一块地，打开施肥选项
+            self.click(lands[0].x, lands[0].y, "点击已播种地块")
             for _ in range(5):
                 if self.stopped:
                     return all_actions
                 time.sleep(0.05)
 
-        if not fertilizer_det:
-            logger.warning("施肥流程：未找到普通肥料 (bth_feiliao_pt)")
-            self.click_blank(rect)
-            return all_actions
+            # 检测并关闭个人信息页面
+            self._check_and_close_info_page(rect)
 
-        logger.info(f"施肥流程：找到普通肥料，开始拖拽施肥 {len(fertilized_lands)} 块地")
+            # 查找肥料模板（普通肥料或有机肥料）
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                return all_actions
+
+            for attempt in range(2):
+                if self.stopped:
+                    return all_actions
+                cv_img, dets, _ = self.capture(rect)
+                if cv_img is None:
+                    return all_actions
+                # 先检测普通肥料，再检测有机肥料
+                fertilizer_dets = self.cv_detector.detect_single_template(
+                    cv_img, "bth_feiliao_pt", threshold=0.6)
+                if fertilizer_dets:
+                    fertilizer_det = fertilizer_dets[0]
+                    fertilizer_name = "普通肥料"
+                    break
+                fertilizer_dets = self.cv_detector.detect_single_template(
+                    cv_img, "bth_feiliao2_yj", threshold=0.6)
+                if fertilizer_dets:
+                    fertilizer_det = fertilizer_dets[0]
+                    fertilizer_name = "有机肥料"
+                    break
+                for _ in range(5):
+                    if self.stopped:
+                        return all_actions
+                    time.sleep(0.05)
+
+            if not fertilizer_det:
+                logger.warning("施肥流程：未找到肥料按钮 (bth_feiliao_pt 或 bth_feiliao2_yj)")
+                self.click_blank(rect)
+                return all_actions
+
+        logger.info(f"施肥流程：找到 {fertilizer_name}，开始拖拽施肥")
 
         # 按住肥料，拖拽到每块地
         if not self.action_executor:
@@ -900,10 +973,20 @@ class PlantStrategy(BaseStrategy):
                 return all_actions
             time.sleep(0.05)
 
-        # 依次拖到每块地
+        # 依次拖到所有土地（测试模式下使用所有土地，正常模式使用传入的 lands）
         fertilized_count = 0
-        total_count = len(fertilized_lands)
-        for i, land in enumerate(fertilized_lands, 1):
+        if is_test and land_dets:
+            # 测试模式：对所有土地施肥
+            total_count = len(land_dets)
+            lands_to_fertilize = land_dets
+            logger.info(f"施肥流程：测试模式，对所有 {total_count} 块土地施肥")
+        else:
+            # 正常模式：只对传入的地块施肥
+            total_count = len(lands)
+            lands_to_fertilize = lands
+            logger.info(f"施肥流程：正常模式，对 {total_count} 块土地施肥")
+
+        for i, land in enumerate(lands_to_fertilize, 1):
             if self.stopped:
                 pyautogui.mouseUp()
                 logger.info("施肥流程：拖拽中途停止")
