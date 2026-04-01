@@ -18,6 +18,7 @@ class SellMode(str, Enum):
 class FeaturesConfig(BaseModel):
     auto_harvest: bool = True
     auto_plant: bool = True
+    auto_buy_seed: bool = False  # 自动购买种子（种子不足时）
     auto_weed: bool = True
     auto_water: bool = True
     auto_bug: bool = True

@@ -68,6 +68,7 @@ class SettingsPanel(QWidget):
         grid.setContentsMargins(8, 4, 8, 4)
         self._cb_harvest = QCheckBox("收获")
         self._cb_plant = QCheckBox("播种")
+        self._cb_buy_seed = QCheckBox("买种")
         self._cb_water = QCheckBox("浇水")
         self._cb_weed = QCheckBox("除草")
         self._cb_bug = QCheckBox("除虫")
@@ -76,9 +77,10 @@ class SettingsPanel(QWidget):
         self._cb_help = QCheckBox("帮忙")
         self._cb_task = QCheckBox("任务")
         self._cb_upgrade = QCheckBox("扩建")
-        cbs = [self._cb_harvest, self._cb_plant, self._cb_water,
-               self._cb_weed, self._cb_bug, self._cb_sell,
-               self._cb_steal, self._cb_help, self._cb_task, self._cb_upgrade]
+        cbs = [self._cb_harvest, self._cb_plant, self._cb_buy_seed,
+               self._cb_water, self._cb_weed, self._cb_bug,
+               self._cb_sell, self._cb_steal, self._cb_help,
+               self._cb_task, self._cb_upgrade]
         for i, cb in enumerate(cbs):
             grid.addWidget(cb, i // 5, i % 5)
         feat_group.setLayout(grid)
@@ -142,9 +144,10 @@ class SettingsPanel(QWidget):
         self._game_shortcut.editingFinished.connect(self._auto_save)
         self._farm_interval.valueChanged.connect(self._auto_save)
         self._friend_interval.valueChanged.connect(self._auto_save)
-        for cb in (self._cb_harvest, self._cb_plant, self._cb_water,
-                   self._cb_weed, self._cb_bug, self._cb_sell,
-                   self._cb_steal, self._cb_help, self._cb_task, self._cb_upgrade):
+        for cb in (self._cb_harvest, self._cb_plant, self._cb_buy_seed,
+                   self._cb_water, self._cb_weed, self._cb_bug,
+                   self._cb_sell, self._cb_steal, self._cb_help,
+                   self._cb_task, self._cb_upgrade):
             cb.toggled.connect(self._auto_save)
 
     def _auto_save(self):
@@ -162,6 +165,7 @@ class SettingsPanel(QWidget):
         c.schedule.friend_check_minutes = self._friend_interval.value()
         c.features.auto_harvest = self._cb_harvest.isChecked()
         c.features.auto_plant = self._cb_plant.isChecked()
+        c.features.auto_buy_seed = self._cb_buy_seed.isChecked()
         c.features.auto_water = self._cb_water.isChecked()
         c.features.auto_weed = self._cb_weed.isChecked()
         c.features.auto_bug = self._cb_bug.isChecked()
@@ -222,6 +226,7 @@ class SettingsPanel(QWidget):
         self._friend_interval.setValue(c.schedule.friend_check_minutes)
         self._cb_harvest.setChecked(c.features.auto_harvest)
         self._cb_plant.setChecked(c.features.auto_plant)
+        self._cb_buy_seed.setChecked(c.features.auto_buy_seed)
         self._cb_water.setChecked(c.features.auto_water)
         self._cb_weed.setChecked(c.features.auto_weed)
         self._cb_bug.setChecked(c.features.auto_bug)

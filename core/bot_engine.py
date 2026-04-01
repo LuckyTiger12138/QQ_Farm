@@ -109,10 +109,12 @@ class BotEngine(QObject):
             s.set_capture_fn(self._capture_and_detect)
             s._stop_requested = False
         self.task.sell_config = self.config.sell
+        self.plant.auto_buy_seed = self.config.features.auto_buy_seed
 
     def update_config(self, config: AppConfig):
         self.config = config
         self.task.sell_config = config.sell
+        self.plant.auto_buy_seed = config.features.auto_buy_seed
 
     def _resolve_crop_name(self) -> str:
         """根据策略决定种植作物"""

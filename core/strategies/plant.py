@@ -10,6 +10,9 @@ from core.strategies.base import BaseStrategy
 
 
 class PlantStrategy(BaseStrategy):
+    def __init__(self, cv_detector: CVDetector):
+        super().__init__(cv_detector)
+        self.auto_buy_seed = False  # 是否自动购买种子
 
     def _check_and_close_info_page(self, rect: tuple) -> bool:
         """检测并关闭个人信息页面，返回是否成功关闭"""
@@ -248,11 +251,14 @@ class PlantStrategy(BaseStrategy):
                     time.sleep(0.05)
             else:
                 logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买")
-                buy_result = self._buy_seeds(rect, crop_name)
-                if buy_result:
-                    all_actions.append(buy_result)
-                    # 买完后重新尝试播种
-                    return all_actions + self.plant_all(rect, crop_name)
+                if self.auto_buy_seed:
+                    buy_result = self._buy_seeds(rect, crop_name)
+                    if buy_result:
+                        all_actions.append(buy_result)
+                        # 买完后重新尝试播种
+                        return all_actions + self.plant_all(rect, crop_name)
+                else:
+                    logger.info("自动买种未开启，跳过购买")
             return all_actions
 
         # 第四步：按住种子，拖拽到每块空地
