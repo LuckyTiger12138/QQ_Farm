@@ -805,8 +805,9 @@ class PlantStrategy(BaseStrategy):
 
             # 点击每块地检测是否有施肥按钮
             for i, land in enumerate(land_dets[:5]):  # 最多检测 5 块
+                logger.info(f"检测地块 {i+1}/{min(5, len(land_dets))}，位置 ({land.x}, {land.y})")
                 self.click(land.x, land.y, f"检测地块 {i+1}/{min(5, len(land_dets))}")
-                for _ in range(5):
+                for _ in range(10):
                     if self.stopped:
                         return all_actions
                     time.sleep(0.05)
@@ -817,14 +818,15 @@ class PlantStrategy(BaseStrategy):
                 # 检测施肥按钮
                 cv_check, dets_check, _ = self.capture(rect)
                 if cv_check is not None:
+                    logger.debug(f"地块 {i+1} 检测：找到 {len(dets_check)} 个模板")
                     fert_btn = self.cv_detector.detect_single_template(
-                        cv_check, "bth_feiliao_pt", threshold=0.8)
+                        cv_check, "bth_feiliao_pt", threshold=0.6)
                     if fert_btn:
                         # 已播种，记录地块位置
                         lands.append(land)
-                        logger.debug(f"地块 {i+1} 已播种")
+                        logger.info(f"地块 {i+1} 已播种，找到施肥按钮")
                     else:
-                        logger.debug(f"地块 {i+1} 未播种")
+                        logger.info(f"地块 {i+1} 未找到施肥按钮 bth_feiliao_pt")
 
                 # 点击空白处关闭弹窗
                 self.click_blank(rect)
