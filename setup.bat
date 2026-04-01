@@ -28,7 +28,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/4] 安装依赖...
-pip install -r requirements.txt
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 if errorlevel 1 (
     echo [错误] 依赖安装失败
     pause

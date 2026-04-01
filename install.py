@@ -33,8 +33,16 @@ def install_dependencies():
         print(f"  [错误] 找不到 {requirements}")
         return False
 
+    # 使用清华大学镜像源
+    mirror_url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+    print(f"  使用镜像源：{mirror_url}")
+
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", requirements])
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            "-i", mirror_url,
+            "-r", requirements
+        ])
         print("  依赖安装完成")
         return True
     except subprocess.CalledProcessError as e:
