@@ -13,6 +13,7 @@ class PlantStrategy(BaseStrategy):
     def __init__(self, cv_detector: CVDetector):
         super().__init__(cv_detector)
         self.auto_buy_seed = False  # 是否自动购买种子
+        self.auto_fertilize = False  # 是否自动施肥
 
     def _check_and_close_info_page(self, rect: tuple) -> bool:
         """检测并关闭个人信息页面，返回是否成功关闭"""
@@ -737,3 +738,117 @@ class PlantStrategy(BaseStrategy):
         ps.action_executor = self.action_executor
         ps.set_capture_fn(self._capture_fn)
         ps.close_shop(rect)
+
+    def fertilize_all(self, rect: tuple) -> list[str]:
+        """对所有已播种但未施肥的地块施用普通肥料
+
+        流程：点击空地 → 检测施肥按钮 → 点击普通肥料 (bth_feiliao_pt) → 拖拽到所有地块
+        """
+        all_actions = []
+
+        # 截屏找所有地块（检测施肥按钮）
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is None:
+            return all_actions
+
+        # 找所有已播种但未施肥的地块（有施肥按钮但没有肥料）
+        fertilized_lands = []
+        for d in dets:
+            if d.name.startswith("land_") and "empty" not in d.name:
+                fertilized_lands.append(d)
+
+        if not fertilized_lands:
+            logger.info("施肥流程：未找到已播种的地块")
+            return all_actions
+
+        logger.info(f"施肥流程：找到 {len(fertilized_lands)} 块已播种地块")
+
+        # 点击第一块地，打开施肥选项
+        self.click(fertilized_lands[0].x, fertilized_lands[0].y, "点击已播种地块")
+        for _ in range(5):
+            if self.stopped:
+                return all_actions
+            time.sleep(0.05)
+
+        # 检测并关闭个人信息页面
+        self._check_and_close_info_page(rect)
+
+        # 查找普通肥料模板
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is None:
+            return all_actions
+
+        fertilizer_det = None
+        for attempt in range(2):
+            if self.stopped:
+                return all_actions
+            fertilizer_dets = self.cv_detector.detect_single_template(
+                cv_img, "bth_feiliao_pt", threshold=0.8)
+            if fertilizer_dets:
+                fertilizer_det = fertilizer_dets[0]
+                break
+            for _ in range(5):
+                if self.stopped:
+                    return all_actions
+                time.sleep(0.05)
+
+        if not fertilizer_det:
+            logger.warning("施肥流程：未找到普通肥料 (bth_feiliao_pt)")
+            self.click_blank(rect)
+            return all_actions
+
+        logger.info(f"施肥流程：找到普通肥料，开始拖拽施肥 {len(fertilized_lands)} 块地")
+
+        # 按住肥料，拖拽到每块地
+        if not self.action_executor:
+            return all_actions
+
+        fert_abs_x, fert_abs_y = self.action_executor.relative_to_absolute(
+            fertilizer_det.x, fertilizer_det.y)
+        pyautogui.moveTo(fert_abs_x, fert_abs_y, duration=0.05)
+        for _ in range(4):
+            if self.stopped:
+                return all_actions
+            time.sleep(0.05)
+        pyautogui.mouseDown()
+        for _ in range(2):
+            if self.stopped:
+                pyautogui.mouseUp()
+                return all_actions
+            time.sleep(0.05)
+
+        # 依次拖到每块地
+        fertilized_count = 0
+        total_count = len(fertilized_lands)
+        for i, land in enumerate(fertilized_lands, 1):
+            if self.stopped:
+                pyautogui.mouseUp()
+                logger.info("施肥流程：拖拽中途停止")
+                return all_actions
+            abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
+            for _ in range(10):
+                if self.stopped:
+                    pyautogui.mouseUp()
+                    logger.info("施肥流程：拖拽中途停止")
+                    return all_actions
+                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
+            fertilized_count += 1
+            if i % 10 == 0 or i == total_count:
+                logger.info(f"施肥进度：{i}/{total_count} ({i*100//total_count}%)")
+
+        pyautogui.mouseUp()
+        logger.info(f"施肥流程：拖拽施肥完成，共 {fertilized_count} 块")
+        all_actions.append(f"施肥×{fertilized_count}")
+
+        # 关闭施肥弹窗
+        time.sleep(0.5)
+        cv_check, _, _ = self.capture(rect)
+        if cv_check is not None:
+            fert_popup = self.cv_detector.detect_single_template(
+                cv_check, "btn_fertilize_popup", threshold=0.7)
+            if fert_popup:
+                w, h = rect[2], rect[3]
+                self.click(w // 2, int(h * 0.15), "关闭施肥弹窗")
+                time.sleep(0.3)
+
+        return all_actions

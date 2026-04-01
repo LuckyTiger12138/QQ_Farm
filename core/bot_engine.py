@@ -97,6 +97,7 @@ class BotEngine(QObject):
         self._worker: BotWorker | None = None
         self._is_busy = False
         self._planted = False  # 标记是否已播种完成，等待收获
+        self._fertilized = False  # 标记是否已施肥
 
 
         self.scheduler.farm_check_triggered.connect(self._on_farm_check)
@@ -112,11 +113,13 @@ class BotEngine(QObject):
             s._stop_requested = False
         self.task.sell_config = self.config.sell
         self.plant.auto_buy_seed = self.config.features.auto_buy_seed
+        self.plant.auto_fertilize = self.config.features.auto_fertilize
 
     def update_config(self, config: AppConfig):
         self.config = config
         self.task.sell_config = config.sell
         self.plant.auto_buy_seed = config.features.auto_buy_seed
+        self.plant.auto_fertilize = self.config.features.auto_fertilize
 
     def _resolve_crop_name(self) -> str:
         """根据策略决定种植作物"""
@@ -431,9 +434,10 @@ class BotEngine(QObject):
                 # P0 收益：一键收获
                 if not action_desc and features.get("auto_harvest", True):
                     action_desc = self.harvest.try_harvest(detections)
-                    # 收获后重置播种状态，可以重新检测空地
+                    # 收获后重置播种和施肥状态，可以重新检测空地
                     if action_desc:
                         self._planted = False
+                        self._fertilized = False
 
                 # P1 维护：除草/除虫/浇水
                 if not action_desc:
@@ -446,6 +450,15 @@ class BotEngine(QObject):
                         result["actions_done"].extend(pa)
                         action_desc = pa[-1]
                         self._planted = True  # 标记已播种
+                        self._fertilized = False  # 重置施肥状态，可以重新检测施肥
+
+                # P2.5 生产：施肥（在播种完成后执行）
+                if not action_desc and features.get("auto_fertilize", False) and self._planted and not self._fertilized:
+                    fa = self.plant.fertilize_all(rect)
+                    if fa:
+                        result["actions_done"].extend(fa)
+                        action_desc = fa[-1]
+                        self._fertilized = True  # 标记已施肥
 
                 # P3 资源：扩建
                 if not action_desc and features.get("auto_upgrade", True):
