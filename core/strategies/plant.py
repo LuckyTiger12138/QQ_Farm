@@ -781,21 +781,61 @@ class PlantStrategy(BaseStrategy):
 
         Args:
             rect: 窗口区域
-            lands: 已播种的地块列表（由 plant_all 返回），如果为 None 则尝试检测
+            lands: 已播种的地块列表（由 plant_all 传入），如果为 None 则尝试遍历所有地块检测
+
+        Returns:
+            操作列表
         """
         all_actions = []
 
-        # 如果没有传入地块列表，尝试检测
+        # 如果没有传入地块列表，尝试通过遍历检测
         if lands is None:
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 return all_actions
-            # 检测所有非空地的地块（已播种）
-            lands = [d for d in dets if d.name.startswith("land_") and "empty" not in d.name]
 
-        if not lands:
-            logger.info("施肥流程：未找到已播种的地块")
-            return all_actions
+            # 遍历所有土地模板，点击检测是否已播种
+            lands = []
+            land_dets = [d for d in dets if d.name.startswith("land_")]
+            if not land_dets:
+                logger.info("施肥流程：未找到任何地块")
+                return all_actions
+
+            logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，遍历检测已播种地块...")
+
+            # 点击每块地检测是否有施肥按钮
+            for i, land in enumerate(land_dets[:5]):  # 最多检测 5 块
+                self.click(land.x, land.y, f"检测地块 {i+1}/{min(5, len(land_dets))}")
+                for _ in range(5):
+                    if self.stopped:
+                        return all_actions
+                    time.sleep(0.05)
+
+                # 关闭可能弹出的个人信息页面
+                self._check_and_close_info_page(rect)
+
+                # 检测施肥按钮
+                cv_check, dets_check, _ = self.capture(rect)
+                if cv_check is not None:
+                    fert_btn = self.cv_detector.detect_single_template(
+                        cv_check, "bth_feiliao_pt", threshold=0.8)
+                    if fert_btn:
+                        # 已播种，记录地块位置
+                        lands.append(land)
+                        logger.debug(f"地块 {i+1} 已播种")
+                    else:
+                        logger.debug(f"地块 {i+1} 未播种")
+
+                # 点击空白处关闭弹窗
+                self.click_blank(rect)
+                for _ in range(5):
+                    if self.stopped:
+                        return all_actions
+                    time.sleep(0.05)
+
+            if not lands:
+                logger.info("施肥流程：未找到已播种的地块")
+                return all_actions
 
         logger.info(f"施肥流程：对 {len(lands)} 块已播种地块施肥")
 

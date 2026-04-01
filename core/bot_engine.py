@@ -257,8 +257,22 @@ class BotEngine(QObject):
             result["message"] = "窗口未找到"
             return result
 
-        # 直接调用施肥方法
-        fa = self.plant.fertilize_all(rect)
+        # 先检测所有地块（land_开头的模板）
+        cv_img, dets, _ = self._capture_and_detect(rect, prefix="test", save=False)
+        if cv_img is None:
+            result["message"] = "截屏失败"
+            return result
+
+        # 找所有土地（包括空地和已播种）
+        land_dets = [d for d in dets if d.name.startswith("land_")]
+        if not land_dets:
+            result["message"] = "未找到任何地块"
+            return result
+
+        self.log_message.emit(f"检测到 {len(land_dets)} 块土地，开始施肥测试...")
+
+        # 直接调用施肥方法，让它遍历检测已播种地块
+        fa = self.plant.fertilize_all(rect, lands=None)
         if fa:
             result["actions_done"].extend(fa)
             result["success"] = True
