@@ -266,7 +266,11 @@ class BotEngine(QObject):
     # ============================================================
 
     def _prepare_window(self) -> tuple | None:
-        window = self.window_manager.refresh_window_info(self.config.window_title_keyword)
+        window = self.window_manager.refresh_window_info(
+            self.config.window_title_keyword,
+            auto_launch=True,
+            shortcut_path=self.config.planting.game_shortcut_path
+        )
         if not window:
             return None
         self.window_manager.activate_window()
@@ -353,6 +357,17 @@ class BotEngine(QObject):
         for round_num in range(1, 51):
             if self.popup.stopped:
                 logger.info("收到停止/暂停信号，中断当前操作")
+                break
+
+            # 每轮检测窗口是否存在，窗口关闭时快速退出
+            window = self.window_manager.refresh_window_info(
+                self.config.window_title_keyword,
+                auto_launch=False,
+                shortcut_path=""
+            )
+            if not window:
+                logger.warning("游戏窗口已关闭，中断操作")
+                result["message"] = "窗口已关闭"
                 break
 
             cv_image, detections, _ = self._capture_and_detect(rect, save=False)
