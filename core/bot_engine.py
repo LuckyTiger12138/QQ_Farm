@@ -407,6 +407,22 @@ class BotEngine(QObject):
         actions = result.get("actions_done", [])
         if actions:
             self.log_message.emit(f"本轮完成: {', '.join(actions)}")
+            # 记录每个操作的统计信息
+            for action in actions:
+                if "收获" in action:
+                    self.scheduler.record_action("harvest")
+                elif "播种" in action:
+                    self.scheduler.record_action("plant")
+                elif "浇水" in action:
+                    self.scheduler.record_action("water")
+                elif "除草" in action:
+                    self.scheduler.record_action("weed")
+                elif "除虫" in action:
+                    self.scheduler.record_action("bug")
+                elif "出售" in action:
+                    self.scheduler.record_action("sell")
+                elif "施肥" in action:
+                    self.scheduler.record_action("fertilize")
         next_sec = result.get("next_check_seconds", 0)
         if next_sec > 0:
             self.scheduler.set_farm_interval(next_sec)

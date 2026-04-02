@@ -29,7 +29,7 @@ class StatusPanel(QWidget):
 
         self._add_cell(grid, 2, 0, "除草", "weed", "0")
         self._add_cell(grid, 2, 1, "除虫", "bug", "0")
-        self._add_cell(grid, 2, 2, "出售", "sell", "0")
+        self._add_cell(grid, 2, 2, "施肥", "fertilize", "0")
 
         outer.addLayout(grid)
         outer.addStretch()
@@ -65,5 +65,5 @@ class StatusPanel(QWidget):
             f"color: {color}; font-size: 12px; font-weight: bold;")
         self._labels["elapsed"].setText(stats.get("elapsed", "--"))
         self._labels["next_farm"].setText(stats.get("next_farm_check", "--"))
-        for key in ("harvest", "plant", "water", "weed", "bug", "sell"):
+        for key in ("harvest", "plant", "water", "weed", "bug", "fertilize"):
             self._labels[key].setText(str(stats.get(key, 0)))

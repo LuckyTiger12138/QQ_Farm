@@ -38,7 +38,7 @@ class TaskScheduler(QObject):
         self._stats = {
             "harvest": 0, "plant": 0, "water": 0,
             "weed": 0, "bug": 0, "steal": 0,
-            "sell": 0, "total_actions": 0,
+            "sell": 0, "fertilize": 0, "total_actions": 0,
         }
         self._next_farm_check: float = 0
         self._next_friend_check: float = 0
