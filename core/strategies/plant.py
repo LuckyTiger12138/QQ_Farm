@@ -11,6 +11,7 @@ from core.strategies.base import BaseStrategy
 # 作物检测阈值配置（默认 0.8，特殊作物单独配置）
 CROP_THRESHOLDS = {
     "蘑菇": 0.70,  # 降低 10%，更容易检测到
+    "迎春花": 0.65,  # 降低 15%，更容易检测到
 }
 
 
@@ -283,12 +284,9 @@ class PlantStrategy(BaseStrategy):
                 return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, 1)
             return all_actions
 
-        # 第四步：找到目标种子
-        # 为每种作物设置单独的阈值，蘑菇阈值降低 5%（0.75 而不是 0.8）
-        crop_thresholds = {
-            "蘑菇": 0.75,  # 默认 0.8 降低 5%
-        }
-        seed_threshold = crop_thresholds.get(crop_name, 0.8)
+        # 第四步：找到目标种子（使用统一的阈值函数）
+        seed_threshold = get_seed_threshold(crop_name)
+        logger.debug(f"播种流程：使用阈值 {seed_threshold} 检测种子 '{crop_name}'")
 
         seed_det = None
         for attempt in range(2):
