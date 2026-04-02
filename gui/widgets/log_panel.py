@@ -1,7 +1,9 @@
-"""日志面板 - 深色终端风格"""
+"""日志面板 — 浅色终端风格"""
 from PyQt6.QtWidgets import QTextEdit, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QTextCursor
+
+from gui.styles import Colors, ghost_button_style
 
 
 class LogPanel(QWidget):
@@ -16,83 +18,92 @@ class LogPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 工具栏
+        # ── 工具栏 ──
         toolbar = QWidget()
-        toolbar.setStyleSheet("""
-            QWidget { background-color: #f1f5f9; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-            QPushButton {
-                background-color: transparent; border: none; color: #64748b;
-                padding: 4px 10px; font-size: 12px; border-radius: 4px; margin: 2px;
-            }
-            QPushButton:hover { background-color: #e2e8f0; color: #1e293b; }
+        toolbar.setStyleSheet(f"""
+            QWidget {{
+                background-color: rgba(0, 0, 0, 8);
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+            }}
         """)
         toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(8, 4, 8, 4)
+        toolbar_layout.setContentsMargins(12, 6, 12, 6)
         toolbar_layout.setSpacing(4)
         toolbar_layout.addStretch()
 
         self._btn_copy = QPushButton("复制")
         self._btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_copy.setStyleSheet(ghost_button_style())
         self._btn_copy.clicked.connect(self._copy_log)
         toolbar_layout.addWidget(self._btn_copy)
 
         self._btn_select_all = QPushButton("全选")
         self._btn_select_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_select_all.setStyleSheet(ghost_button_style())
         self._btn_select_all.clicked.connect(self._select_all)
         toolbar_layout.addWidget(self._btn_select_all)
 
         self._btn_clear = QPushButton("清空")
         self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_clear.setStyleSheet("""
-            QPushButton { color: #dc2626; }
-            QPushButton:hover { background-color: #fee2e2; color: #b91c1c; }
+        self._btn_clear.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: 1px solid transparent;
+                color: {Colors.DANGER}; padding: 4px 12px;
+                font-size: 12px; border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(220, 38, 38, 15);
+                border-color: rgba(220, 38, 38, 30);
+            }}
         """)
         self._btn_clear.clicked.connect(self._clear_log)
         toolbar_layout.addWidget(self._btn_clear)
 
-        # 日志文本框
+        layout.addWidget(toolbar)
+
+        # ── 日志文本框 ──
         self._log_text = QTextEdit()
         self._log_text.setReadOnly(True)
-        self._log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8fafc; color: #1e293b;
+        self._log_text.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #f8fafc;
+                color: {Colors.TEXT};
                 font-family: 'Cascadia Code', 'Consolas', monospace;
-                font-size: 12px; border: none; padding: 8px;
-                border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;
-            }
+                font-size: 12px;
+                border: none;
+                border-bottom-left-radius: 12px;
+                border-bottom-right-radius: 12px;
+                padding: 12px;
+            }}
         """)
-        layout.addWidget(toolbar)
         layout.addWidget(self._log_text, 1)
 
     def _copy_log(self):
-        """复制所有日志到剪贴板"""
         clipboard = QApplication.clipboard()
         clipboard.setText(self._log_text.toPlainText())
-        # 显示复制成功提示
         original_text = self._btn_copy.text()
         self._btn_copy.setText("已复制!")
         QTimer.singleShot(1500, lambda: self._btn_copy.setText(original_text))
 
     def _select_all(self):
-        """全选日志"""
         self._log_text.selectAll()
 
     def _clear_log(self):
-        """清空日志"""
         self._log_text.clear()
         self.append_log("日志已清空")
 
     def append_log(self, message: str):
         if "ERROR" in message or "✗" in message:
-            color = "#dc2626"
+            color = Colors.DANGER
         elif "WARNING" in message:
-            color = "#d97706"
+            color = Colors.WARNING
         elif "✓" in message:
-            color = "#16a34a"
+            color = Colors.SUCCESS
         elif "INFO" in message:
-            color = "#2563eb"
+            color = Colors.PRIMARY
         else:
-            color = "#64748b"
+            color = Colors.TEXT_SECONDARY
 
         self._log_text.append(f'<span style="color:{color}">{message}</span>')
 

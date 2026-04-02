@@ -1,4 +1,4 @@
-"""出售设置面板 - 独立 Tab 页"""
+"""出售设置面板 — 暗色毛玻璃风格"""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QCheckBox, QComboBox, QGridLayout, QScrollArea,
@@ -7,6 +7,7 @@ from PyQt6.QtCore import pyqtSignal
 
 from models.config import AppConfig, SellMode
 from models.game_data import CROPS
+from gui.styles import Colors
 
 
 class SellPanel(QWidget):
@@ -23,38 +24,49 @@ class SellPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
 
-        # 出售模式（顶部）
+        # ── 出售模式 ──
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("出售模式:"))
+        mode_label = QLabel("出售模式:")
+        mode_label.setStyleSheet("background: transparent; border: none;")
+        mode_row.addWidget(mode_label)
         self._sell_mode_combo = QComboBox()
         self._sell_mode_combo.addItem("批量全部出售", SellMode.BATCH_ALL.value)
         self._sell_mode_combo.addItem("选择性出售", SellMode.SELECTIVE.value)
         self._sell_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self._sell_mode_combo, 1)
+        mode_row.addStretch()
         layout.addLayout(mode_row)
 
-        # 全选
+        # ── 全选 ──
         self._cb_select_all = QCheckBox("全选")
         self._cb_select_all.toggled.connect(self._on_select_all)
         layout.addWidget(self._cb_select_all)
 
-        # 作物勾选列表（可滚动）
+        # ── 作物勾选列表（可滚动） ──
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 12px;
+            }}
+        """)
+
         crops_container = QWidget()
+        crops_container.setStyleSheet("background: transparent; border: none;")
         grid = QGridLayout(crops_container)
-        grid.setSpacing(6)
-        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(8)
+        grid.setContentsMargins(12, 10, 12, 10)
 
         self._crop_cbs: dict[str, QCheckBox] = {}
         for i, (name, _, req_level, _, _, _) in enumerate(CROPS):
             cb = QCheckBox(f"{name} (Lv{req_level})")
             self._crop_cbs[name] = cb
-            grid.addWidget(cb, i // 3, i % 3)
+            grid.addWidget(cb, i // 4, i % 4)
 
         scroll.setWidget(crops_container)
         self._scroll = scroll

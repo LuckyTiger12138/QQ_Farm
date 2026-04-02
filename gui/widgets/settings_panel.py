@@ -1,15 +1,16 @@
-"""设置面板 - 紧凑布局，实时生效"""
+"""设置面板 — 暗色毛玻璃风格，实时生效"""
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QCheckBox, QComboBox,
     QGroupBox, QFormLayout, QGridLayout, QPushButton,
-    QFileDialog,
+    QFileDialog, QScrollArea,
 )
 from PyQt6.QtCore import pyqtSignal
 
 from models.config import AppConfig, PlantMode
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
+from gui.styles import Colors
 
 
 class SettingsPanel(QWidget):
@@ -25,14 +26,49 @@ class SettingsPanel(QWidget):
         self._loading = False
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        # 使用 ScrollArea 包裹以支持小窗口
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent; border: none;
+                border-radius: 12px;
+            }}
+        """)
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent; border: none;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
+        group_style = f"""
+            QGroupBox {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 12px;
+                margin-top: 20px;
+                padding: 20px 14px 14px 14px;
+                font-weight: bold;
+                font-size: 13px;
+                color: {Colors.PRIMARY};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 14px;
+                top: 4px;
+                padding: 0 6px;
+                color: {Colors.PRIMARY};
+                background-color: {Colors.CARD_BG};
+            }}
+        """
 
         # ===== 种植设置 =====
         plant_group = QGroupBox("种植")
+        plant_group.setStyleSheet(group_style)
         pf = QFormLayout()
-        pf.setSpacing(5)
+        pf.setSpacing(6)
 
         row_level = QHBoxLayout()
         self._player_level = QSpinBox()
@@ -48,7 +84,9 @@ class SettingsPanel(QWidget):
         pf.addRow(row_level)
 
         self._auto_crop_label = QLabel()
-        self._auto_crop_label.setStyleSheet("color: #16a34a; font-weight: bold; font-size: 12px;")
+        self._auto_crop_label.setStyleSheet(
+            f"color: {Colors.SUCCESS}; font-weight: bold; font-size: 12px; background: transparent; border: none;"
+        )
         pf.addRow("推荐:", self._auto_crop_label)
 
         self._crop_combo = QComboBox()
@@ -63,9 +101,10 @@ class SettingsPanel(QWidget):
 
         # ===== 功能开关 =====
         feat_group = QGroupBox("功能")
+        feat_group.setStyleSheet(group_style)
         grid = QGridLayout()
-        grid.setSpacing(6)
-        grid.setContentsMargins(8, 4, 8, 4)
+        grid.setSpacing(8)
+        grid.setContentsMargins(12, 8, 12, 8)
         self._cb_harvest = QCheckBox("收获")
         self._cb_plant = QCheckBox("播种")
         self._cb_fertilize = QCheckBox("施肥")
@@ -89,18 +128,31 @@ class SettingsPanel(QWidget):
 
         # ===== 其他 =====
         misc_group = QGroupBox("其他")
+        misc_group.setStyleSheet(group_style)
         mf = QFormLayout()
-        mf.setSpacing(5)
+        mf.setSpacing(6)
         self._window_keyword = QLineEdit()
         mf.addRow("窗口关键词:", self._window_keyword)
 
-        # 游戏快捷方式路径
         row_shortcut = QHBoxLayout()
         self._game_shortcut = QLineEdit()
         self._game_shortcut.setPlaceholderText("选择 QQ 农场小程序快捷方式...")
         row_shortcut.addWidget(self._game_shortcut)
         self._btn_browse = QPushButton("浏览...")
         self._btn_browse.setFixedWidth(70)
+        self._btn_browse.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(0, 0, 0, 8);
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                color: {Colors.TEXT};
+                padding: 5px 10px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(0, 0, 0, 15);
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+        """)
         row_shortcut.addWidget(self._btn_browse)
         mf.addRow("游戏路径:", row_shortcut)
 
@@ -125,12 +177,15 @@ class SettingsPanel(QWidget):
 
         layout.addStretch()
 
+        scroll.setWidget(container)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
     def _on_browse_shortcut(self):
-        """选择游戏快捷方式文件"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择游戏快捷方式",
-            "",
+            self, "选择游戏快捷方式", "",
             "快捷方式 (*.lnk);;所有文件 (*.*)"
         )
         if file_path:
