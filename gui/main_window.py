@@ -13,7 +13,6 @@ from PIL import Image
 from models.config import AppConfig
 from core.bot_engine import BotEngine
 from gui.styles import Colors, GLASS_STYLESHEET, glass_button_style
-from gui.widgets.title_bar import TitleBar
 from gui.widgets.sidebar import Sidebar
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.status_panel import StatusPanel
@@ -48,10 +47,6 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        # ── 标题栏 ──
-        self._title_bar = TitleBar(self)
-        root.addWidget(self._title_bar)
 
         # ── 主体：侧边栏 + 内容区 ──
         body = QHBoxLayout()
@@ -244,12 +239,6 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        try:
-            from gui.acrylic import enable_blur
-            hwnd = int(self.winId())
-            enable_blur(hwnd)
-        except Exception:
-            pass
 
     def closeEvent(self, event):
         self.engine.stop()
