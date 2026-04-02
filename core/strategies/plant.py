@@ -11,7 +11,7 @@ from core.strategies.base import BaseStrategy
 # 作物检测阈值配置（默认 0.8，特殊作物单独配置）
 CROP_THRESHOLDS = {
     "蘑菇": 0.70,  # 降低 10%，更容易检测到
-    "迎春花": 0.65,  # 降低 15%，更容易检测到
+    "迎春花": 0.70,  # 降低 10%，更容易检测到
 }
 
 
