@@ -8,8 +8,140 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
-from models.config import AppConfig, PlantMode
+from models.config import AppConfig, PlantMode, SellMode
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
+from gui.styles import Colors
+
+
+class SellStrategyWidget(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loading = True
+        self._crop_cbs: dict[str, QCheckBox] = {}
+        self._init_ui()
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(8)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+
+        mode_label = QLabel("出售模式")
+        mode_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none; min-width: 80px;")
+        mode_row.addWidget(mode_label)
+
+        self._sell_mode_combo = QComboBox()
+        self._sell_mode_combo.addItem("批量全部出售", SellMode.BATCH_ALL.value)
+        self._sell_mode_combo.addItem("选择性出售", SellMode.SELECTIVE.value)
+        self._sell_mode_combo.setFixedWidth(140)
+        mode_row.addWidget(self._sell_mode_combo)
+        mode_row.addStretch()
+        main_layout.addLayout(mode_row)
+
+        self._sell_options = QFrame()
+        self._sell_options.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(0, 0, 0, 4);
+                border-radius: 10px;
+            }}
+        """)
+        options_layout = QVBoxLayout(self._sell_options)
+        options_layout.setContentsMargins(10, 10, 10, 10)
+        options_layout.setSpacing(4)
+
+        select_all_row = QHBoxLayout()
+        self._cb_select_all = QCheckBox("全选")
+        self._cb_select_all.setStyleSheet(f"""
+            QCheckBox {{
+                color: {Colors.PRIMARY};
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QCheckBox::indicator {{
+                width: 16px; height: 16px;
+                border: 1.5px solid {Colors.PRIMARY};
+                border-radius: 4px;
+                background: {Colors.INPUT_BG};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {Colors.PRIMARY};
+                border-color: {Colors.PRIMARY};
+                image: url(gui/icons/check.svg);
+            }}
+        """)
+        self._cb_select_all.toggled.connect(self._on_select_all)
+        select_all_row.addWidget(self._cb_select_all)
+        select_all_row.addStretch()
+        options_layout.addLayout(select_all_row)
+
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        for i, (name, _, req_level, _, _, _) in enumerate(CROPS):
+            cb = QCheckBox(f"{name}")
+            cb.setToolTip(f"需要等级: Lv{req_level}")
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {Colors.TEXT};
+                    font-size: 11px;
+                    spacing: 4px;
+                }}
+                QCheckBox::indicator {{
+                    width: 14px; height: 14px;
+                    border: 1.5px solid rgba(0, 0, 0, 30);
+                    border-radius: 3px;
+                    background: {Colors.INPUT_BG};
+                }}
+                QCheckBox::indicator:checked {{
+                    background: {Colors.PRIMARY};
+                    border-color: {Colors.PRIMARY};
+                    image: url(gui/icons/check.svg);
+                }}
+            """)
+            self._crop_cbs[name] = cb
+            grid.addWidget(cb, i // 5, i % 5)
+        options_layout.addLayout(grid)
+
+        main_layout.addWidget(self._sell_options)
+
+        self._sell_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._on_mode_changed(0)
+        self._loading = False
+
+    def _on_mode_changed(self, index: int):
+        is_selective = self._sell_mode_combo.itemData(index) == SellMode.SELECTIVE.value
+        self._sell_options.setVisible(is_selective)
+
+    def _on_select_all(self, checked: bool):
+        self._loading = True
+        for cb in self._crop_cbs.values():
+            cb.setChecked(checked)
+        self._loading = False
+
+    def get_mode(self) -> SellMode:
+        return SellMode(self._sell_mode_combo.currentData())
+
+    def get_sell_crops(self) -> list[str]:
+        return [name for name, cb in self._crop_cbs.items() if cb.isChecked()]
+
+    def set_mode(self, mode: SellMode):
+        idx = 0 if mode == SellMode.BATCH_ALL else 1
+        self._sell_mode_combo.setCurrentIndex(idx)
+
+    def set_sell_crops(self, crops: list[str]):
+        self._loading = True
+        for name, cb in self._crop_cbs.items():
+            cb.setChecked(name in crops)
+        self._loading = False
+
+    def connect_mode_changed(self, callback):
+        self._sell_mode_combo.currentIndexChanged.connect(callback)
+
+    def connect_crops_changed(self, callback):
+        for cb in self._crop_cbs.values():
+            cb.toggled.connect(callback)
+        self._cb_select_all.toggled.connect(callback)
 from gui.styles import Colors
 
 
@@ -224,6 +356,11 @@ class SettingsPanel(QWidget):
         feat_card = SettingCard("⚙️", "功能开关", "选择需要自动执行的操作", self._toggle_grid)
         layout.addWidget(feat_card)
 
+        # ===== 出售策略卡片 =====
+        self._sell_widget = SellStrategyWidget()
+        sell_card = SettingCard("💰", "出售策略", "出售模式与作物选择", self._sell_widget)
+        layout.addWidget(sell_card)
+
         # ===== 其他设置卡片 =====
         misc_widget = QWidget()
         misc_layout = QVBoxLayout(misc_widget)
@@ -342,6 +479,8 @@ class SettingsPanel(QWidget):
         self._friend_interval.valueChanged.connect(self._auto_save)
         for cb in self._toggle_grid._checkboxes.values():
             cb.toggled.connect(self._auto_save)
+        self._sell_widget.connect_mode_changed(self._auto_save)
+        self._sell_widget.connect_crops_changed(self._auto_save)
 
     def _auto_save(self):
         if self._loading:
@@ -368,6 +507,8 @@ class SettingsPanel(QWidget):
         c.features.auto_help = self._toggle_grid.get_checkbox("帮忙").isChecked()
         c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
         c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
+        c.sell.mode = self._sell_widget.get_mode()
+        c.sell.sell_crops = self._sell_widget.get_sell_crops()
         c.save()
         self.config_changed.emit(c)
 
@@ -430,3 +571,5 @@ class SettingsPanel(QWidget):
         self._toggle_grid.get_checkbox("帮忙").setChecked(c.features.auto_help)
         self._toggle_grid.get_checkbox("任务").setChecked(c.features.auto_task)
         self._toggle_grid.get_checkbox("扩建").setChecked(c.features.auto_upgrade)
+        self._sell_widget.set_mode(c.sell.mode)
+        self._sell_widget.set_sell_crops(c.sell.sell_crops)

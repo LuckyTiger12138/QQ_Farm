@@ -19,7 +19,6 @@ from gui.widgets.sidebar import Sidebar
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.status_panel import StatusPanel
 from gui.widgets.settings_panel import SettingsPanel
-from gui.widgets.sell_panel import SellPanel
 from gui.widgets.template_panel import TemplatePanel
 from utils.logger import get_log_signal
 
@@ -78,15 +77,11 @@ class MainWindow(QMainWindow):
         self._settings_panel = SettingsPanel(self.config)
         self._stack.addWidget(self._settings_panel)
 
-        # 页面 2: 出售页
-        self._sell_panel = SellPanel(self.config)
-        self._stack.addWidget(self._sell_panel)
-
-        # 页面 3: 模板管理页
+        # 页面 2: 模板管理页
         self._template_panel = TemplatePanel(self.engine.cv_detector)
         self._stack.addWidget(self._template_panel)
 
-        # 页面 4: 日志页
+        # 页面 3: 日志页
         self._log_panel = LogPanel()
         self._stack.addWidget(self._log_panel)
 
@@ -184,12 +179,11 @@ class MainWindow(QMainWindow):
         self.engine.stats_updated.connect(self._status_panel.update_stats)
         get_log_signal().new_log.connect(self._log_panel.append_log)
         self._settings_panel.config_changed.connect(self._on_config_changed)
-        self._sell_panel.config_changed.connect(self._on_config_changed)
 
     # ── 导航切换 ────────────────────────────────────────────
 
     def _on_navigation(self, key: str):
-        page_map = {"status": 0, "settings": 1, "sell": 2, "template": 3, "logs": 4}
+        page_map = {"status": 0, "settings": 1, "template": 2, "logs": 3}
         idx = page_map.get(key, 0)
         self._stack.setCurrentIndex(idx)
 
