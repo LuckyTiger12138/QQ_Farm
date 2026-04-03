@@ -27,7 +27,15 @@ def main():
     window = MainWindow(config)
     window.show()
 
-    sys.exit(app.exec())
+    # 注册全局热键 (F9 暂停/恢复, F10 停止)
+    window.register_hotkeys()
+
+    ret = app.exec()
+
+    # 清理热键
+    window.unregister_hotkeys()
+
+    sys.exit(ret)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QImage
 from PIL import Image
 
+from loguru import logger
+
 from models.config import AppConfig
 from core.bot_engine import BotEngine
 from gui.styles import Colors, GLASS_STYLESHEET, glass_button_style
@@ -18,6 +20,7 @@ from gui.widgets.log_panel import LogPanel
 from gui.widgets.status_panel import StatusPanel
 from gui.widgets.settings_panel import SettingsPanel
 from gui.widgets.sell_panel import SellPanel
+from gui.widgets.template_panel import TemplatePanel
 from utils.logger import get_log_signal
 
 
@@ -79,7 +82,11 @@ class MainWindow(QMainWindow):
         self._sell_panel = SellPanel(self.config)
         self._stack.addWidget(self._sell_panel)
 
-        # 页面 3: 日志页
+        # 页面 3: 模板管理页
+        self._template_panel = TemplatePanel(self.engine.cv_detector)
+        self._stack.addWidget(self._template_panel)
+
+        # 页面 4: 日志页
         self._log_panel = LogPanel()
         self._stack.addWidget(self._log_panel)
 
@@ -182,7 +189,7 @@ class MainWindow(QMainWindow):
     # ── 导航切换 ────────────────────────────────────────────
 
     def _on_navigation(self, key: str):
-        page_map = {"status": 0, "settings": 1, "sell": 2, "logs": 3}
+        page_map = {"status": 0, "settings": 1, "sell": 2, "template": 3, "logs": 4}
         idx = page_map.get(key, 0)
         self._stack.setCurrentIndex(idx)
 
@@ -241,5 +248,52 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
 
     def closeEvent(self, event):
+        self.unregister_hotkeys()
         self.engine.stop()
         super().closeEvent(event)
+
+    # ── 全局热键 ──────────────────────────────────────────
+
+    def register_hotkeys(self):
+        """注册 F9/F10 全局热键"""
+        try:
+            import keyboard
+            keyboard.on_press_key("f9", lambda _: self._on_hotkey_pause())
+            keyboard.on_press_key("f10", lambda _: self._on_hotkey_stop())
+            logger.info("全局热键已注册: F9=暂停/恢复, F10=停止")
+        except Exception as e:
+            logger.warning(f"全局热键注册失败（可能需要管理员权限）: {e}")
+
+    def unregister_hotkeys(self):
+        """注销全局热键"""
+        try:
+            import keyboard
+            keyboard.unhook_all()
+        except Exception:
+            pass
+
+    def _on_hotkey_pause(self):
+        """F9: 暂停/恢复"""
+        if self._btn_start.isEnabled():
+            # Bot 未运行，忽略
+            return
+        if self._btn_pause.text() == "暂停":
+            self.engine.pause()
+            self._btn_pause.setText("恢复")
+            self.engine.log_message.emit("[热键] F9 已暂停")
+        else:
+            self.engine.resume()
+            self._btn_pause.setText("暂停")
+            self.engine.log_message.emit("[热键] F9 已恢复")
+
+    def _on_hotkey_stop(self):
+        """F10: 停止"""
+        if self._btn_start.isEnabled():
+            # Bot 未运行，忽略
+            return
+        self.engine.stop()
+        self._btn_start.setEnabled(True)
+        self._btn_pause.setEnabled(False)
+        self._btn_stop.setEnabled(False)
+        self._btn_pause.setText("暂停")
+        self.engine.log_message.emit("[热键] F10 已停止")

@@ -1,4 +1,5 @@
 """OpenCV 视觉检测引擎 - 模板匹配识别游戏UI元素"""
+import json
 import os
 import cv2
 import numpy as np
@@ -50,17 +51,73 @@ class CVDetector:
         self._templates_dir = templates_dir
         self._templates: dict[str, list[dict]] = {}  # category -> [{name, image, mask}]
         self._loaded = False
+        self._disabled_names: set[str] = set()
+        self._disabled_file = os.path.join(templates_dir, "disabled.json")
+        self._load_disabled()
+
+    def _load_disabled(self):
+        """从 disabled.json 加载已禁用的模板列表"""
+        if os.path.exists(self._disabled_file):
+            try:
+                with open(self._disabled_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._disabled_names = set(data.get("disabled", []))
+            except Exception as e:
+                logger.warning(f"读取禁用模板配置失败: {e}")
+                self._disabled_names = set()
+
+    def _save_disabled(self):
+        """保存禁用模板列表到 disabled.json"""
+        try:
+            os.makedirs(os.path.dirname(self._disabled_file), exist_ok=True)
+            with open(self._disabled_file, "w", encoding="utf-8") as f:
+                json.dump({"disabled": sorted(self._disabled_names)}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存禁用模板配置失败: {e}")
+
+    def is_template_disabled(self, name: str) -> bool:
+        return name in self._disabled_names
+
+    def set_template_enabled(self, name: str, enabled: bool):
+        """启用或禁用指定模板"""
+        if enabled:
+            self._disabled_names.discard(name)
+        else:
+            self._disabled_names.add(name)
+        self._save_disabled()
+
+    def get_disabled_templates(self) -> set[str]:
+        return set(self._disabled_names)
+
+    def get_all_template_names(self) -> list[str]:
+        """返回 templates/ 目录下所有模板文件名（不含扩展名）"""
+        names = []
+        if not os.path.exists(self._templates_dir):
+            return names
+        for filename in os.listdir(self._templates_dir):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                names.append(os.path.splitext(filename)[0])
+        return sorted(names)
 
     def load_templates(self):
         """加载所有模板图片"""
+        self._templates = {}
         if not os.path.exists(self._templates_dir):
             os.makedirs(self._templates_dir, exist_ok=True)
             logger.warning(f"模板目录 {self._templates_dir} 为空，请先采集模板")
             return
 
         count = 0
+        skipped = 0
         for filename in os.listdir(self._templates_dir):
             if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                continue
+
+            name = os.path.splitext(filename)[0]
+
+            # 跳过被禁用的模板
+            if name in self._disabled_names:
+                skipped += 1
                 continue
 
             filepath = os.path.join(self._templates_dir, filename)
@@ -72,7 +129,6 @@ class CVDetector:
                 logger.warning(f"无法读取模板: {filename}")
                 continue
 
-            name = os.path.splitext(filename)[0]
             # 从文件名前缀判断类别: btn_harvest.png -> button
             prefix = name.split("_")[0]
             category = TEMPLATE_CATEGORIES.get(prefix, "unknown")
@@ -95,7 +151,10 @@ class CVDetector:
             count += 1
 
         self._loaded = True
-        logger.info(f"已加载 {count} 个模板，分 {len(self._templates)} 个类别")
+        msg = f"已加载 {count} 个模板，分 {len(self._templates)} 个类别"
+        if skipped:
+            msg += f"（跳过 {skipped} 个已禁用）"
+        logger.info(msg)
 
     def detect_all(self, screenshot: np.ndarray,
                    threshold: float = 0.8) -> list[DetectResult]:

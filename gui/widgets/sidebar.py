@@ -79,6 +79,7 @@ class Sidebar(QWidget):
         ("gui/icons/nav_status.svg", "状态总览", "status"),
         ("gui/icons/nav_settings.svg", "参数设置", "settings"),
         ("gui/icons/nav_sell.svg", "出售管理", "sell"),
+        ("gui/icons/nav_template.svg", "模板管理", "template"),
         ("gui/icons/nav_logs.svg", "运行日志", "logs"),
     ]
 
