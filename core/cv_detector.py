@@ -47,13 +47,28 @@ TEMPLATE_CATEGORIES = {
 class CVDetector:
     """基于OpenCV模板匹配的游戏UI检测器"""
 
+    # 类别默认阈值
+    CATEGORY_DEFAULTS: dict[str, float] = {
+        "button": 0.8,
+        "status_icon": 0.8,
+        "crop": 0.8,
+        "ui_element": 0.8,
+        "land": 0.7,
+        "seed": 0.8,
+        "shop": 0.6,
+        "unknown": 0.8,
+    }
+
     def __init__(self, templates_dir: str = "templates"):
         self._templates_dir = templates_dir
         self._templates: dict[str, list[dict]] = {}  # category -> [{name, image, mask}]
         self._loaded = False
         self._disabled_names: set[str] = set()
         self._disabled_file = os.path.join(templates_dir, "disabled.json")
+        self._thresholds: dict[str, float] = {}
+        self._thresholds_file = os.path.join(templates_dir, "thresholds.json")
         self._load_disabled()
+        self._load_thresholds()
 
     def _load_disabled(self):
         """从 disabled.json 加载已禁用的模板列表"""
@@ -88,6 +103,51 @@ class CVDetector:
 
     def get_disabled_templates(self) -> set[str]:
         return set(self._disabled_names)
+
+    # ── 单模板阈值 ─────────────────────────────────────────
+
+    def _load_thresholds(self):
+        """从 thresholds.json 加载单模板阈值"""
+        if os.path.exists(self._thresholds_file):
+            try:
+                with open(self._thresholds_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._thresholds = {k: float(v) for k, v in data.get("thresholds", {}).items()}
+            except Exception as e:
+                logger.warning(f"读取模板阈值配置失败: {e}")
+                self._thresholds = {}
+
+    def _save_thresholds(self):
+        """保存单模板阈值到 thresholds.json"""
+        try:
+            os.makedirs(os.path.dirname(self._thresholds_file), exist_ok=True)
+            with open(self._thresholds_file, "w", encoding="utf-8") as f:
+                json.dump({"thresholds": self._thresholds}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存模板阈值配置失败: {e}")
+
+    def get_template_threshold(self, name: str) -> float:
+        """获取模板阈值：单模板 > 类别默认 > 全局默认 0.8"""
+        if name in self._thresholds:
+            return self._thresholds[name]
+        prefix = name.split("_")[0]
+        cat = TEMPLATE_CATEGORIES.get(prefix, "unknown")
+        return self.CATEGORY_DEFAULTS.get(cat, 0.8)
+
+    def set_template_threshold(self, name: str, value: float):
+        """设置单模板阈值并持久化"""
+        value = max(0.1, min(1.0, round(value, 2)))
+        self._thresholds[name] = value
+        self._save_thresholds()
+
+    def get_all_thresholds(self) -> dict[str, float]:
+        return dict(self._thresholds)
+
+    def reset_template_threshold(self, name: str):
+        """移除单模板自定义阈值，恢复为类别默认"""
+        if name in self._thresholds:
+            del self._thresholds[name]
+            self._save_thresholds()
 
     def get_all_template_names(self) -> list[str]:
         """返回 templates/ 目录下所有模板文件名（不含扩展名）"""
