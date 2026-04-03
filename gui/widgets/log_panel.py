@@ -1,9 +1,16 @@
 """日志面板 — 现代终端风格"""
-from PyQt6.QtWidgets import QTextEdit, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QApplication, QLabel, QFrame, QScrollArea
+from PyQt6.QtWidgets import QTextEdit, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QApplication, QLabel, QFrame
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QTextCursor
+from dataclasses import dataclass
 
 from gui.styles import Colors
+
+
+@dataclass
+class LogEntry:
+    message: str
+    color: str
+    level: str
 
 
 class LogBadge(QLabel):
@@ -82,6 +89,7 @@ class LogPanel(QWidget):
         super().__init__(parent)
         self._counts = {"INFO": 0, "WARNING": 0, "ERROR": 0, "OTHER": 0}
         self._active_filters = {"INFO", "WARNING", "ERROR", "OTHER"}
+        self._entries: list[LogEntry] = []
         self._init_ui()
 
     def _init_ui(self):
@@ -89,7 +97,6 @@ class LogPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ── 顶部标题栏 ──
         header = QFrame()
         header.setStyleSheet(f"""
             QFrame {{
@@ -102,7 +109,6 @@ class LogPanel(QWidget):
         header_layout.setContentsMargins(16, 14, 16, 10)
         header_layout.setSpacing(10)
 
-        # 标题行
         title_row = QHBoxLayout()
         title_row.setSpacing(10)
 
@@ -117,7 +123,6 @@ class LogPanel(QWidget):
         title_row.addWidget(self._count_badge)
         title_row.addStretch()
 
-        # 操作按钮
         self._btn_copy = QPushButton("复制")
         self._btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_copy.setStyleSheet(f"""
@@ -159,7 +164,6 @@ class LogPanel(QWidget):
 
         header_layout.addLayout(title_row)
 
-        # 过滤按钮行
         filter_row = QHBoxLayout()
         filter_row.setSpacing(6)
 
@@ -193,7 +197,6 @@ class LogPanel(QWidget):
 
         outer.addWidget(header)
 
-        # ── 日志文本区 ──
         self._log_text = QTextEdit()
         self._log_text.setReadOnly(True)
         self._log_text.setStyleSheet(f"""
@@ -251,6 +254,17 @@ class LogPanel(QWidget):
             all_active = all(f in self._active_filters for f in ("INFO", "WARNING", "ERROR"))
             self._filter_all.set_active(all_active)
 
+        self._rebuild_display()
+
+    def _rebuild_display(self):
+        self._log_text.clear()
+        was_at_bottom = self._log_text.verticalScrollBar().value() == self._log_text.verticalScrollBar().maximum()
+        for entry in self._entries:
+            if entry.level in self._active_filters:
+                self._log_text.append(f'<span style="color:{entry.color}">{entry.message}</span>')
+        if was_at_bottom:
+            self._log_text.verticalScrollBar().setValue(self._log_text.verticalScrollBar().maximum())
+
     def _copy_log(self):
         clipboard = QApplication.clipboard()
         clipboard.setText(self._log_text.toPlainText())
@@ -260,6 +274,7 @@ class LogPanel(QWidget):
 
     def _clear_log(self):
         self._log_text.clear()
+        self._entries.clear()
         self._counts = {"INFO": 0, "WARNING": 0, "ERROR": 0, "OTHER": 0}
         self._update_badge()
         self.append_log("日志已清空")
@@ -268,34 +283,30 @@ class LogPanel(QWidget):
         total = sum(self._counts.values())
         self._count_badge.setText(f"{total} 条")
 
-    def append_log(self, message: str):
+    def _classify(self, message: str) -> tuple[str, str]:
         if "ERROR" in message or "✗" in message:
-            color = "#f38ba8"
-            level = "ERROR"
+            return "#f38ba8", "ERROR"
         elif "WARNING" in message or "⚠" in message:
-            color = "#fab387"
-            level = "WARNING"
+            return "#fab387", "WARNING"
         elif "✓" in message or "成功" in message:
-            color = "#a6e3a1"
-            level = "OTHER"
+            return "#a6e3a1", "OTHER"
         elif "INFO" in message:
-            color = "#89b4fa"
-            level = "INFO"
+            return "#89b4fa", "INFO"
         else:
-            color = "#a6adc8"
-            level = "OTHER"
+            return "#a6adc8", "OTHER"
 
+    def append_log(self, message: str):
+        color, level = self._classify(message)
         self._counts[level] = self._counts.get(level, 0) + 1
         self._update_badge()
 
-        if level in self._active_filters or (level == "OTHER" and "OTHER" in self._active_filters):
+        self._entries.append(LogEntry(message=message, color=color, level=level))
+
+        if len(self._entries) > self.MAX_LINES:
+            self._entries = self._entries[-self.MAX_LINES:]
+
+        if level in self._active_filters:
+            was_at_bottom = self._log_text.verticalScrollBar().value() == self._log_text.verticalScrollBar().maximum()
             self._log_text.append(f'<span style="color:{color}">{message}</span>')
-
-        if self._log_text.document().blockCount() > self.MAX_LINES:
-            cursor = self._log_text.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-            cursor.movePosition(QTextCursor.MoveOperation.Down,
-                                QTextCursor.MoveMode.KeepAnchor, 50)
-            cursor.removeSelectedText()
-
-        self._log_text.verticalScrollBar().setValue(self._log_text.verticalScrollBar().maximum())
+            if was_at_bottom:
+                self._log_text.verticalScrollBar().setValue(self._log_text.verticalScrollBar().maximum())

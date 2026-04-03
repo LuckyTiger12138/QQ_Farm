@@ -106,6 +106,8 @@ class BotEngine(QObject):
         self.scheduler.friend_check_triggered.connect(self._on_friend_check)
         self.scheduler.state_changed.connect(self.state_changed.emit)
         self.scheduler.stats_updated.connect(self.stats_updated.emit)
+        self.scheduler.window_lost.connect(self._on_window_lost)
+        self.scheduler.set_window_check_fn(self._is_window_alive)
 
     def _init_strategies(self):
         """初始化所有策略的依赖"""
@@ -430,6 +432,42 @@ class BotEngine(QObject):
     def _on_task_error(self, error_msg: str):
         self._is_busy = False
         self.log_message.emit(f"操作异常: {error_msg}")
+
+    def _is_window_alive(self) -> bool:
+        """检查游戏窗口是否存在（供调度器窗口监控调用）"""
+        window = self.window_manager.find_window(
+            self.config.window_title_keyword,
+            auto_launch=False,
+            shortcut_path=""
+        )
+        return window is not None
+
+    def _on_window_lost(self):
+        """窗口监控检测到游戏窗口关闭，尝试自动重启"""
+        logger.warning("窗口监控：检测到游戏窗口关闭，尝试自动重启...")
+        self.log_message.emit("⚠ 检测到游戏窗口关闭，正在尝试自动重启...")
+        window = self.window_manager.find_window(
+            self.config.window_title_keyword,
+            auto_launch=True,
+            shortcut_path=self.config.planting.game_shortcut_path
+        )
+        if not window:
+            logger.error("窗口监控：自动重启游戏失败")
+            self.log_message.emit("❌ 自动重启游戏失败，请手动打开 QQ 农场")
+            return
+        # 重启成功，调整窗口并更新
+        w, h = self.config.planting.window_width, self.config.planting.window_height
+        if w > 0 and h > 0:
+            time.sleep(1)
+            self.window_manager.resize_window(w, h)
+            time.sleep(0.5)
+            window = self.window_manager._cached_window
+        if window:
+            rect = (window.left, window.top, window.width, window.height)
+            if self.action_executor:
+                self.action_executor.update_window_rect(rect)
+            self.log_message.emit(f"✅ 游戏已自动重启，窗口: {window.title}")
+            logger.info(f"窗口监控：游戏已自动重启，窗口: {window.title}")
 
     # ============================================================
     # 截屏 + 检测

@@ -24,14 +24,19 @@ class TaskScheduler(QObject):
     farm_check_triggered = pyqtSignal()  # 农场检查触发
     friend_check_triggered = pyqtSignal()  # 好友检查触发
     stats_updated = pyqtSignal(dict)  # 统计数据更新
+    window_lost = pyqtSignal()  # 游戏窗口丢失信号
 
     def __init__(self):
         super().__init__()
         self._state = BotState.IDLE
         self._farm_timer = QTimer(self)
         self._friend_timer = QTimer(self)
+        self._window_monitor_timer = QTimer(self)
         self._farm_timer.timeout.connect(self._on_farm_timer)
         self._friend_timer.timeout.connect(self._on_friend_timer)
+        self._window_monitor_timer.timeout.connect(self._on_window_monitor)
+        self._window_monitor_interval_ms = 5000  # 每5秒检查一次
+        self._window_check_fn = None  # 外部注入的窗口检查函数
 
         # 统计
         self._start_time: float = 0
@@ -67,6 +72,10 @@ class TaskScheduler(QObject):
 
         # 首次立即触发
         QTimer.singleShot(500, self._on_farm_timer)
+
+        # 启动窗口监控
+        self._window_monitor_timer.start(self._window_monitor_interval_ms)
+
         logger.info(f"调度器已启动 (农场:{farm_interval_ms//1000}s, 好友:{friend_interval_ms//1000}s)")
 
     def stop(self):
@@ -81,6 +90,7 @@ class TaskScheduler(QObject):
         if self._state == BotState.RUNNING:
             self._farm_timer.stop()
             self._friend_timer.stop()
+            self._window_monitor_timer.stop()
             self._set_state(BotState.PAUSED)
             logger.info("调度器已暂停")
 
@@ -89,6 +99,7 @@ class TaskScheduler(QObject):
         if self._state == BotState.PAUSED:
             self._farm_timer.start()
             self._friend_timer.start()
+            self._window_monitor_timer.start(self._window_monitor_interval_ms)
             self._set_state(BotState.RUNNING)
             logger.info("调度器已恢复")
 
@@ -118,6 +129,18 @@ class TaskScheduler(QObject):
             return
         self._next_friend_check = time.time() + self._friend_timer.interval() / 1000
         self.friend_check_triggered.emit()
+
+    def set_window_check_fn(self, fn):
+        """设置窗口检查函数，返回 True 表示窗口存在"""
+        self._window_check_fn = fn
+
+    def _on_window_monitor(self):
+        """定期检查游戏窗口是否存在"""
+        if self._state != BotState.RUNNING:
+            return
+        if self._window_check_fn and not self._window_check_fn():
+            logger.warning("窗口监控：游戏窗口已丢失")
+            self.window_lost.emit()
 
     def record_action(self, action_type: str, count: int = 1):
         """记录操作统计"""
