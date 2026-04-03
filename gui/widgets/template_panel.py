@@ -304,6 +304,7 @@ class TemplateDetailPanel(QFrame):
     closed = pyqtSignal()
     template_changed = pyqtSignal()
     template_renamed = pyqtSignal(str, str)
+    capture_replace_requested = pyqtSignal()
 
     def __init__(self, detector: CVDetector, parent=None):
         super().__init__(parent)
@@ -415,6 +416,13 @@ class TemplateDetailPanel(QFrame):
         self._btn_replace.setStyleSheet(_outline_button())
         self._btn_replace.clicked.connect(self._on_replace_image)
         edit_row.addWidget(self._btn_replace)
+
+        self._btn_capture_replace = QPushButton("截屏替换")
+        self._btn_capture_replace.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_capture_replace.setFixedHeight(26)
+        self._btn_capture_replace.setStyleSheet(_outline_button())
+        self._btn_capture_replace.clicked.connect(self._on_capture_replace)
+        edit_row.addWidget(self._btn_capture_replace)
 
         self._btn_toggle_detail = QPushButton()
         self._btn_toggle_detail.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -868,6 +876,12 @@ class TemplateDetailPanel(QFrame):
                 buttons=QMessageBox.StandardButton.Ok)
             box.exec()
 
+    def _on_capture_replace(self):
+        """请求截屏采集替换当前模板图片"""
+        if not self._name:
+            return
+        self.capture_replace_requested.emit()
+
     def _on_replace_image(self):
         if not self._filepath:
             return
@@ -1257,6 +1271,7 @@ class TemplatePanel(QWidget):
         self._detail.closed.connect(self._on_detail_close)
         self._detail.template_changed.connect(self._on_detail_changed)
         self._detail.template_renamed.connect(self._on_detail_renamed)
+        self._detail.capture_replace_requested.connect(self._on_capture_replace)
         self._detail.hide()
         self._splitter.addWidget(self._detail)
 
@@ -1855,6 +1870,64 @@ class TemplatePanel(QWidget):
         self._selector.set_image(pil_image, bgr)
         self._show_collector()
         self._ct_hint.setText("鼠标拖拽框选要采集的区域")
+
+    def _on_capture_replace(self):
+        """截屏采集替换当前选中的模板"""
+        if not self._detail._name or not self._detail._filepath:
+            return
+        self._replace_target_name = self._detail._name
+        self._replace_target_path = self._detail._filepath
+        self._btn_capture.setEnabled(False)
+        self._worker = CaptureWorker("QQ经典农场")
+        self._worker.captured.connect(self._on_capture_replace_ready)
+        self._worker.error.connect(self._on_cap_err)
+        self._worker.finished.connect(self._clean_worker)
+        self._worker.start()
+
+    def _on_capture_replace_ready(self, pil_image):
+        self._btn_capture.setEnabled(True)
+        rgb = np.array(pil_image.convert("RGB"))
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        self._selector.set_image(pil_image, bgr)
+        self._show_collector()
+        self._ct_hint.setText(f"框选要替换「{self._replace_target_name}」的区域")
+        # 替换保存按钮的行为
+        self._save_btn_override = True
+        self._btn_save.clicked.disconnect()
+        self._btn_save.clicked.connect(self._on_save_crop_replace)
+        self._btn_save.setText("保存替换")
+
+    def _on_save_crop_replace(self):
+        result = self._selector.get_crop()
+        if not result:
+            box = _styled_msg_box(self, "提示", "请先用鼠标框选一个区域",
+                icon=QMessageBox.Icon.Information,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
+            return
+        crop_bgr, w, h = result
+
+        fp = self._replace_target_path
+        ok, buf = cv2.imencode('.png', crop_bgr)
+        if ok:
+            buf.tofile(fp)
+            self._ct_hint.setText(f"已替换 {self._replace_target_name}.png ({w}x{h})")
+            self._detail.load_template(self._replace_target_name, fp)
+            self._detail.template_changed.emit()
+            self._load_templates()
+            self.templates_changed.emit()
+            self._reset_save_button()
+        else:
+            box = _styled_msg_box(self, "保存失败", "无法编码图片",
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
+
+    def _reset_save_button(self):
+        self._save_btn_override = False
+        self._btn_save.clicked.disconnect()
+        self._btn_save.clicked.connect(self._on_save_crop)
+        self._btn_save.setText("保存选区")
 
     def _on_cap_err(self, msg: str):
         self._btn_capture.setEnabled(True)
