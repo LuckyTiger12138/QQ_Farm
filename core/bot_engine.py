@@ -636,7 +636,41 @@ class BotEngine(QObject):
             action_desc = None
 
             # ---- P-1 异常处理 ----
-            if scene == Scene.LEVEL_UP:
+            if scene == Scene.REMOTE_LOGIN:
+                logger.warning("检测到异地登录，关闭游戏并重启...")
+                self.log_message.emit("⚠ 检测到异地登录，正在重启游戏...")
+                try:
+                    import ctypes
+                    if self.window_manager._cached_window:
+                        hwnd = self.window_manager._cached_window.hwnd
+                        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                        time.sleep(1)
+                except Exception as e:
+                    logger.error(f"关闭游戏失败: {e}")
+                self.window_manager._cached_window = None
+                window = self.window_manager.find_window(
+                    self.config.window_title_keyword,
+                    auto_launch=True,
+                    shortcut_path=self.config.planting.game_shortcut_path
+                )
+                if not window:
+                    logger.error("异地登录重启游戏失败")
+                    self.log_message.emit("❌ 异地登录重启失败，请手动处理")
+                    result["message"] = "异地登录重启失败"
+                    break
+                w, h = self.config.planting.window_width, self.config.planting.window_height
+                if w > 0 and h > 0:
+                    time.sleep(1)
+                    self.window_manager.resize_window(w, h)
+                    time.sleep(0.5)
+                    window = self.window_manager._cached_window
+                if window:
+                    rect = (window.left, window.top, window.width, window.height)
+                    self.action_executor.update_window_rect(rect)
+                    self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
+                    idle_rounds = 0
+                    continue
+            elif scene == Scene.LEVEL_UP:
                 action_desc = self.popup.handle_popup(detections)
                 self.config.planting.player_level += 1
                 self.config.save()

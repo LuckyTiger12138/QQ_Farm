@@ -16,6 +16,7 @@ class Scene(str, Enum):
     POPUP = "popup"
     LEVEL_UP = "level_up"
     INFO_PAGE = "info_page"  # 个人信息页面
+    REMOTE_LOGIN = "remote_login"  # 异地登录
     UNKNOWN = "unknown"
 
 
@@ -23,6 +24,10 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
                    cv_image: np.ndarray) -> Scene:
     """根据检测结果识别当前场景"""
     names = {d.name for d in detections}
+
+    # 异地登录（优先级高）
+    if "ui_remote_login" in names or "ui_next_time" in names:
+        return Scene.REMOTE_LOGIN
 
     # 个人信息页面（优先级高，需要先检测）
     if "btn_info" in names:
