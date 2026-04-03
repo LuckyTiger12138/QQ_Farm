@@ -102,7 +102,6 @@ def _styled_msg_box(parent, title: str, text: str,
                     buttons: QMessageBox.StandardButton = (
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No),
                     default=QMessageBox.StandardButton.No) -> QMessageBox:
-    """创建带正确背景色的 QMessageBox"""
     box = QMessageBox(parent)
     box.setWindowTitle(title)
     box.setText(text)
@@ -142,8 +141,6 @@ def _styled_msg_box(parent, title: str, text: str,
 
 
 class TemplateCard(QFrame):
-    """单个模板卡片：缩略图 + 名称 + 类别标签 + 时间 + 开关"""
-
     toggle_requested = pyqtSignal(str, bool)
     delete_requested = pyqtSignal(str)
     clicked = pyqtSignal(str)
@@ -156,26 +153,32 @@ class TemplateCard(QFrame):
         self._enabled = not disabled
         self._selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(64)
+        self.setFixedHeight(68)
         self.setObjectName("templateCard")
         self._apply_style()
         self._build(name, filepath, disabled, mtime)
 
     def _apply_style(self):
         if self._selected:
-            bg, border = "#ffffff", Colors.PRIMARY
+            bg = "#ffffff"
+            border = Colors.PRIMARY
+            shadow = "rgba(0, 122, 255, 15)"
         elif self._enabled:
-            bg, border = Colors.CARD_BG, Colors.BORDER
+            bg = Colors.CARD_BG
+            border = Colors.BORDER
+            shadow = "rgba(0, 0, 0, 6)"
         else:
-            bg, border = "#fafafa", "rgba(0,0,0,6)"
-        hover_border = "rgba(0,122,255,40)" if not self._selected else Colors.PRIMARY
+            bg = "#fafafa"
+            border = "rgba(0,0,0,6)"
+            shadow = "transparent"
         self.setStyleSheet(f"""
             QFrame#templateCard {{
-                background-color: {bg}; border: 2px solid {border};
-                border-radius: 10px;
+                background-color: {bg};
+                border: 1.5px solid {border};
+                border-radius: 12px;
             }}
             QFrame#templateCard:hover {{
-                border-color: {hover_border};
+                border-color: rgba(0,122,255,30);
             }}
         """)
 
@@ -190,7 +193,6 @@ class TemplateCard(QFrame):
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(e.pos())
-            # 只有点击 checkbox 或删除按钮时不触发 clicked
             if child is not None and isinstance(child, (QCheckBox, QPushButton)):
                 super().mousePressEvent(e)
                 return
@@ -199,31 +201,28 @@ class TemplateCard(QFrame):
 
     def _build(self, name: str, filepath: str, disabled: bool, mtime: float):
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(10)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(12)
 
-        # 缩略图
         thumb = QLabel()
-        thumb.setFixedSize(44, 44)
+        thumb.setFixedSize(46, 46)
         thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         thumb.setStyleSheet(f"""
             QLabel {{
-                background-color: rgba(0,0,0,6);
+                background-color: rgba(0,0,0,5);
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
             }}
         """)
         px = self._load_thumb(filepath)
         if px:
-            thumb.setPixmap(px.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
+            thumb.setPixmap(px.scaled(42, 42, Qt.AspectRatioMode.KeepAspectRatio,
                                       Qt.TransformationMode.SmoothTransformation))
         lay.addWidget(thumb)
 
-        # 文字区
         info = QVBoxLayout()
-        info.setSpacing(3)
+        info.setSpacing(4)
 
-        # 第 1 行：名称 + 类别标签
         row1 = QHBoxLayout()
         row1.setSpacing(6)
         name_lbl = QLabel(name)
@@ -240,7 +239,6 @@ class TemplateCard(QFrame):
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row1.addWidget(tag)
 
-        # 启用/禁用状态标签
         if disabled:
             status_tag = QLabel("禁用")
             status_tag.setFixedHeight(18)
@@ -250,7 +248,6 @@ class TemplateCard(QFrame):
         row1.addStretch()
         info.addLayout(row1)
 
-        # 第 2 行：修改时间
         ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
         time_lbl = QLabel(ts)
         time_lbl.setStyleSheet(f"font-size:11px; color:{Colors.TEXT_DIM}; background:transparent;")
@@ -258,14 +255,12 @@ class TemplateCard(QFrame):
 
         lay.addLayout(info, 1)
 
-        # 开关
         self._cb = QCheckBox()
         self._cb.setChecked(not disabled)
         self._cb.setStyleSheet("QCheckBox{spacing:0;}")
         self._cb.stateChanged.connect(self._on_toggle)
         lay.addWidget(self._cb)
 
-        # 删除
         btn = QPushButton("删除")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedSize(42, 26)
@@ -306,11 +301,9 @@ class TemplateCard(QFrame):
 
 
 class TemplateDetailPanel(QFrame):
-    """右侧模板详情面板：预览 + 信息 + 阈值调节 + 匹配测试"""
-
     closed = pyqtSignal()
     template_changed = pyqtSignal()
-    template_renamed = pyqtSignal(str, str)  # old_name, new_name
+    template_renamed = pyqtSignal(str, str)
 
     def __init__(self, detector: CVDetector, parent=None):
         super().__init__(parent)
@@ -330,7 +323,6 @@ class TemplateDetailPanel(QFrame):
             QFrame#detailPanel {{
                 background-color: {Colors.CARD_BG};
                 border-left: 1px solid {Colors.BORDER};
-                border-radius: 0;
             }}
         """)
         self.setObjectName("detailPanel")
@@ -338,7 +330,6 @@ class TemplateDetailPanel(QFrame):
         root.setContentsMargins(16, 12, 16, 12)
         root.setSpacing(8)
 
-        # ── 顶栏：标题 + 关闭 ──
         top = QHBoxLayout()
         top.setSpacing(6)
         self._title = QLabel("模板详情")
@@ -362,7 +353,6 @@ class TemplateDetailPanel(QFrame):
         top.addWidget(btn_close)
         root.addLayout(top)
 
-        # ── 预览图 ──
         self._preview = QLabel()
         self._preview.setFixedHeight(80)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -375,7 +365,6 @@ class TemplateDetailPanel(QFrame):
         """)
         root.addWidget(self._preview)
 
-        # ── 信息区 ──
         info = QVBoxLayout()
         info.setSpacing(4)
         self._info_name = QLabel()
@@ -410,7 +399,6 @@ class TemplateDetailPanel(QFrame):
         info.addLayout(status_row)
         root.addLayout(info)
 
-        # ── 操作按钮区 ──
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
 
@@ -453,13 +441,11 @@ class TemplateDetailPanel(QFrame):
 
         root.addLayout(edit_row)
 
-        # ── 分隔线 ──
         sep1 = QFrame()
         sep1.setFixedHeight(1)
         sep1.setStyleSheet(f"background-color:{Colors.BORDER};")
         root.addWidget(sep1)
 
-        # ── 阈值区 ──
         th_label = QLabel("匹配阈值")
         th_label.setStyleSheet(f"font-weight:600; font-size:12px; color:{Colors.TEXT_SECONDARY}; background:transparent;")
         root.addWidget(th_label)
@@ -523,13 +509,11 @@ class TemplateDetailPanel(QFrame):
         hint_row.addWidget(self._btn_reset_th)
         root.addLayout(hint_row)
 
-        # ── 分隔线 ──
         sep2 = QFrame()
         sep2.setFixedHeight(1)
         sep2.setStyleSheet(f"background-color:{Colors.BORDER};")
         root.addWidget(sep2)
 
-        # ── 匹配测试区 ──
         test_label = QLabel("匹配测试")
         test_label.setStyleSheet(f"font-weight:600; font-size:12px; color:{Colors.TEXT_SECONDARY}; background:transparent;")
         root.addWidget(test_label)
@@ -559,7 +543,6 @@ class TemplateDetailPanel(QFrame):
         self._test_info.setWordWrap(True)
         root.addWidget(self._test_info)
 
-        # 测试结果预览 — 使用 ScrollArea 包裹，允许缩放查看
         self._test_scroll = QScrollArea()
         self._test_scroll.setWidgetResizable(True)
         self._test_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
@@ -576,10 +559,7 @@ class TemplateDetailPanel(QFrame):
         self._test_scroll.setWidget(self._test_preview)
         root.addWidget(self._test_scroll, 1)
 
-    # ── 加载模板 ──
-
     def load_template(self, name: str, filepath: str):
-        """加载模板详情"""
         self._name = name
         self._filepath = filepath
         self._test_bgr = None
@@ -587,7 +567,6 @@ class TemplateDetailPanel(QFrame):
         self._test_info.clear()
         self._test_preview.clear()
 
-        # 预览图
         px = self._load_pixmap(filepath)
         if px:
             scaled = px.scaled(280, 96, Qt.AspectRatioMode.KeepAspectRatio,
@@ -596,7 +575,6 @@ class TemplateDetailPanel(QFrame):
         else:
             self._preview.clear()
 
-        # 信息
         self._info_name.setText(name)
         prefix = name.split("_")[0]
         cat = TEMPLATE_CATEGORIES.get(prefix, "unknown")
@@ -605,13 +583,11 @@ class TemplateDetailPanel(QFrame):
         self._info_cat_tag.setText(cat_text)
         self._info_cat_tag.setStyleSheet(_tag_style(cat_color))
 
-        # 图片尺寸
         if px:
             self._info_dims.setText(f"{px.width()} × {px.height()} px")
         else:
             self._info_dims.setText("")
 
-        # 文件大小
         try:
             fsize = os.path.getsize(filepath)
             if fsize > 1024:
@@ -621,7 +597,6 @@ class TemplateDetailPanel(QFrame):
         except OSError:
             self._info_filesize.setText("")
 
-        # 状态
         is_disabled = self._detector.is_template_disabled(name)
         if is_disabled:
             self._info_status_tag.setText("已禁用")
@@ -632,7 +607,6 @@ class TemplateDetailPanel(QFrame):
             self._info_status_tag.setStyleSheet(_tag_style(Colors.SUCCESS))
             self._btn_toggle_detail.setText("禁用")
 
-        # 阈值
         current_th = self._detector.get_template_threshold(name)
         all_th = self._detector.get_all_thresholds()
         has_custom = name in all_th
@@ -658,7 +632,6 @@ class TemplateDetailPanel(QFrame):
         self.show()
 
     def clear(self):
-        """重置面板"""
         self._name = ""
         self._filepath = ""
         self._test_bgr = None
@@ -670,8 +643,6 @@ class TemplateDetailPanel(QFrame):
         self._test_info.clear()
         self._test_preview.clear()
         self.hide()
-
-    # ── 阈值操作 ──
 
     def _on_slider_changed(self, val: int):
         th = val / 100.0
@@ -705,7 +676,6 @@ class TemplateDetailPanel(QFrame):
         if not self._name:
             return
         self._detector.reset_template_threshold(self._name)
-        # 重新加载
         cat_default = self._detector.get_template_threshold(self._name)
         self._slider.blockSignals(True)
         self._spinbox.blockSignals(True)
@@ -719,10 +689,7 @@ class TemplateDetailPanel(QFrame):
         self._th_hint.setText(f"使用类别默认阈值 {default:.2f}")
         self._btn_reset_th.hide()
 
-    # ── 匹配测试 ──
-
     def _on_capture_test_image(self):
-        """截取游戏窗口作为测试图片"""
         try:
             from core.window_manager import WindowManager
             from core.screen_capture import ScreenCapture
@@ -767,7 +734,6 @@ class TemplateDetailPanel(QFrame):
             self._test_info.setText(f"已选择: {os.path.basename(fp)} ({w}×{h})")
             self._btn_run_test.setEnabled(True)
 
-            # 显示缩略图
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             data = rgb.tobytes()
             qimg = QImage(data, w, h, 3 * w, QImage.Format.Format_RGB888)
@@ -785,7 +751,6 @@ class TemplateDetailPanel(QFrame):
 
         threshold = self._spinbox.value()
 
-        # 确保模板已加载
         if not self._detector._loaded:
             self._detector.load_templates()
 
@@ -795,29 +760,24 @@ class TemplateDetailPanel(QFrame):
 
         if not results:
             self._test_info.setText(f"未匹配到结果（阈值 {threshold:.2f}）")
-            # 仍然显示原图
             self._show_test_image(self._test_bgr)
             return
 
-        # 显示结果
         confs = [r.confidence for r in results]
         self._test_info.setText(
             f"匹配到 {len(results)} 处，"
             f"置信度: {min(confs):.2f} ~ {max(confs):.2f}"
         )
 
-        # 绘制标注图
         annotated = self._detector.draw_results(self._test_bgr, results)
         self._show_test_image(annotated)
 
     def _show_test_image(self, bgr: np.ndarray):
-        """显示测试图片，自适应预览区域大小"""
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         data = rgb.tobytes()
         qimg = QImage(data, w, h, ch * w, QImage.Format.Format_RGB888)
         px = QPixmap.fromImage(qimg)
-        # 限制最大显示尺寸，适应容器宽度
         max_h = self._test_scroll.viewport().height() - 4
         scaled = px.scaled(
             self._test_scroll.viewport().width() - 4,
@@ -827,10 +787,7 @@ class TemplateDetailPanel(QFrame):
         self._test_preview.setPixmap(scaled)
         self._test_preview.setMinimumSize(scaled.size())
 
-    # ── 编辑操作 ──
-
     def _on_rename(self):
-        """重命名模板"""
         if not self._name:
             return
         dlg = QInputDialog(self)
@@ -874,7 +831,6 @@ class TemplateDetailPanel(QFrame):
         new_name = dlg.textValue().strip()
         if not new_name or new_name == self._name:
             return
-        # 验证前缀
         prefix = new_name.split("_")[0]
         if prefix not in TEMPLATE_CATEGORIES:
             box = _styled_msg_box(self, "前缀无效",
@@ -884,20 +840,17 @@ class TemplateDetailPanel(QFrame):
             box.exec()
             return
         old_name = self._name
-        # 检查是否已存在
         new_fp = os.path.join(self._detector._templates_dir, f"{new_name}.png")
         if os.path.exists(new_fp) and new_name != self._name:
             box = _styled_msg_box(self, "覆盖",
                 f"「{new_name}」已存在，是否覆盖？")
             if box.exec() != QMessageBox.StandardButton.Yes:
                 return
-        # 重命名文件
         old_fp = self._filepath
         try:
             if os.path.exists(new_fp) and new_name != old_name:
                 os.remove(new_fp)
             os.rename(old_fp, new_fp)
-            # 更新阈值和禁用状态
             old_th = self._detector.get_all_thresholds()
             if old_name in old_th:
                 self._detector.set_template_threshold(new_name, old_th[old_name])
@@ -916,7 +869,6 @@ class TemplateDetailPanel(QFrame):
             box.exec()
 
     def _on_replace_image(self):
-        """替换模板图片"""
         if not self._filepath:
             return
         fp, _ = QFileDialog.getOpenFileName(
@@ -937,7 +889,6 @@ class TemplateDetailPanel(QFrame):
             ok, out = cv2.imencode('.png', img)
             if ok:
                 out.tofile(self._filepath)
-                # 刷新预览
                 px = self._load_pixmap(self._filepath)
                 if px:
                     scaled = px.scaled(260, 80, Qt.AspectRatioMode.KeepAspectRatio,
@@ -951,7 +902,6 @@ class TemplateDetailPanel(QFrame):
             box.exec()
 
     def _on_toggle_enabled(self):
-        """切换启用/禁用状态"""
         if not self._name:
             return
         is_disabled = self._detector.is_template_disabled(self._name)
@@ -971,7 +921,6 @@ class TemplateDetailPanel(QFrame):
             self._btn_toggle_detail.setText("禁用")
 
     def _on_delete(self):
-        """删除当前模板"""
         if not self._name:
             return
         box = _styled_msg_box(self, "删除模板",
@@ -984,8 +933,6 @@ class TemplateDetailPanel(QFrame):
             self._detector.set_template_enabled(self._name, True)
             self.template_changed.emit()
             self.closed.emit()
-
-    # ── 工具方法 ──
 
     @staticmethod
     def _load_pixmap(fp: str) -> QPixmap | None:
@@ -1007,8 +954,6 @@ class TemplateDetailPanel(QFrame):
 
 
 class SaveTemplateDialog(QDialog):
-    """保存模板对话框：选类型 → 自动加前缀 → 输入名称"""
-
     def __init__(self, crop_size: tuple[int, int], parent=None):
         super().__init__(parent)
         self.setWindowTitle("保存模板")
@@ -1038,12 +983,10 @@ class SaveTemplateDialog(QDialog):
         form.setSpacing(12)
         form.setContentsMargins(20, 20, 20, 16)
 
-        # 选区大小
         size_lbl = QLabel(f"{size[0]} x {size[1]} px")
         size_lbl.setStyleSheet(f"color:{Colors.TEXT_SECONDARY}; font-size:12px;")
         form.addRow("选区大小:", size_lbl)
 
-        # 类型选择
         self._type_combo = QComboBox()
         for prefix, label in _PREFIX_LABELS.items():
             cat = TEMPLATE_CATEGORIES.get(prefix, "unknown")
@@ -1052,13 +995,11 @@ class SaveTemplateDialog(QDialog):
         self._type_combo.currentIndexChanged.connect(self._update_preview)
         form.addRow("模板类型:", self._type_combo)
 
-        # 名称（不含前缀）
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("输入名称（如 harvest、weed、mature）")
         self._name_edit.textChanged.connect(self._update_preview)
         form.addRow("名称:", self._name_edit)
 
-        # 完整文件名预览
         self._preview = QLabel()
         self._preview.setStyleSheet(
             f"font-weight:600; font-size:13px; color:{Colors.PRIMARY}; padding:4px 0;"
@@ -1066,7 +1007,6 @@ class SaveTemplateDialog(QDialog):
         form.addRow("文件名:", self._preview)
         self._update_preview()
 
-        # 按钮
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1168,7 +1108,6 @@ class ScreenshotSelector(QWidget):
         if self._pil is None:
             return
         rgb = self._pil.convert("RGB")
-        # 必须保持 data 引用，否则 QImage 底层缓冲被 GC 回收后 pixmap 变野指针
         self._img_data = rgb.tobytes("raw", "RGB")
         qimg = QImage(self._img_data, rgb.width, rgb.height,
                       3 * rgb.width, QImage.Format.Format_RGB888)
@@ -1198,7 +1137,6 @@ class ScreenshotSelector(QWidget):
                 p.setBrush(QBrush(QColor(0, 200, 80, 35)))
                 r = self._rect()
                 p.drawRect(r)
-                # 显示尺寸提示
                 w = int(abs(self._end[0] - self._start[0]) / self._scale)
                 h = int(abs(self._end[1] - self._start[1]) / self._scale)
                 p.setPen(QColor(0, 200, 80))
@@ -1261,7 +1199,7 @@ class ScreenshotSelector(QWidget):
 
 _SORT_MAP = {
     "名称 A-Z": lambda x: x[0],
-    "名称 Z-A": lambda x: x[0],      # reversed separately
+    "名称 Z-A": lambda x: x[0],
     "最近修改": lambda x: x[2],
     "最早修改": lambda x: x[2],
     "按类别":   lambda x: (x[0].split("_")[0], x[0]),
@@ -1282,23 +1220,18 @@ class TemplatePanel(QWidget):
         self._init_ui()
         self._load_templates()
 
-    # ── UI 构建 ────────────────────────────────────────────
-
     def _init_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # 顶栏
-        root.addWidget(self._build_toolbar())
-        # 筛选栏
+        root.addWidget(self._build_header())
         root.addWidget(self._build_filter_bar())
-        # 内容
+
         self._content = QWidget()
         self._content_lay = QVBoxLayout(self._content)
         self._content_lay.setContentsMargins(0, 0, 0, 0)
 
-        # ── 左右分栏 ──
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setStyleSheet(f"""
             QSplitter::handle {{
@@ -1306,7 +1239,6 @@ class TemplatePanel(QWidget):
             }}
         """)
 
-        # 左侧：模板列表
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1321,7 +1253,6 @@ class TemplatePanel(QWidget):
         self._scroll.setWidget(self._list_w)
         self._splitter.addWidget(self._scroll)
 
-        # 右侧：详情面板（默认隐藏）
         self._detail = TemplateDetailPanel(self._detector)
         self._detail.closed.connect(self._on_detail_close)
         self._detail.template_changed.connect(self._on_detail_changed)
@@ -1329,21 +1260,19 @@ class TemplatePanel(QWidget):
         self._detail.hide()
         self._splitter.addWidget(self._detail)
 
-        # 初始比例
         self._splitter.setSizes([500, 350])
         self._splitter.setStretchFactor(0, 3)
         self._splitter.setStretchFactor(1, 2)
 
         self._content_lay.addWidget(self._splitter)
 
-        # 采集页
         self._collector = self._build_collector()
         self._content_lay.addWidget(self._collector)
         self._collector.hide()
 
         root.addWidget(self._content, 1)
 
-    def _build_toolbar(self) -> QWidget:
+    def _build_header(self) -> QFrame:
         bar = QFrame()
         bar.setStyleSheet(f"""
             QFrame {{
@@ -1352,8 +1281,21 @@ class TemplatePanel(QWidget):
             }}
         """)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(16, 10, 16, 10)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(10)
+
+        title = QLabel("模板管理")
+        title.setStyleSheet(f"""
+            color: {Colors.TEXT}; font-size: 18px; font-weight: 700;
+            background: transparent; border: none;
+        """)
+        lay.addWidget(title)
+
+        self._count = QLabel("")
+        self._count.setStyleSheet(f"color:{Colors.TEXT_DIM};font-size:12px;")
+        lay.addWidget(self._count)
+
+        lay.addStretch()
 
         self._btn_capture = QPushButton("截屏采集")
         self._btn_capture.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1379,43 +1321,129 @@ class TemplatePanel(QWidget):
         self._btn_cat_thresh.clicked.connect(self._on_category_thresholds)
         lay.addWidget(self._btn_cat_thresh)
 
-        lay.addStretch()
-
-        self._count = QLabel("")
-        self._count.setStyleSheet(f"color:{Colors.TEXT_DIM};font-size:12px;")
-        lay.addWidget(self._count)
-
         return bar
 
     def _build_filter_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setStyleSheet(f"background-color:{Colors.WINDOW_BG};border:none;")
+        bar = QFrame()
+        bar.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.WINDOW_BG};
+                border-bottom: 1px solid {Colors.BORDER};
+            }}
+        """)
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(16, 6, 16, 6)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 8, 16, 8)
+        lay.setSpacing(10)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("搜索模板...")
-        self._search.setFixedHeight(30)
+        self._search.setFixedHeight(32)
         self._search.setMinimumWidth(140)
         self._search.setMaximumWidth(200)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px 12px;
+                color: {Colors.TEXT};
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+        """)
         self._search.textChanged.connect(self._apply_filters)
         lay.addWidget(self._search)
 
         lay.addWidget(self._make_label("类型"))
         self._filter = QComboBox()
-        self._filter.setFixedHeight(30)
+        self._filter.setFixedHeight(32)
         self._filter.setMinimumWidth(130)
+        self._filter.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px 10px;
+                color: {Colors.TEXT};
+                font-size: 12px;
+            }}
+            QComboBox:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {Colors.CARD_BG};
+                color: {Colors.TEXT};
+                border: 1px solid rgba(0, 0, 0, 18);
+                border-radius: 8px;
+                selection-background-color: rgba(0, 122, 255, 12);
+                selection-color: {Colors.TEXT};
+                outline: none;
+                padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 28px;
+                padding: 4px 8px;
+                border-radius: 4px;
+                margin: 1px 2px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: rgba(0, 122, 255, 8);
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: rgba(0, 122, 255, 12);
+                color: {Colors.PRIMARY};
+                font-weight: 600;
+            }}
+        """)
         self._fill_filter()
         self._filter.currentIndexChanged.connect(self._apply_filters)
         lay.addWidget(self._filter)
 
         lay.addWidget(self._make_label("排序"))
         self._sort = QComboBox()
-        self._sort.setFixedHeight(30)
+        self._sort.setFixedHeight(32)
         self._sort.setMinimumWidth(110)
+        self._sort.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px 10px;
+                color: {Colors.TEXT};
+                font-size: 12px;
+            }}
+            QComboBox:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {Colors.CARD_BG};
+                color: {Colors.TEXT};
+                border: 1px solid rgba(0, 0, 0, 18);
+                border-radius: 8px;
+                selection-background-color: rgba(0, 122, 255, 12);
+                selection-color: {Colors.TEXT};
+                outline: none;
+                padding: 4px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 28px;
+                padding: 4px 8px;
+                border-radius: 4px;
+                margin: 1px 2px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: rgba(0, 122, 255, 8);
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background-color: rgba(0, 122, 255, 12);
+                color: {Colors.PRIMARY};
+                font-weight: 600;
+            }}
+        """)
         self._sort.addItems(list(_SORT_MAP.keys()))
-        self._sort.setCurrentIndex(2)  # 默认"最近修改"
+        self._sort.setCurrentIndex(2)
         self._sort.currentIndexChanged.connect(self._apply_filters)
         lay.addWidget(self._sort)
 
@@ -1443,7 +1471,6 @@ class TemplatePanel(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        # 工具栏
         tb = QFrame()
         tb.setStyleSheet(f"""
             QFrame {{
@@ -1481,7 +1508,6 @@ class TemplatePanel(QWidget):
 
         lay.addWidget(tb)
 
-        # 选择器
         self._selector = ScreenshotSelector()
         self._selector.setStyleSheet(f"""
             QWidget {{
@@ -1491,8 +1517,6 @@ class TemplatePanel(QWidget):
         """)
         lay.addWidget(self._selector, 1)
         return w
-
-    # ── 列表管理 ───────────────────────────────────────────
 
     def _load_templates(self):
         d = self._detector._templates_dir
@@ -1520,13 +1544,11 @@ class TemplatePanel(QWidget):
         fi = self._filter.currentIndex()
         sk = self._sort.currentText()
 
-        # 筛选
         out = []
         for name, fp, mt in self._items:
             if q and q not in name.lower():
                 continue
             if fi > 0:
-                # _filter index 1..N maps to TEMPLATE_CATEGORIES items (ordered dict)
                 prefixes = list(TEMPLATE_CATEGORIES.keys())
                 if fi - 1 < len(prefixes):
                     want = prefixes[fi - 1]
@@ -1534,7 +1556,6 @@ class TemplatePanel(QWidget):
                         continue
             out.append((name, fp, mt))
 
-        # 排序
         key_fn = _SORT_MAP.get(sk, lambda x: x[0])
         reverse = sk in ("名称 Z-A", "最近修改")
         out.sort(key=key_fn, reverse=reverse)
@@ -1564,16 +1585,12 @@ class TemplatePanel(QWidget):
         self.templates_changed.emit()
 
     def _on_card_clicked(self, name: str):
-        """点击模板卡片，显示/更新右侧详情面板"""
         if self._selected_name == name:
-            # 再次点击同一卡片 → 关闭详情
             self._on_detail_close()
             return
         self._selected_name = name
-        # 更新卡片选中状态
         for card in self._cards:
             card.set_selected(card.name == name)
-        # 查找文件路径
         fp = ""
         for n, f, _ in self._items:
             if n == name:
@@ -1581,25 +1598,21 @@ class TemplatePanel(QWidget):
                 break
         if fp:
             self._detail.load_template(name, fp)
-            # 调整 splitter 让详情面板可见
             if not self._detail.isVisible():
                 self._detail.show()
                 self._splitter.setSizes([400, 350])
 
     def _on_detail_close(self):
-        """关闭详情面板"""
         self._selected_name = ""
         self._detail.clear()
         for card in self._cards:
             card.set_selected(False)
 
     def _on_detail_changed(self):
-        """详情面板编辑后刷新列表"""
         self._load_templates()
         self.templates_changed.emit()
 
     def _on_detail_renamed(self, old_name: str, new_name: str):
-        """模板重命名后刷新"""
         self._selected_name = new_name
         self._load_templates()
         self.templates_changed.emit()
@@ -1657,10 +1670,7 @@ class TemplatePanel(QWidget):
             self._load_templates()
             self.templates_changed.emit()
 
-    # ── 类别默认阈值 ───────────────────────────────────────
-
     def _on_category_thresholds(self):
-        """打开类别默认阈值设置对话框"""
         from PyQt6.QtWidgets import QSlider, QFormLayout, QSpinBox, QDoubleSpinBox
         from PyQt6.QtCore import Qt
         from gui.styles import Colors
@@ -1709,7 +1719,6 @@ class TemplatePanel(QWidget):
         hint.setStyleSheet(f"color:{Colors.TEXT_SECONDARY}; font-size:12px; background:transparent;")
         layout.addWidget(hint)
 
-        # 滚动区域容纳所有类别
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
@@ -1731,13 +1740,11 @@ class TemplatePanel(QWidget):
             row = QHBoxLayout()
             row.setSpacing(8)
 
-            # 类别标签（带颜色圆点）
             tag = QLabel(f"● {cat_label}")
             tag.setFixedWidth(100)
             tag.setStyleSheet(
                 f"color:{cat_color}; font-weight:600; font-size:12px; background:transparent;")
 
-            # 滑块
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(10, 100)
             slider.setValue(int(default_val * 100))
@@ -1754,7 +1761,6 @@ class TemplatePanel(QWidget):
                 }}
             """)
 
-            # 数值显示
             spin = QDoubleSpinBox()
             spin.setRange(0.1, 1.0)
             spin.setSingleStep(0.01)
@@ -1762,13 +1768,11 @@ class TemplatePanel(QWidget):
             spin.setValue(default_val)
             spin.setFixedWidth(72)
 
-            # 内置默认提示
             builtin_lbl = QLabel(f"(内置 {builtin_val:.1f})")
             builtin_lbl.setStyleSheet(
                 f"color:{Colors.TEXT_DIM}; font-size:10px; background:transparent;")
             builtin_lbl.setFixedWidth(65)
 
-            # 双向绑定
             def _slider_changed(val, s=spin):
                 s.blockSignals(True)
                 s.setValue(val / 100.0)
@@ -1795,7 +1799,6 @@ class TemplatePanel(QWidget):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
 
-        # 按钮行
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
@@ -1831,8 +1834,6 @@ class TemplatePanel(QWidget):
             for cat, spin in spinboxes.items():
                 self._detector.set_category_default(cat, spin.value())
             self._load_templates()
-
-    # ── 采集 ───────────────────────────────────────────────
 
     def _on_capture(self):
         self._btn_capture.setEnabled(False)
