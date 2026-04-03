@@ -1,0 +1,16 @@
+{
+  "thresholds": {
+    "shop_香蕉": 0.56,
+    "land_empty": 0.7
+  },
+  "category_overrides": {
+    "button": 0.8,
+    "status_icon": 0.8,
+    "crop": 0.8,
+    "ui_element": 0.8,
+    "land": 0.73,
+    "seed": 0.8,
+    "shop": 0.8,
+    "unknown": 0.8
+  }
+}
