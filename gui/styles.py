@@ -131,11 +131,27 @@ QComboBox::drop-down {{
 QComboBox QAbstractItemView {{
     background-color: {Colors.CARD_BG};
     color: {Colors.TEXT};
-    border: 1px solid {Colors.BORDER};
-    border-radius: 8px;
-    selection-background-color: {Colors.SELECTION_BG};
+    border: 1px solid rgba(0, 0, 0, 18);
+    border-radius: 10px;
+    selection-background-color: rgba(0, 122, 255, 12);
+    selection-color: {Colors.TEXT};
     outline: none;
-    padding: 4px;
+    padding: 6px;
+    font-size: 13px;
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 32px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    margin: 2px 4px;
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background-color: rgba(0, 122, 255, 8);
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background-color: rgba(0, 122, 255, 12);
+    color: {Colors.PRIMARY};
+    font-weight: 600;
 }}
 
 QScrollBar:vertical {{

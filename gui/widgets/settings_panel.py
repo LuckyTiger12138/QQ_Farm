@@ -1,16 +1,141 @@
-"""设置面板 — 暗色毛玻璃风格，实时生效"""
+"""设置面板 — 现代卡片式布局，实时生效"""
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QCheckBox, QComboBox,
-    QGroupBox, QFormLayout, QGridLayout, QPushButton,
+    QFrame, QFormLayout, QGridLayout, QPushButton,
     QFileDialog, QScrollArea,
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 
 from models.config import AppConfig, PlantMode
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
 from gui.styles import Colors
+
+
+class SettingRow(QFrame):
+    def __init__(self, icon: str, title: str, widget: QWidget, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.CARD_BG};
+                border: none;
+                border-bottom: 1px solid {Colors.BORDER};
+            }}
+            QFrame:last-child {{
+                border-bottom: none;
+            }}
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
+
+        icon_lbl = QLabel(icon)
+        icon_lbl.setStyleSheet("font-size: 18px; background: transparent; border: none;")
+        layout.addWidget(icon_lbl)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"""
+            color: {Colors.TEXT}; font-size: 13px;
+            background: transparent; border: none;
+        """)
+        layout.addWidget(title_lbl)
+        layout.addStretch()
+
+        widget.setStyleSheet(f"""
+            background-color: {Colors.INPUT_BG};
+            border: 1px solid {Colors.BORDER};
+            border-radius: 8px;
+            padding: 5px 10px;
+            color: {Colors.TEXT};
+            min-height: 22px;
+        """)
+        layout.addWidget(widget)
+
+
+class SettingCard(QFrame):
+    def __init__(self, icon: str, title: str, subtitle: str, content_widget: QWidget, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 14px;
+            }}
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(16, 14, 16, 4)
+        header.setSpacing(12)
+
+        icon_lbl = QLabel(icon)
+        icon_lbl.setStyleSheet("font-size: 20px; background: transparent; border: none;")
+        header.addWidget(icon_lbl)
+
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"""
+            color: {Colors.TEXT}; font-size: 14px; font-weight: 600;
+            background: transparent; border: none;
+        """)
+        info.addWidget(title_lbl)
+
+        if subtitle:
+            sub_lbl = QLabel(subtitle)
+            sub_lbl.setStyleSheet(f"""
+                color: {Colors.TEXT_DIM}; font-size: 11px;
+                background: transparent; border: none;
+            """)
+            info.addWidget(sub_lbl)
+
+        header.addLayout(info)
+        header.addStretch()
+        layout.addLayout(header)
+
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(16, 4, 16, 14)
+        content_layout.setSpacing(8)
+        content_layout.addWidget(content_widget)
+        layout.addLayout(content_layout)
+
+
+class ToggleGrid(QFrame):
+    def __init__(self, items: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self._checkboxes = {}
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(6)
+
+        for i, (icon, label_text) in enumerate(items):
+            cb = QCheckBox(f" {icon} {label_text}")
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {Colors.TEXT};
+                    font-size: 12px;
+                    spacing: 4px;
+                }}
+                QCheckBox::indicator {{
+                    width: 16px; height: 16px;
+                    border: 1.5px solid rgba(0, 0, 0, 30);
+                    border-radius: 4px;
+                    background: {Colors.INPUT_BG};
+                }}
+                QCheckBox::indicator:checked {{
+                    background: {Colors.PRIMARY};
+                    border-color: {Colors.PRIMARY};
+                    image: url(gui/icons/check.svg);
+                }}
+            """)
+            self._checkboxes[label_text] = cb
+            grid.addWidget(cb, i // 4, i % 4)
+
+    def get_checkbox(self, name: str) -> QCheckBox:
+        return self._checkboxes[name]
 
 
 class SettingsPanel(QWidget):
@@ -26,154 +151,134 @@ class SettingsPanel(QWidget):
         self._loading = False
 
     def _init_ui(self):
-        # 使用 ScrollArea 包裹以支持小窗口
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
-                background: transparent; border: none;
-                border-radius: 12px;
-            }}
-        """)
+        scroll.setStyleSheet("background: transparent; border: none;")
 
         container = QWidget()
         container.setStyleSheet("background: transparent; border: none;")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
-        group_style = f"""
-            QGroupBox {{
-                background-color: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 12px;
-                margin-top: 20px;
-                padding: 20px 14px 14px 14px;
-                font-weight: bold;
-                font-size: 13px;
-                color: {Colors.PRIMARY};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 14px;
-                top: 4px;
-                padding: 0 6px;
-                color: {Colors.PRIMARY};
-                background-color: {Colors.CARD_BG};
-            }}
-        """
+        # ── 顶部标题 ──
+        header = QHBoxLayout()
+        title = QLabel("参数设置")
+        title.setStyleSheet(f"""
+            color: {Colors.TEXT}; font-size: 20px; font-weight: 700;
+            background: transparent; border: none;
+        """)
+        header.addWidget(title)
+        header.addStretch()
+        layout.addLayout(header)
 
-        # ===== 种植设置 =====
-        plant_group = QGroupBox("种植")
-        plant_group.setStyleSheet(group_style)
-        pf = QFormLayout()
-        pf.setSpacing(6)
+        # ===== 种植设置卡片 =====
+        plant_widget = QWidget()
+        plant_layout = QVBoxLayout(plant_widget)
+        plant_layout.setContentsMargins(0, 0, 0, 0)
+        plant_layout.setSpacing(0)
 
-        row_level = QHBoxLayout()
         self._player_level = QSpinBox()
         self._player_level.setRange(1, 100)
         self._player_level.setFixedWidth(80)
-        row_level.addWidget(QLabel("等级"))
-        row_level.addWidget(self._player_level)
+
         self._strategy_combo = QComboBox()
         self._strategy_combo.addItem("自动最优", PlantMode.BEST_EXP_RATE.value)
         self._strategy_combo.addItem("手动指定", PlantMode.PREFERRED.value)
-        row_level.addWidget(QLabel("策略"))
-        row_level.addWidget(self._strategy_combo, 1)
-        pf.addRow(row_level)
+        self._strategy_combo.setFixedWidth(120)
 
         self._auto_crop_label = QLabel()
         self._auto_crop_label.setStyleSheet(
-            f"color: {Colors.SUCCESS}; font-weight: bold; font-size: 12px; background: transparent; border: none;"
+            f"color: {Colors.SUCCESS}; font-weight: 600; font-size: 12px; background: transparent; border: none;"
         )
-        pf.addRow("推荐:", self._auto_crop_label)
 
         self._crop_combo = QComboBox()
         self._crop_names = get_crop_names()
-        pf.addRow("作物:", self._crop_combo)
+
+        level_row = QHBoxLayout()
+        level_row.addWidget(QLabel("等级"))
+        level_row.addWidget(self._player_level)
+        level_row.addStretch()
+        level_row.addWidget(QLabel("策略"))
+        level_row.addWidget(self._strategy_combo)
+
+        plant_layout.addWidget(self._make_row("🌱", "种植策略", level_row))
+        plant_layout.addWidget(self._make_row("✨", "推荐作物", self._auto_crop_label))
+        plant_layout.addWidget(self._make_row("🌾", "指定作物", self._crop_combo))
 
         self._player_level.valueChanged.connect(self._on_level_changed)
         self._player_level.valueChanged.connect(self._update_auto_crop_label)
         self._strategy_combo.currentIndexChanged.connect(self._on_strategy_changed)
-        plant_group.setLayout(pf)
-        layout.addWidget(plant_group)
 
-        # ===== 功能开关 =====
-        feat_group = QGroupBox("功能")
-        feat_group.setStyleSheet(group_style)
-        grid = QGridLayout()
-        grid.setSpacing(8)
-        grid.setContentsMargins(12, 8, 12, 8)
-        self._cb_harvest = QCheckBox("收获")
-        self._cb_plant = QCheckBox("播种")
-        self._cb_fertilize = QCheckBox("施肥")
-        self._cb_buy_seed = QCheckBox("买种")
-        self._cb_water = QCheckBox("浇水")
-        self._cb_weed = QCheckBox("除草")
-        self._cb_bug = QCheckBox("除虫")
-        self._cb_sell = QCheckBox("出售")
-        self._cb_steal = QCheckBox("偷菜")
-        self._cb_help = QCheckBox("帮忙")
-        self._cb_task = QCheckBox("任务")
-        self._cb_upgrade = QCheckBox("扩建")
-        cbs = [self._cb_harvest, self._cb_plant, self._cb_fertilize,
-               self._cb_buy_seed, self._cb_water, self._cb_weed, self._cb_bug,
-               self._cb_sell, self._cb_steal, self._cb_help,
-               self._cb_task, self._cb_upgrade]
-        for i, cb in enumerate(cbs):
-            grid.addWidget(cb, i // 5, i % 5)
-        feat_group.setLayout(grid)
-        layout.addWidget(feat_group)
+        plant_card = SettingCard("🌿", "种植", "等级、策略与作物选择", plant_widget)
+        layout.addWidget(plant_card)
 
-        # ===== 其他 =====
-        misc_group = QGroupBox("其他")
-        misc_group.setStyleSheet(group_style)
-        mf = QFormLayout()
-        mf.setSpacing(6)
+        # ===== 功能开关卡片 =====
+        toggle_items = [
+            ("🌾", "收获"), ("🌱", "播种"), ("💊", "施肥"), ("🛒", "买种"),
+            ("💧", "浇水"), ("🌿", "除草"), ("🐛", "除虫"), ("💰", "出售"),
+            ("🥷", "偷菜"), ("🤝", "帮忙"), ("🎯", "任务"), ("🔨", "扩建"),
+        ]
+        self._toggle_grid = ToggleGrid(toggle_items)
+
+        feat_card = SettingCard("⚙️", "功能开关", "选择需要自动执行的操作", self._toggle_grid)
+        layout.addWidget(feat_card)
+
+        # ===== 其他设置卡片 =====
+        misc_widget = QWidget()
+        misc_layout = QVBoxLayout(misc_widget)
+        misc_layout.setContentsMargins(0, 0, 0, 0)
+        misc_layout.setSpacing(0)
+
         self._window_keyword = QLineEdit()
-        mf.addRow("窗口关键词:", self._window_keyword)
+        self._window_keyword.setPlaceholderText("QQ农场")
 
-        row_shortcut = QHBoxLayout()
         self._game_shortcut = QLineEdit()
         self._game_shortcut.setPlaceholderText("选择 QQ 农场小程序快捷方式...")
-        row_shortcut.addWidget(self._game_shortcut)
         self._btn_browse = QPushButton("浏览...")
         self._btn_browse.setFixedWidth(70)
         self._btn_browse.setStyleSheet(f"""
             QPushButton {{
-                background-color: rgba(0, 0, 0, 8);
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                color: {Colors.TEXT};
-                padding: 5px 10px;
+                background-color: {Colors.PRIMARY};
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                padding: 5px 14px;
+                font-weight: 600;
+                font-size: 12px;
             }}
             QPushButton:hover {{
-                background-color: rgba(0, 0, 0, 15);
-                border-color: {Colors.BORDER_FOCUS};
+                background-color: {Colors.PRIMARY_HOVER};
             }}
         """)
-        row_shortcut.addWidget(self._btn_browse)
-        mf.addRow("游戏路径:", row_shortcut)
 
-        row_sched = QHBoxLayout()
+        shortcut_row = QHBoxLayout()
+        shortcut_row.addWidget(self._game_shortcut)
+        shortcut_row.addWidget(self._btn_browse)
+
         self._farm_interval = QSpinBox()
         self._farm_interval.setRange(1, 120)
-        self._farm_interval.setSuffix("分")
-        self._farm_interval.setFixedWidth(80)
-        row_sched.addWidget(QLabel("农场"))
-        row_sched.addWidget(self._farm_interval)
+        self._farm_interval.setSuffix(" 分")
+        self._farm_interval.setFixedWidth(90)
+
         self._friend_interval = QSpinBox()
         self._friend_interval.setRange(5, 180)
-        self._friend_interval.setSuffix("分")
-        self._friend_interval.setFixedWidth(80)
-        row_sched.addWidget(QLabel("好友"))
-        row_sched.addWidget(self._friend_interval)
-        row_sched.addStretch()
-        mf.addRow("检查间隔:", row_sched)
-        misc_group.setLayout(mf)
-        self._btn_browse.clicked.connect(self._on_browse_shortcut)
-        layout.addWidget(misc_group)
+        self._friend_interval.setSuffix(" 分")
+        self._friend_interval.setFixedWidth(90)
+
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("农场"))
+        interval_row.addWidget(self._farm_interval)
+        interval_row.addWidget(QLabel("好友"))
+        interval_row.addWidget(self._friend_interval)
+        interval_row.addStretch()
+
+        misc_layout.addWidget(self._make_row("🔍", "窗口关键词", self._window_keyword))
+        misc_layout.addWidget(self._make_row("📁", "游戏路径", shortcut_row))
+        misc_layout.addWidget(self._make_row("⏰", "检查间隔", interval_row))
+
+        misc_card = SettingCard("🔧", "其他", "窗口、路径与调度设置", misc_widget)
+        layout.addWidget(misc_card)
 
         layout.addStretch()
 
@@ -182,6 +287,41 @@ class SettingsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+        self._btn_browse.clicked.connect(self._on_browse_shortcut)
+
+    def _make_row(self, icon: str, title: str, widget) -> QFrame:
+        row = QFrame()
+        row.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.CARD_BG};
+                border: none;
+                border-bottom: 1px solid {Colors.BORDER};
+            }}
+        """)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(12)
+
+        icon_lbl = QLabel(icon)
+        icon_lbl.setStyleSheet("font-size: 16px; background: transparent; border: none;")
+        layout.addWidget(icon_lbl)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"""
+            color: {Colors.TEXT_SECONDARY}; font-size: 12px;
+            background: transparent; border: none;
+            min-width: 80px;
+        """)
+        layout.addWidget(title_lbl)
+        layout.addStretch()
+
+        if isinstance(widget, QWidget):
+            layout.addWidget(widget)
+        elif isinstance(widget, QHBoxLayout):
+            layout.addLayout(widget)
+
+        return row
 
     def _on_browse_shortcut(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -200,10 +340,7 @@ class SettingsPanel(QWidget):
         self._game_shortcut.editingFinished.connect(self._auto_save)
         self._farm_interval.valueChanged.connect(self._auto_save)
         self._friend_interval.valueChanged.connect(self._auto_save)
-        for cb in (self._cb_harvest, self._cb_plant, self._cb_fertilize, self._cb_buy_seed,
-                   self._cb_water, self._cb_weed, self._cb_bug,
-                   self._cb_sell, self._cb_steal, self._cb_help,
-                   self._cb_task, self._cb_upgrade):
+        for cb in self._toggle_grid._checkboxes.values():
             cb.toggled.connect(self._auto_save)
 
     def _auto_save(self):
@@ -219,18 +356,18 @@ class SettingsPanel(QWidget):
         c.planting.game_shortcut_path = self._game_shortcut.text().strip()
         c.schedule.farm_check_minutes = self._farm_interval.value()
         c.schedule.friend_check_minutes = self._friend_interval.value()
-        c.features.auto_harvest = self._cb_harvest.isChecked()
-        c.features.auto_plant = self._cb_plant.isChecked()
-        c.features.auto_fertilize = self._cb_fertilize.isChecked()
-        c.features.auto_buy_seed = self._cb_buy_seed.isChecked()
-        c.features.auto_water = self._cb_water.isChecked()
-        c.features.auto_weed = self._cb_weed.isChecked()
-        c.features.auto_bug = self._cb_bug.isChecked()
-        c.features.auto_sell = self._cb_sell.isChecked()
-        c.features.auto_steal = self._cb_steal.isChecked()
-        c.features.auto_help = self._cb_help.isChecked()
-        c.features.auto_task = self._cb_task.isChecked()
-        c.features.auto_upgrade = self._cb_upgrade.isChecked()
+        c.features.auto_harvest = self._toggle_grid.get_checkbox("收获").isChecked()
+        c.features.auto_plant = self._toggle_grid.get_checkbox("播种").isChecked()
+        c.features.auto_fertilize = self._toggle_grid.get_checkbox("施肥").isChecked()
+        c.features.auto_buy_seed = self._toggle_grid.get_checkbox("买种").isChecked()
+        c.features.auto_water = self._toggle_grid.get_checkbox("浇水").isChecked()
+        c.features.auto_weed = self._toggle_grid.get_checkbox("除草").isChecked()
+        c.features.auto_bug = self._toggle_grid.get_checkbox("除虫").isChecked()
+        c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
+        c.features.auto_steal = self._toggle_grid.get_checkbox("偷菜").isChecked()
+        c.features.auto_help = self._toggle_grid.get_checkbox("帮忙").isChecked()
+        c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
+        c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
         c.save()
         self.config_changed.emit(c)
 
@@ -281,15 +418,15 @@ class SettingsPanel(QWidget):
         self._game_shortcut.setText(c.planting.game_shortcut_path)
         self._farm_interval.setValue(c.schedule.farm_check_minutes)
         self._friend_interval.setValue(c.schedule.friend_check_minutes)
-        self._cb_harvest.setChecked(c.features.auto_harvest)
-        self._cb_plant.setChecked(c.features.auto_plant)
-        self._cb_fertilize.setChecked(c.features.auto_fertilize)
-        self._cb_buy_seed.setChecked(c.features.auto_buy_seed)
-        self._cb_water.setChecked(c.features.auto_water)
-        self._cb_weed.setChecked(c.features.auto_weed)
-        self._cb_bug.setChecked(c.features.auto_bug)
-        self._cb_sell.setChecked(c.features.auto_sell)
-        self._cb_steal.setChecked(c.features.auto_steal)
-        self._cb_help.setChecked(c.features.auto_help)
-        self._cb_task.setChecked(c.features.auto_task)
-        self._cb_upgrade.setChecked(c.features.auto_upgrade)
+        self._toggle_grid.get_checkbox("收获").setChecked(c.features.auto_harvest)
+        self._toggle_grid.get_checkbox("播种").setChecked(c.features.auto_plant)
+        self._toggle_grid.get_checkbox("施肥").setChecked(c.features.auto_fertilize)
+        self._toggle_grid.get_checkbox("买种").setChecked(c.features.auto_buy_seed)
+        self._toggle_grid.get_checkbox("浇水").setChecked(c.features.auto_water)
+        self._toggle_grid.get_checkbox("除草").setChecked(c.features.auto_weed)
+        self._toggle_grid.get_checkbox("除虫").setChecked(c.features.auto_bug)
+        self._toggle_grid.get_checkbox("出售").setChecked(c.features.auto_sell)
+        self._toggle_grid.get_checkbox("偷菜").setChecked(c.features.auto_steal)
+        self._toggle_grid.get_checkbox("帮忙").setChecked(c.features.auto_help)
+        self._toggle_grid.get_checkbox("任务").setChecked(c.features.auto_task)
+        self._toggle_grid.get_checkbox("扩建").setChecked(c.features.auto_upgrade)
