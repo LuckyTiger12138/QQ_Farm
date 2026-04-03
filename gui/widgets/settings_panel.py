@@ -313,6 +313,25 @@ class SettingsPanel(QWidget):
         self._player_level = QSpinBox()
         self._player_level.setRange(1, 100)
         self._player_level.setFixedWidth(80)
+        self._player_level.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+            QSpinBox:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background: transparent; border: none;
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background: rgba(0, 122, 255, 10);
+            }}
+        """)
 
         self._strategy_combo = QComboBox()
         self._strategy_combo.addItem("自动最优", PlantMode.BEST_EXP_RATE.value)
@@ -397,11 +416,43 @@ class SettingsPanel(QWidget):
         self._farm_interval.setRange(1, 120)
         self._farm_interval.setSuffix(" 分")
         self._farm_interval.setFixedWidth(90)
+        self._farm_interval.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background: transparent; border: none;
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background: rgba(0, 122, 255, 10);
+            }}
+        """)
 
         self._friend_interval = QSpinBox()
         self._friend_interval.setRange(5, 180)
         self._friend_interval.setSuffix(" 分")
         self._friend_interval.setFixedWidth(90)
+        self._friend_interval.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background: transparent; border: none;
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background: rgba(0, 122, 255, 10);
+            }}
+        """)
 
         interval_row = QHBoxLayout()
         interval_row.addWidget(QLabel("农场"))

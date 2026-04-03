@@ -55,7 +55,7 @@ class CVDetector:
         "ui_element": 0.8,
         "land": 0.7,
         "seed": 0.8,
-        "shop": 0.6,
+        "shop": 0.8,
         "unknown": 0.8,
     }
     # 内置默认值（用于"恢复默认"）
@@ -66,7 +66,7 @@ class CVDetector:
         "ui_element": 0.8,
         "land": 0.7,
         "seed": 0.8,
-        "shop": 0.6,
+        "shop": 0.8,
         "unknown": 0.8,
     }
 

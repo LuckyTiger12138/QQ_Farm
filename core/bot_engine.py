@@ -436,8 +436,19 @@ class BotEngine(QObject):
     # ============================================================
 
     def _prepare_window(self) -> tuple | None:
-        # 优先使用缓存窗口，找不到再搜索
         window = self.window_manager._cached_window
+        if not window:
+            window = self.window_manager.refresh_window_info(
+                self.config.window_title_keyword,
+                auto_launch=True,
+                shortcut_path=self.config.planting.game_shortcut_path
+            )
+        else:
+            window = self.window_manager.find_window(
+                self.config.window_title_keyword,
+                auto_launch=True,
+                shortcut_path=self.config.planting.game_shortcut_path
+            )
         if not window:
             window = self.window_manager.refresh_window_info(
                 self.config.window_title_keyword,
@@ -543,16 +554,36 @@ class BotEngine(QObject):
                 logger.info("收到停止/暂停信号，中断当前操作")
                 break
 
-            # 每轮检测窗口是否存在，窗口关闭时快速退出
+            # 每轮检测窗口是否存在，窗口关闭时尝试自动重启
             window = self.window_manager.refresh_window_info(
                 self.config.window_title_keyword,
                 auto_launch=False,
                 shortcut_path=""
             )
             if not window:
-                logger.warning("游戏窗口已关闭，中断操作")
-                result["message"] = "窗口已关闭"
-                break
+                logger.warning("游戏窗口已关闭，尝试自动重启...")
+                self.log_message.emit("检测到游戏窗口关闭，正在尝试自动重启...")
+                window = self.window_manager.find_window(
+                    self.config.window_title_keyword,
+                    auto_launch=True,
+                    shortcut_path=self.config.planting.game_shortcut_path
+                )
+                if not window:
+                    logger.error("自动重启游戏失败")
+                    self.log_message.emit("自动重启游戏失败，请手动打开 QQ 农场")
+                    result["message"] = "窗口已关闭且重启失败"
+                    break
+                # 重启成功，更新窗口信息和 action_executor
+                self.window_manager.resize_window(
+                    self.config.planting.window_width,
+                    self.config.planting.window_height
+                )
+                time.sleep(0.5)
+                window = self.window_manager._cached_window
+                if window:
+                    rect = (window.left, window.top, window.width, window.height)
+                    self.action_executor.update_window_rect(rect)
+                    self.log_message.emit(f"游戏已自动重启，窗口: {window.title}")
 
             cv_image, detections, _ = self._capture_and_detect(rect, save=False)
             if cv_image is None:
