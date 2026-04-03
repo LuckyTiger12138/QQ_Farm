@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QStackedWidget,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QImage
 from PIL import Image
 
@@ -84,6 +84,11 @@ class MainWindow(QMainWindow):
         # 页面 3: 日志页
         self._log_panel = LogPanel()
         self._stack.addWidget(self._log_panel)
+
+        # 状态面板定时刷新（每秒）
+        self._status_refresh_timer = QTimer(self)
+        self._status_refresh_timer.setInterval(1000)
+        self._status_refresh_timer.timeout.connect(self._refresh_status)
 
         content_layout.addWidget(self._stack)
         body.addWidget(content, 1)
@@ -211,14 +216,17 @@ class MainWindow(QMainWindow):
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
             self._btn_stop.setEnabled(True)
+            self._status_refresh_timer.start()
 
     def _on_pause(self):
         if self._btn_pause.text() == "暂停":
             self.engine.pause()
             self._btn_pause.setText("恢复")
+            self._status_refresh_timer.stop()
         else:
             self.engine.resume()
             self._btn_pause.setText("暂停")
+            self._status_refresh_timer.start()
 
     def _on_stop(self):
         self.engine.stop()
@@ -226,13 +234,19 @@ class MainWindow(QMainWindow):
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
         self._btn_pause.setText("暂停")
+        self._status_refresh_timer.stop()
 
     def _on_test(self):
         """测试施肥流程"""
         self.engine.test_fertilize()
 
     def _on_state_changed(self, state: str):
-        self._status_panel.update_stats(self.engine.scheduler.get_stats())
+        self._refresh_status()
+
+    def _refresh_status(self):
+        """定时刷新状态面板数据"""
+        if self._stack.currentIndex() == 0:
+            self._status_panel.update_stats(self.engine.scheduler.get_stats())
 
     def _on_config_changed(self, config: AppConfig):
         self.config = config
