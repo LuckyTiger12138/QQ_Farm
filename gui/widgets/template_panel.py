@@ -1503,11 +1503,11 @@ class TemplatePanel(QWidget):
         btn_retake.clicked.connect(self._on_capture)
         tbl.addWidget(btn_retake)
 
-        btn_save = QPushButton("保存选区")
-        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setStyleSheet(_icon_button(Colors.SUCCESS, "#2DA44E"))
-        btn_save.clicked.connect(self._on_save_crop)
-        tbl.addWidget(btn_save)
+        self._btn_save = QPushButton("保存选区")
+        self._btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_save.setStyleSheet(_icon_button(Colors.SUCCESS, "#2DA44E"))
+        self._btn_save.clicked.connect(self._on_save_crop)
+        tbl.addWidget(self._btn_save)
 
         btn_back = QPushButton("返回列表")
         btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1906,6 +1906,16 @@ class TemplatePanel(QWidget):
             box.exec()
             return
         crop_bgr, w, h = result
+
+        box = _styled_msg_box(self, "确认替换",
+            f"确定替换模板「{self._replace_target_name}」？\n"
+            f"选区大小: {w}x{h} px\n"
+            f"此操作不可撤销。",
+            icon=QMessageBox.Icon.Question,
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default=QMessageBox.StandardButton.Yes)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
 
         fp = self._replace_target_path
         ok, buf = cv2.imencode('.png', crop_bgr)
