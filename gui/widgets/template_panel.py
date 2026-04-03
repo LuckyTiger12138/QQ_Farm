@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QFrame, QCheckBox, QLineEdit, QFileDialog,
     QSizePolicy, QComboBox, QDialog, QFormLayout, QDialogButtonBox,
     QSpacerItem, QSizePolicy as QSP, QSlider, QDoubleSpinBox, QSplitter,
-    QMessageBox, QInputDialog,
+    QMessageBox, QInputDialog, QSpinBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QThread, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QFont
@@ -97,6 +97,47 @@ def _outline_button(color: str = Colors.TEXT_SECONDARY) -> str:
     """
 
 
+def _styled_msg_box(parent, title: str, text: str,
+                    icon=QMessageBox.Icon.Question,
+                    buttons: QMessageBox.StandardButton = (
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No),
+                    default=QMessageBox.StandardButton.No) -> QMessageBox:
+    """创建带正确背景色的 QMessageBox"""
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(icon)
+    box.setStandardButtons(buttons)
+    box.setDefaultButton(default)
+    box.setStyleSheet(f"""
+        QMessageBox {{
+            background-color: {Colors.CARD_BG};
+            color: {Colors.TEXT};
+        }}
+        QMessageBox QLabel {{
+            color: {Colors.TEXT};
+            background: transparent;
+            font-size: 13px;
+        }}
+        QMessageBox QPushButton {{
+            background-color: {Colors.CARD_BG};
+            color: {Colors.TEXT};
+            border: 1px solid rgba(0,0,0,20);
+            border-radius: 6px;
+            padding: 6px 20px;
+            min-width: 80px;
+            font-size: 13px;
+        }}
+        QMessageBox QPushButton:hover {{
+            background-color: rgba(0,0,0,6);
+        }}
+        QMessageBox QDialogButtonBox {{
+            background-color: {Colors.CARD_BG};
+        }}
+    """)
+    return box
+
+
 # ── 模板卡片 ────────────────────────────────────────────────
 
 
@@ -148,10 +189,9 @@ class TemplateCard(QFrame):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            # 检查是否点击了子控件（checkbox、删除按钮）
             child = self.childAt(e.pos())
-            if child is not None and child is not self:
-                # 让子控件正常处理事件，不触发 clicked
+            # 只有点击 checkbox 或删除按钮时不触发 clicked
+            if child is not None and isinstance(child, (QCheckBox, QPushButton)):
                 super().mousePressEvent(e)
                 return
             self.clicked.emit(self._name)
@@ -778,9 +818,9 @@ class TemplateDetailPanel(QFrame):
         qimg = QImage(data, w, h, ch * w, QImage.Format.Format_RGB888)
         px = QPixmap.fromImage(qimg)
         # 限制最大显示尺寸，适应容器宽度
-        max_h = self._test_scroll.viewportport().height() - 4
+        max_h = self._test_scroll.viewport().height() - 4
         scaled = px.scaled(
-            self._test_scroll.viewportport().width() - 4,
+            self._test_scroll.viewport().width() - 4,
             max(max_h, 200),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
@@ -793,44 +833,87 @@ class TemplateDetailPanel(QFrame):
         """重命名模板"""
         if not self._name:
             return
-        new_name, ok = QInputDialog.getText(
-            self, "重命名模板", "新名称:", self._name)
-        if not ok or new_name == self._name:
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("重命名模板")
+        dlg.setLabelText("新名称:")
+        dlg.setTextValue(self._name)
+        dlg.setStyleSheet(f"""
+            QInputDialog, QInputDialog QFrame {{
+                background-color: {Colors.CARD_BG};
+                color: {Colors.TEXT};
+            }}
+            QInputDialog QLabel {{
+                color: {Colors.TEXT};
+                background: transparent;
+                font-size: 13px;
+            }}
+            QInputDialog QLineEdit {{
+                background-color: {Colors.WINDOW_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: {Colors.TEXT};
+            }}
+            QInputDialog QPushButton {{
+                background-color: {Colors.CARD_BG};
+                color: {Colors.TEXT};
+                border: 1px solid rgba(0,0,0,20);
+                border-radius: 6px;
+                padding: 6px 20px;
+                min-width: 80px;
+            }}
+            QInputDialog QPushButton:hover {{
+                background-color: rgba(0,0,0,6);
+            }}
+            QInputDialog QDialogButtonBox {{
+                background-color: {Colors.CARD_BG};
+            }}
+        """)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_name = dlg.textValue().strip()
+        if not new_name or new_name == self._name:
             return
         # 验证前缀
         prefix = new_name.split("_")[0]
         if prefix not in TEMPLATE_CATEGORIES:
-            QMessageBox.warning(self, "前缀无效",
-                              f"名称必须以有效前缀开头（btn_, icon, crop, ui, land, seed, shop）")
+            box = _styled_msg_box(self, "前缀无效",
+                "名称必须以有效前缀开头（btn_, bth_, icon_, crop_, ui_, land_, seed_, shop_）",
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
             return
+        old_name = self._name
         # 检查是否已存在
         new_fp = os.path.join(self._detector._templates_dir, f"{new_name}.png")
         if os.path.exists(new_fp) and new_name != self._name:
-            r = QMessageBox.question(
-                self, "覆盖", f"「{new_name}」已存在，是否覆盖？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r != QMessageBox.StandardButton.Yes:
+            box = _styled_msg_box(self, "覆盖",
+                f"「{new_name}」已存在，是否覆盖？")
+            if box.exec() != QMessageBox.StandardButton.Yes:
                 return
         # 重命名文件
         old_fp = self._filepath
         try:
-            if os.path.exists(new_fp) and new_name != self._name:
-                pass
+            if os.path.exists(new_fp) and new_name != old_name:
+                os.remove(new_fp)
             os.rename(old_fp, new_fp)
             # 更新阈值和禁用状态
             old_th = self._detector.get_all_thresholds()
-            if self._name in old_th:
-                self._detector.set_template_threshold(new_name, old_th[self._name])
-                self._detector.reset_template_threshold(self._name)
-            if self._detector.is_template_disabled(self._name):
-                self._detector.set_template_enabled(self._name, True)
+            if old_name in old_th:
+                self._detector.set_template_threshold(new_name, old_th[old_name])
+                self._detector.reset_template_threshold(old_name)
+            if self._detector.is_template_disabled(old_name):
+                self._detector.set_template_enabled(old_name, True)
                 self._detector.set_template_enabled(new_name, False)
             self._filepath = new_fp
             self._name = new_name
             self._info_name.setText(new_name)
             self.template_renamed.emit(old_name, new_name)
         except Exception as e:
-            QMessageBox.warning(self, "重命名失败", str(e))
+            box = _styled_msg_box(self, "重命名失败", str(e),
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
 
     def _on_replace_image(self):
         """替换模板图片"""
@@ -845,7 +928,11 @@ class TemplateDetailPanel(QFrame):
             buf = np.fromfile(fp, dtype=np.uint8)
             img = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
             if img is None:
-                QMessageBox.warning(self, "错误", "无法读取图片")
+                box = _styled_msg_box(self, "错误", "无法读取图片",
+                    icon=QMessageBox.Icon.Warning,
+                    buttons=QMessageBox.StandardButton.Ok)
+                box.exec()
+                return
                 return
             ok, out = cv2.imencode('.png', img)
             if ok:
@@ -858,7 +945,10 @@ class TemplateDetailPanel(QFrame):
                     self._preview.setPixmap(scaled)
                 self.template_changed.emit()
         except Exception as e:
-            QMessageBox.warning(self, "替换失败", str(e))
+            box = _styled_msg_box(self, "替换失败", str(e),
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
 
     def _on_toggle_enabled(self):
         """切换启用/禁用状态"""
@@ -884,11 +974,10 @@ class TemplateDetailPanel(QFrame):
         """删除当前模板"""
         if not self._name:
             return
-        r = QMessageBox.question(
-            self, "删除模板", f"确定删除「{self._name}」？此操作不可撤销。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if r != QMessageBox.StandardButton.Yes:
+        box = _styled_msg_box(self, "删除模板",
+            f"确定删除「{self._name}」？此操作不可撤销。",
+            icon=QMessageBox.Icon.Warning)
+        if box.exec() != QMessageBox.StandardButton.Yes:
             return
         if os.path.exists(self._filepath):
             os.remove(self._filepath)
@@ -1284,6 +1373,12 @@ class TemplatePanel(QWidget):
         self._btn_refresh.clicked.connect(self._load_templates)
         lay.addWidget(self._btn_refresh)
 
+        self._btn_cat_thresh = QPushButton("类别阈值")
+        self._btn_cat_thresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_cat_thresh.setStyleSheet(_outline_button())
+        self._btn_cat_thresh.clicked.connect(self._on_category_thresholds)
+        lay.addWidget(self._btn_cat_thresh)
+
         lay.addStretch()
 
         self._count = QLabel("")
@@ -1320,6 +1415,7 @@ class TemplatePanel(QWidget):
         self._sort.setFixedHeight(30)
         self._sort.setMinimumWidth(110)
         self._sort.addItems(list(_SORT_MAP.keys()))
+        self._sort.setCurrentIndex(2)  # 默认"最近修改"
         self._sort.currentIndexChanged.connect(self._apply_filters)
         lay.addWidget(self._sort)
 
@@ -1509,12 +1605,9 @@ class TemplatePanel(QWidget):
         self.templates_changed.emit()
 
     def _on_delete(self, name: str):
-        from PyQt6.QtWidgets import QMessageBox
-        r = QMessageBox.question(
-            self, "删除模板", f"确定删除「{name}」？此操作不可撤销。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if r != QMessageBox.StandardButton.Yes:
+        box = _styled_msg_box(self, "删除模板",
+            f"确定删除「{name}」？此操作不可撤销。")
+        if box.exec() != QMessageBox.StandardButton.Yes:
             return
         fp = os.path.join(self._detector._templates_dir, f"{name}.png")
         if not os.path.exists(fp):
@@ -1549,10 +1642,9 @@ class TemplatePanel(QWidget):
                     continue
             dest = os.path.join(self._detector._templates_dir, f"{name}.png")
             if os.path.exists(dest):
-                r = QMessageBox.question(
-                    self, "覆盖", f"「{name}」已存在，是否覆盖？",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if r == QMessageBox.StandardButton.No:
+                box = _styled_msg_box(self, "覆盖",
+                    f"「{name}」已存在，是否覆盖？")
+                if box.exec() != QMessageBox.StandardButton.Yes:
                     continue
             buf = np.fromfile(fp, dtype=np.uint8)
             img = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
@@ -1564,6 +1656,181 @@ class TemplatePanel(QWidget):
         if n:
             self._load_templates()
             self.templates_changed.emit()
+
+    # ── 类别默认阈值 ───────────────────────────────────────
+
+    def _on_category_thresholds(self):
+        """打开类别默认阈值设置对话框"""
+        from PyQt6.QtWidgets import QSlider, QFormLayout, QSpinBox, QDoubleSpinBox
+        from PyQt6.QtCore import Qt
+        from gui.styles import Colors
+
+        cat_map = self._detector.get_category_defaults()
+        if not cat_map:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("类别默认阈值设置")
+        dlg.setMinimumWidth(420)
+        dlg.setStyleSheet(f"""
+            QDialog {{
+                background-color: {Colors.CARD_BG}; color: {Colors.TEXT};
+            }}
+            QDialog QLabel {{
+                color: {Colors.TEXT}; background: transparent;
+            }}
+            QDialog QSlider {{
+                min-height: 22px;
+            }}
+            QDialog QDoubleSpinBox {{
+                background-color: {Colors.WINDOW_BG}; color: {Colors.TEXT};
+                border: 1px solid rgba(0,0,0,25); border-radius: 6px;
+                padding: 4px 8px; min-width: 70px;
+            }}
+            QDialog QPushButton {{
+                background-color: {Colors.CARD_BG}; color: {Colors.TEXT};
+                border: 1px solid rgba(0,0,0,25); border-radius: 6px;
+                padding: 6px 20px; min-width: 80px;
+            }}
+            QDialog QPushButton:hover {{
+                background-color: rgba(0,0,0,6);
+            }}
+            QDialog QDialogButtonBox {{
+                background-color: {Colors.CARD_BG};
+            }}
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        hint = QLabel("调整每个类别的默认匹配阈值。未单独设置阈值的模板将使用其类别的默认值。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{Colors.TEXT_SECONDARY}; font-size:12px; background:transparent;")
+        layout.addWidget(hint)
+
+        # 滚动区域容纳所有类别
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        container = QWidget()
+        container.setStyleSheet("background:transparent;")
+        form = QVBoxLayout(container)
+        form.setSpacing(8)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        sliders: dict[str, QSlider] = {}
+        spinboxes: dict[str, QDoubleSpinBox] = {}
+
+        builtin = CVDetector._BUILTIN_CATEGORY_DEFAULTS
+        for cat, default_val in cat_map.items():
+            cat_color = _CAT_COLORS.get(cat, "#AEAEB2")
+            cat_label = _CAT_LABELS.get(cat, cat)
+            builtin_val = builtin.get(cat, 0.8)
+
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            # 类别标签（带颜色圆点）
+            tag = QLabel(f"● {cat_label}")
+            tag.setFixedWidth(100)
+            tag.setStyleSheet(
+                f"color:{cat_color}; font-weight:600; font-size:12px; background:transparent;")
+
+            # 滑块
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(10, 100)
+            slider.setValue(int(default_val * 100))
+            slider.setStyleSheet(f"""
+                QSlider::groove:horizontal {{
+                    height: 4px; background: rgba(0,0,0,12); border-radius: 2px;
+                }}
+                QSlider::handle:horizontal {{
+                    width: 16px; height: 16px; margin: -6px 0;
+                    background: {cat_color}; border-radius: 8px;
+                }}
+                QSlider::sub-page:horizontal {{
+                    background: {cat_color}; border-radius: 2px;
+                }}
+            """)
+
+            # 数值显示
+            spin = QDoubleSpinBox()
+            spin.setRange(0.1, 1.0)
+            spin.setSingleStep(0.01)
+            spin.setDecimals(2)
+            spin.setValue(default_val)
+            spin.setFixedWidth(72)
+
+            # 内置默认提示
+            builtin_lbl = QLabel(f"(内置 {builtin_val:.1f})")
+            builtin_lbl.setStyleSheet(
+                f"color:{Colors.TEXT_DIM}; font-size:10px; background:transparent;")
+            builtin_lbl.setFixedWidth(65)
+
+            # 双向绑定
+            def _slider_changed(val, s=spin):
+                s.blockSignals(True)
+                s.setValue(val / 100.0)
+                s.blockSignals(False)
+
+            def _spin_changed(val, s=slider):
+                s.blockSignals(True)
+                s.setValue(int(val * 100))
+                s.blockSignals(False)
+
+            slider.valueChanged.connect(_slider_changed)
+            spin.valueChanged.connect(_spin_changed)
+
+            row.addWidget(tag)
+            row.addWidget(slider, 1)
+            row.addWidget(spin)
+            row.addWidget(builtin_lbl)
+
+            sliders[cat] = slider
+            spinboxes[cat] = spin
+            form.addLayout(row)
+
+        form.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        # 按钮行
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        btn_reset = QPushButton("恢复内置默认")
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setStyleSheet(_outline_button())
+
+        def _reset_all():
+            self._detector.reset_category_defaults()
+            for cat, builtin_val in builtin.items():
+                if cat in sliders:
+                    sliders[cat].blockSignals(True)
+                    spinboxes[cat].blockSignals(True)
+                    sliders[cat].setValue(int(builtin_val * 100))
+                    spinboxes[cat].setValue(builtin_val)
+                    sliders[cat].blockSignals(False)
+                    spinboxes[cat].blockSignals(False)
+
+        btn_reset.clicked.connect(_reset_all)
+        btn_row.addWidget(btn_reset)
+        btn_row.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.setStyleSheet(f"background-color:{Colors.CARD_BG};")
+        btn_row.addWidget(btn_box)
+        layout.addLayout(btn_row)
+
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            for cat, spin in spinboxes.items():
+                self._detector.set_category_default(cat, spin.value())
+            self._load_templates()
 
     # ── 采集 ───────────────────────────────────────────────
 
@@ -1590,14 +1857,18 @@ class TemplatePanel(QWidget):
 
     def _on_cap_err(self, msg: str):
         self._btn_capture.setEnabled(True)
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(self, "截屏失败", msg)
+        box = _styled_msg_box(self, "截屏失败", msg,
+            icon=QMessageBox.Icon.Warning,
+            buttons=QMessageBox.StandardButton.Ok)
+        box.exec()
 
     def _on_save_crop(self):
-        from PyQt6.QtWidgets import QMessageBox
         result = self._selector.get_crop()
         if not result:
-            QMessageBox.information(self, "提示", "请先用鼠标框选一个区域")
+            box = _styled_msg_box(self, "提示", "请先用鼠标框选一个区域",
+                icon=QMessageBox.Icon.Information,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
             return
         crop_bgr, w, h = result
 
@@ -1610,10 +1881,9 @@ class TemplatePanel(QWidget):
 
         fp = os.path.join(self._detector._templates_dir, f"{name}.png")
         if os.path.exists(fp):
-            r = QMessageBox.question(
-                self, "覆盖", f"「{name}」已存在，是否覆盖？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if r != QMessageBox.StandardButton.Yes:
+            box = _styled_msg_box(self, "覆盖",
+                f"「{name}」已存在，是否覆盖？")
+            if box.exec() != QMessageBox.StandardButton.Yes:
                 return
 
         ok, buf = cv2.imencode('.png', crop_bgr)
@@ -1623,7 +1893,10 @@ class TemplatePanel(QWidget):
             self._load_templates()
             self.templates_changed.emit()
         else:
-            QMessageBox.warning(self, "保存失败", "无法编码图片")
+            box = _styled_msg_box(self, "保存失败", "无法编码图片",
+                icon=QMessageBox.Icon.Warning,
+                buttons=QMessageBox.StandardButton.Ok)
+            box.exec()
 
     def _show_collector(self):
         self._splitter.hide()

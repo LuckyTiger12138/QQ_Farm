@@ -160,6 +160,32 @@ QScrollArea {{
     background: transparent;
 }}
 
+QMessageBox {{
+    background-color: {Colors.CARD_BG};
+    color: {Colors.TEXT};
+}}
+QMessageBox QLabel {{
+    color: {Colors.TEXT};
+    background: transparent;
+}}
+QMessageBox QPushButton {{
+    background-color: {Colors.CARD_BG};
+    color: {Colors.TEXT};
+    border: 1px solid {Colors.BORDER};
+    border-radius: 6px;
+    padding: 6px 20px;
+    min-width: 80px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: rgba(0,0,0,6);
+}}
+QMessageBox QDialogButtonBox {{
+    background-color: {Colors.CARD_BG};
+}}
+QMessageBox QScrollArea {{
+    background: transparent;
+}}
+
 QToolTip {{
     background-color: {Colors.CARD_BG};
     color: {Colors.TEXT};

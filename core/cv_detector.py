@@ -58,6 +58,17 @@ class CVDetector:
         "shop": 0.6,
         "unknown": 0.8,
     }
+    # 内置默认值（用于"恢复默认"）
+    _BUILTIN_CATEGORY_DEFAULTS: dict[str, float] = {
+        "button": 0.8,
+        "status_icon": 0.8,
+        "crop": 0.8,
+        "ui_element": 0.8,
+        "land": 0.7,
+        "seed": 0.8,
+        "shop": 0.6,
+        "unknown": 0.8,
+    }
 
     def __init__(self, templates_dir: str = "templates"):
         self._templates_dir = templates_dir
@@ -67,6 +78,7 @@ class CVDetector:
         self._disabled_file = os.path.join(templates_dir, "disabled.json")
         self._thresholds: dict[str, float] = {}
         self._thresholds_file = os.path.join(templates_dir, "thresholds.json")
+        self._category_overrides: dict[str, float] = {}  # 用户自定义的类别阈值
         self._load_disabled()
         self._load_thresholds()
 
@@ -107,31 +119,38 @@ class CVDetector:
     # ── 单模板阈值 ─────────────────────────────────────────
 
     def _load_thresholds(self):
-        """从 thresholds.json 加载单模板阈值"""
+        """从 thresholds.json 加载单模板阈值和类别阈值覆盖"""
         if os.path.exists(self._thresholds_file):
             try:
                 with open(self._thresholds_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._thresholds = {k: float(v) for k, v in data.get("thresholds", {}).items()}
+                self._category_overrides = {k: float(v) for k, v in data.get("category_overrides", {}).items()}
             except Exception as e:
                 logger.warning(f"读取模板阈值配置失败: {e}")
                 self._thresholds = {}
+                self._category_overrides = {}
 
     def _save_thresholds(self):
-        """保存单模板阈值到 thresholds.json"""
+        """保存单模板阈值和类别阈值覆盖到 thresholds.json"""
         try:
             os.makedirs(os.path.dirname(self._thresholds_file), exist_ok=True)
             with open(self._thresholds_file, "w", encoding="utf-8") as f:
-                json.dump({"thresholds": self._thresholds}, f, ensure_ascii=False, indent=2)
+                json.dump({
+                    "thresholds": self._thresholds,
+                    "category_overrides": self._category_overrides,
+                }, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"保存模板阈值配置失败: {e}")
 
     def get_template_threshold(self, name: str) -> float:
-        """获取模板阈值：单模板 > 类别默认 > 全局默认 0.8"""
+        """获取模板阈值：单模板 > 类别覆盖 > 内置类别默认 > 全局默认 0.8"""
         if name in self._thresholds:
             return self._thresholds[name]
         prefix = name.split("_")[0]
         cat = TEMPLATE_CATEGORIES.get(prefix, "unknown")
+        if cat in self._category_overrides:
+            return self._category_overrides[cat]
         return self.CATEGORY_DEFAULTS.get(cat, 0.8)
 
     def set_template_threshold(self, name: str, value: float):
@@ -148,6 +167,25 @@ class CVDetector:
         if name in self._thresholds:
             del self._thresholds[name]
             self._save_thresholds()
+
+    # ── 类别默认阈值 ─────────────────────────────────────────
+
+    def get_category_defaults(self) -> dict[str, float]:
+        """获取当前生效的类别阈值（用户覆盖 > 内置默认）"""
+        result = dict(self.CATEGORY_DEFAULTS)
+        result.update(self._category_overrides)
+        return result
+
+    def set_category_default(self, category: str, value: float):
+        """设置类别默认阈值覆盖"""
+        value = max(0.1, min(1.0, round(value, 2)))
+        self._category_overrides[category] = value
+        self._save_thresholds()
+
+    def reset_category_defaults(self):
+        """重置所有类别阈值为内置默认值"""
+        self._category_overrides.clear()
+        self._save_thresholds()
 
     def get_all_template_names(self) -> list[str]:
         """返回 templates/ 目录下所有模板文件名（不含扩展名）"""
@@ -391,22 +429,41 @@ class CVDetector:
                      results: list[DetectResult]) -> np.ndarray:
         """在截图上绘制检测结果（用于调试）"""
         output = screenshot.copy()
+        overlay = output.copy()
         colors = {
-            "button": (0, 255, 0),
-            "status_icon": (0, 0, 255),
-            "crop": (255, 165, 0),
-            "ui_element": (255, 255, 0),
-            "land": (128, 128, 128),
-            "seed": (255, 0, 255),
-            "unknown": (255, 255, 255),
+            "button": (0, 200, 255),      # 亮橙
+            "status_icon": (0, 100, 255),  # 亮蓝
+            "crop": (0, 255, 100),         # 亮绿
+            "ui_element": (255, 255, 0),   # 青
+            "land": (180, 180, 180),       # 浅灰
+            "seed": (255, 50, 255),        # 粉紫
+            "shop": (0, 200, 200),         # 黄绿
+            "unknown": (0, 0, 255),        # 红色
         }
         for r in results:
-            color = colors.get(r.category, (255, 255, 255))
+            color = colors.get(r.category, (0, 0, 255))
             x1, y1, x2, y2 = r.bbox
-            cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
-            label = f"{r.name} {r.confidence:.2f}"
-            cv2.putText(output, label, (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            # 半透明填充
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+            # 粗边框
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 3)
+        # 混合半透明叠加
+        cv2.addWeighted(overlay, 0.25, output, 0.75, 0, output)
+        # 标签绘制在叠加后，保证清晰
+        for r in results:
+            color = colors.get(r.category, (0, 0, 255))
+            x1, y1, x2, y2 = r.bbox
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 3)
+            label = f"{r.confidence:.2f}"
+            # 标签背景
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale = max(0.5, min(output.shape[0] / 800, 1.0))
+            thickness = max(1, int(scale * 1.5))
+            (tw, th), _ = cv2.getTextSize(label, font, scale, thickness)
+            ly = max(y1 - 6, th + 4)
+            cv2.rectangle(output, (x1, ly - th - 4), (x1 + tw + 8, ly + 4), color, -1)
+            cv2.putText(output, label, (x1 + 4, ly),
+                        font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
         return output
 
 
