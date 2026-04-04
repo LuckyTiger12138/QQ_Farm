@@ -62,7 +62,7 @@ class PopupStrategy(BaseStrategy):
             if cv_img is None:
                 return
             shop_close = self.cv_detector.detect_single_template(
-                cv_img, "btn_shop_close", threshold=0.8)
+                cv_img, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
             close_btn = shop_close[0] if shop_close else self.find_by_name(dets, "btn_close")
             if close_btn:
                 self.click(close_btn.x, close_btn.y, "关闭商店", ActionType.CLOSE_POPUP)

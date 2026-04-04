@@ -70,9 +70,9 @@ class TaskStrategy(BaseStrategy):
 
             # 仓库页面（售卖任务）→ 根据配置出售
             batch_sell = self.cv_detector.detect_single_template(
-                cv_img, "btn_batch_sell", threshold=0.8)
+                cv_img, "btn_batch_sell", threshold=self.cv_detector.get_template_threshold("btn_batch_sell"))
             sell_btn = self.cv_detector.detect_single_template(
-                cv_img, "btn_sell", threshold=0.8)
+                cv_img, "btn_sell", threshold=self.cv_detector.get_template_threshold("btn_sell"))
             if batch_sell or sell_btn:
                 if self.sell_config and self.sell_config.mode == SellMode.SELECTIVE:
                     sell_actions = self._selective_sell(rect)
@@ -105,7 +105,7 @@ class TaskStrategy(BaseStrategy):
         if cv_img is None:
             return []
         batch_btn = self.cv_detector.detect_single_template(
-            cv_img, "btn_batch_sell", threshold=0.8)
+            cv_img, "btn_batch_sell", threshold=self.cv_detector.get_template_threshold("btn_batch_sell"))
         if not batch_btn:
             return []
 
@@ -119,7 +119,7 @@ class TaskStrategy(BaseStrategy):
             if cv_img is None:
                 return []
             confirm = self.cv_detector.detect_single_template(
-                cv_img, "btn_confirm", threshold=0.8)
+                cv_img, "btn_confirm", threshold=self.cv_detector.get_template_threshold("btn_confirm"))
             if confirm:
                 self.click(confirm[0].x, confirm[0].y, "确认出售", ActionType.SELL)
                 logger.info("任务: 批量出售完成")
@@ -154,7 +154,7 @@ class TaskStrategy(BaseStrategy):
             if self.stopped:
                 break
             fruit_dets = self.cv_detector.detect_single_template(
-                cv_img, f"shop_{crop_name}", threshold=0.85)
+                cv_img, f"shop_{crop_name}", threshold=self.cv_detector.get_template_threshold(f"shop_{crop_name}"))
             if not fruit_dets:
                 continue
 
@@ -167,7 +167,7 @@ class TaskStrategy(BaseStrategy):
             if cv_img2 is None:
                 break
             sell_btn = self.cv_detector.detect_single_template(
-                cv_img2, "btn_sell", threshold=0.8)
+                cv_img2, "btn_sell", threshold=self.cv_detector.get_template_threshold("btn_sell"))
             if sell_btn:
                 self.click(sell_btn[0].x, sell_btn[0].y, f"出售{crop_name}")
                 time.sleep(0.5)  # 等待出售确认弹窗
@@ -176,7 +176,7 @@ class TaskStrategy(BaseStrategy):
                 cv_img3, dets3, _ = self.capture(rect)
                 if cv_img3 is not None:
                     confirm = self.cv_detector.detect_single_template(
-                        cv_img3, "btn_confirm", threshold=0.8)
+                        cv_img3, "btn_confirm", threshold=self.cv_detector.get_template_threshold("btn_confirm"))
                     if confirm:
                         self.click(confirm[0].x, confirm[0].y,
                                    f"确认出售{crop_name}", ActionType.SELL)

@@ -41,26 +41,28 @@ class PlantStrategy(BaseStrategy):
         if cv_img is None:
             return False
 
-        # 检查关闭按钮（优先 btn_close，其次 btn_info_close）
-        close_btn = self.cv_detector.detect_single_template(
-            cv_img, "btn_close", threshold=0.6)
-        if not close_btn:
-            close_btn = self.cv_detector.detect_single_template(
-                cv_img, "btn_info_close", threshold=0.6)
-
-        if close_btn:
-            self.click(close_btn[0].x, close_btn[0].y, "关闭个人信息页面")
-            for _ in range(3):
-                if self.stopped:
-                    return False
-                time.sleep(0.1)
-            return True
-
-        # 检查任务菜单按钮 (btn_rw)，有则点击空白处关闭
+        # 先检测个人信息页面特征（btn_info 或 btn_rw）
+        btn_info = self.cv_detector.detect_single_template(
+            cv_img, "btn_info", threshold=self.cv_detector.get_template_threshold("btn_info"))
         btn_rw = self.cv_detector.detect_single_template(
-            cv_img, "btn_rw", threshold=0.6)
-        if btn_rw:
-            logger.info("检测到任务菜单，点击空白处关闭")
+            cv_img, "btn_rw", threshold=self.cv_detector.get_template_threshold("btn_rw"))
+
+        if btn_info or btn_rw:
+            # 确认是个人信息页面，再找关闭按钮
+            close_btn = self.cv_detector.detect_single_template(
+                cv_img, "btn_close", threshold=self.cv_detector.get_template_threshold("btn_close"))
+            if not close_btn:
+                close_btn = self.cv_detector.detect_single_template(
+                    cv_img, "btn_info_close", threshold=self.cv_detector.get_template_threshold("btn_info_close"))
+            if close_btn:
+                self.click(close_btn[0].x, close_btn[0].y, "关闭个人信息页面")
+                for _ in range(3):
+                    if self.stopped:
+                        return False
+                    time.sleep(0.1)
+                return True
+
+            # 有个人信息页面但没找到关闭按钮，点击空白处
             self.click_blank(rect)
             for _ in range(3):
                 if self.stopped:
@@ -207,7 +209,7 @@ class PlantStrategy(BaseStrategy):
         cv_check, _, _ = self.capture(rect)
         if cv_check is not None:
             shop_close = self.cv_detector.detect_single_template(
-                cv_check, "btn_shop_close", threshold=0.8)
+                cv_check, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
             if shop_close:
                 self._close_shop_and_buy(rect, crop_name, all_actions)
 
@@ -218,7 +220,7 @@ class PlantStrategy(BaseStrategy):
         # 检测施肥按钮，如果存在说明这块地已经播种了
         fertilize_templates = ["bth_feiliao_pt", "bth_feiliao2_yj", "btn_fertilize_popup"]
         for tpl_name in fertilize_templates:
-            result = self.cv_detector.detect_single_template(cv_img, tpl_name, threshold=0.95)
+            result = self.cv_detector.detect_single_template(cv_img, tpl_name, threshold=self.cv_detector.get_template_threshold(tpl_name))
             if result:
                 # 过滤掉置信度异常的结果
                 conf = result[0].confidence
@@ -248,18 +250,16 @@ class PlantStrategy(BaseStrategy):
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return all_actions
-        # 只选择真正的空地（land_empty 或 land_empty2）
-        lands = [d for d in dets if d.name.startswith("land_empty")]
+        # 只选择真正的空地（所有 land_ 前缀的模板）
+        lands = [d for d in dets if d.name.startswith("land_")]
         lands.sort(key=lambda d: d.confidence, reverse=True)  # 按置信度排序
         if not lands:
             return all_actions
         total_lands = len(lands)  # 保存总数用于进度显示
         logger.info(f"找到 {len(lands)} 块空地，最高置信度：{lands[0].confidence:.0%}")
 
-        # 点击空地前先检测并关闭个人信息页面
-        self._check_and_close_info_page(rect)
-        if self.stopped:
-            return all_actions
+        # 点击空地前不再盲目清屏，避免误触仓库等按钮
+        # 播种流程自身会处理弹窗和状态切换
 
         # 第二步：点击第一块空地，弹出种子列表
         self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")
@@ -401,14 +401,14 @@ class PlantStrategy(BaseStrategy):
         cv_check, _, _ = self.capture(rect)
         if cv_check is not None:
             shop_close = self.cv_detector.detect_single_template(
-                cv_check, "btn_shop_close", threshold=0.8)
+                cv_check, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
             if shop_close:
                 logger.info("播种流程：种子用完，进入购买流程")
                 self._close_shop_and_buy(rect, crop_name, all_actions)
                 return all_actions
 
             fert = self.cv_detector.detect_single_template(
-                cv_check, "btn_fertilize_popup", threshold=0.7)
+                cv_check, "btn_fertilize_popup", threshold=self.cv_detector.get_template_threshold("btn_fertilize_popup"))
             if fert:
                 logger.info("播种流程：检测到施肥弹窗，关闭")
                 w, h = rect[2], rect[3]
@@ -418,7 +418,7 @@ class PlantStrategy(BaseStrategy):
                 cv_check2, dets2, _ = self.capture(rect)
                 if cv_check2 is not None:
                     info_close = self.cv_detector.detect_single_template(
-                        cv_check2, "btn_info_close", threshold=0.6)
+                        cv_check2, "btn_info_close", threshold=self.cv_detector.get_template_threshold("btn_info_close"))
                     if info_close:
                         logger.info("播种流程：误开个人信息页面，关闭")
                         self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
@@ -474,14 +474,14 @@ class PlantStrategy(BaseStrategy):
                 cv_check, _, _ = self.capture(rect)
                 if cv_check is not None:
                     shop_close = self.cv_detector.detect_single_template(
-                        cv_check, "btn_shop_close", threshold=0.8)
+                        cv_check, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
                     if shop_close:
                         logger.info("播种流程：种子已用完，进入购买流程")
                         self._close_shop_and_buy(rect, crop_name, actions_done)
                         return actions_done
 
                     fert = self.cv_detector.detect_single_template(
-                        cv_check, "btn_fertilize_popup", threshold=0.7)
+                        cv_check, "btn_fertilize_popup", threshold=self.cv_detector.get_template_threshold("btn_fertilize_popup"))
                     if fert:
                         w, h = rect[2], rect[3]
                         self.click(w // 2, int(h * 0.15), "关闭施肥弹窗")
@@ -656,8 +656,8 @@ class PlantStrategy(BaseStrategy):
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return
-        # 只选择真正的空地（land_empty 或 land_empty2）
-        lands = [d for d in dets if d.name.startswith("land_empty")]
+        # 只选择真正的空地（所有 land_ 前缀的模板）
+        lands = [d for d in dets if d.name.startswith("land_")]
         if not lands:
             return
         # 按置信度排序，选择最可靠的空地
@@ -722,7 +722,7 @@ class PlantStrategy(BaseStrategy):
                 return None
 
             shop_close = self.cv_detector.detect_single_template(
-                cv_img, "btn_shop_close", threshold=0.8)
+                cv_img, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
             if not shop_close:
                 logger.info(f"购买流程：等待商店加载 ({attempt+1}/5)")
                 for _ in range(10):
@@ -881,7 +881,7 @@ class PlantStrategy(BaseStrategy):
                 if cv_check is not None:
                     # 检测肥料按钮（只使用普通肥料）
                     fert_btn_pt = self.cv_detector.detect_single_template(
-                        cv_check, "bth_feiliao_pt", threshold=0.55)  # 降低阈值更容易检测到
+                        cv_check, "bth_feiliao_pt", threshold=self.cv_detector.get_template_threshold("bth_feiliao_pt"))
                     if fert_btn_pt:
                         logger.info(f"地块 {i+1} 可施肥，找到普通肥料按钮 ({fert_btn_pt[0].confidence:.0%})")
                         # 保存肥料按钮位置，找到肥料按钮后，对所有土地施肥（包括空地）
@@ -904,7 +904,7 @@ class PlantStrategy(BaseStrategy):
                         logger.info(f"地块 {i+1} 检测到的模板：{template_names}")
 
                         fert_btn_pt = self.cv_detector.detect_single_template(
-                            cv_check, "bth_feiliao_pt", threshold=0.55)
+                            cv_check, "bth_feiliao_pt", threshold=self.cv_detector.get_template_threshold("bth_feiliao_pt"))
                         if fert_btn_pt:
                             logger.info(f"地块 {i+1} 可施肥，找到普通肥料按钮 ({fert_btn_pt[0].confidence:.0%})")
                             fertilizer_det = fert_btn_pt[0]
@@ -962,13 +962,13 @@ class PlantStrategy(BaseStrategy):
                     return all_actions
                 # 先检测普通肥料，再检测有机肥料
                 fertilizer_dets = self.cv_detector.detect_single_template(
-                    cv_img, "bth_feiliao_pt", threshold=0.6)
+                    cv_img, "bth_feiliao_pt", threshold=self.cv_detector.get_template_threshold("bth_feiliao_pt"))
                 if fertilizer_dets:
                     fertilizer_det = fertilizer_dets[0]
                     fertilizer_name = "普通肥料"
                     break
                 fertilizer_dets = self.cv_detector.detect_single_template(
-                    cv_img, "bth_feiliao2_yj", threshold=0.6)
+                    cv_img, "bth_feiliao2_yj", threshold=self.cv_detector.get_template_threshold("bth_feiliao2_yj"))
                 if fertilizer_dets:
                     fertilizer_det = fertilizer_dets[0]
                     fertilizer_name = "有机肥料"
@@ -1041,7 +1041,7 @@ class PlantStrategy(BaseStrategy):
         cv_check, _, _ = self.capture(rect)
         if cv_check is not None:
             fert_popup = self.cv_detector.detect_single_template(
-                cv_check, "btn_fertilize_popup", threshold=0.7)
+                cv_check, "btn_fertilize_popup", threshold=self.cv_detector.get_template_threshold("btn_fertilize_popup"))
             if fert_popup:
                 w, h = rect[2], rect[3]
                 self.click(w // 2, int(h * 0.15), "关闭施肥弹窗")

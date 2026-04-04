@@ -4,7 +4,9 @@
     "land_empty3": 0.75,
     "land_empty2": 0.65,
     "land_金1": 0.6,
-    "land_金21": 0.64
+    "land_金21": 0.64,
+    "btn_rw": 0.85,
+    "btn_info": 0.85
   },
   "category_overrides": {
     "button": 0.8,
