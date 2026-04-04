@@ -1,7 +1,10 @@
 {
   "thresholds": {
     "shop_香蕉": 0.56,
-    "land_empty": 0.7
+    "land_empty3": 0.75,
+    "land_empty2": 0.65,
+    "land_金1": 0.6,
+    "land_金21": 0.64
   },
   "category_overrides": {
     "button": 0.8,

@@ -1,3 +1,9 @@
 {
-  "disabled": []
+  "disabled": [
+    "land_empty",
+    "land_empty10",
+    "land_empty2",
+    "land_empty7",
+    "land_empty8"
+  ]
 }

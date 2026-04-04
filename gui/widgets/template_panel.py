@@ -538,12 +538,18 @@ class TemplateDetailPanel(QFrame):
         self._btn_select_img.setStyleSheet(_outline_button())
         self._btn_select_img.clicked.connect(self._on_select_test_image)
         test_btns.addWidget(self._btn_select_img)
-        self._btn_run_test = QPushButton("开始测试")
+        self._btn_run_test = QPushButton("测试单个")
         self._btn_run_test.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_run_test.setStyleSheet(_icon_button(Colors.PRIMARY, Colors.PRIMARY_HOVER))
         self._btn_run_test.setEnabled(False)
         self._btn_run_test.clicked.connect(self._on_run_test)
         test_btns.addWidget(self._btn_run_test)
+        self._btn_batch_test = QPushButton("批量测试同类别")
+        self._btn_batch_test.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_batch_test.setStyleSheet(_outline_button("#34C759"))
+        self._btn_batch_test.setEnabled(False)
+        self._btn_batch_test.clicked.connect(self._on_batch_test)
+        test_btns.addWidget(self._btn_batch_test)
         root.addLayout(test_btns)
 
         self._test_info = QLabel()
@@ -721,6 +727,7 @@ class TemplateDetailPanel(QFrame):
             h, w = bgr.shape[:2]
             self._test_info.setText(f"已截取窗口 ({w}×{h})")
             self._btn_run_test.setEnabled(True)
+            self._btn_batch_test.setEnabled(True)
             self._show_test_image(bgr)
         except Exception as e:
             self._test_info.setText(f"截取失败: {e}")
@@ -741,6 +748,7 @@ class TemplateDetailPanel(QFrame):
             h, w = img.shape[:2]
             self._test_info.setText(f"已选择: {os.path.basename(fp)} ({w}×{h})")
             self._btn_run_test.setEnabled(True)
+            self._btn_batch_test.setEnabled(True)
 
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             data = rgb.tobytes()
@@ -778,6 +786,55 @@ class TemplateDetailPanel(QFrame):
         )
 
         annotated = self._detector.draw_results(self._test_bgr, results)
+        self._show_test_image(annotated)
+
+    def _on_batch_test(self):
+        """批量测试同类别所有模板"""
+        if self._test_bgr is None or not self._name:
+            return
+
+        if not self._detector._loaded:
+            self._detector.load_templates()
+
+        # 获取当前模板的类别
+        prefix = self._name.split("_")[0]
+        cat = TEMPLATE_CATEGORIES.get(prefix, "unknown")
+
+        # 获取该类别所有模板名称
+        all_templates = self._detector.get_all_template_names()
+        cat_templates = [n for n in all_templates if n.split("_")[0] == prefix]
+
+        if not cat_templates:
+            self._test_info.setText(f"类别 {cat} 下无模板")
+            return
+
+        # 逐个测试
+        all_results = []
+        summary_lines = [f"类别: {cat} | 共 {len(cat_templates)} 个模板"]
+        for tpl_name in cat_templates:
+            threshold = self._detector.get_template_threshold(tpl_name)
+            results = self._detector.detect_single_template(
+                self._test_bgr, tpl_name, threshold
+            )
+            if results:
+                confs = [r.confidence for r in results]
+                summary_lines.append(
+                    f"  ✓ {tpl_name}: {len(results)}处, 置信度 {min(confs):.2f}~{max(confs):.2f}"
+                )
+                all_results.extend(results)
+            else:
+                summary_lines.append(f"  ✗ {tpl_name}: 未匹配")
+
+        # 按类别分组 NMS 去重
+        final_results = self._detector._nms_by_category(all_results, iou_threshold=0.3)
+
+        self._test_info.setText(
+            f"{len(cat_templates)} 个模板 | "
+            f"匹配到 {len(final_results)} 处（去重后）\n"
+            + "\n".join(summary_lines)
+        )
+
+        annotated = self._detector.draw_results(self._test_bgr, final_results)
         self._show_test_image(annotated)
 
     def _show_test_image(self, bgr: np.ndarray):
@@ -1094,7 +1151,7 @@ class CaptureWorker(QThread):
 
 
 class ScreenshotSelector(QWidget):
-    """截图显示 + 鼠标拖拽框选"""
+    """截图显示 + 鼠标多边形框选（支持不规则形状 + alpha蒙版）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1102,19 +1159,19 @@ class ScreenshotSelector(QWidget):
         self._scale = 1.0
         self._ox = 0
         self._oy = 0
-        self._start: tuple[float, float] | None = None
-        self._end: tuple[float, float] | None = None
-        self._drawing = False
+        self._points: list[tuple[float, float]] = []  # 多边形顶点（显示坐标）
+        self._mouse_pos: tuple[float, float] | None = None  # 当前鼠标位置
         self._bgr: np.ndarray | None = None
         self._pil = None
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMinimumHeight(300)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_image(self, pil_image, bgr: np.ndarray):
         self._pil = pil_image
         self._bgr = bgr
-        self._start = self._end = None
-        self._drawing = False
+        self._points = []
+        self._mouse_pos = None
         self._build()
         self.update()
 
@@ -1146,66 +1203,122 @@ class ScreenshotSelector(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._pixmap:
             p.drawPixmap(self._ox, self._oy, self._pixmap)
-            if self._start and self._end:
+            if len(self._points) >= 2:
+                pts = [QPoint(int(x), int(y)) for x, y in self._points]
+                # 绘制多边形边
                 p.setPen(QPen(QColor(0, 200, 80), 2, Qt.PenStyle.SolidLine))
                 p.setBrush(QBrush(QColor(0, 200, 80, 35)))
-                r = self._rect()
-                p.drawRect(r)
-                w = int(abs(self._end[0] - self._start[0]) / self._scale)
-                h = int(abs(self._end[1] - self._start[1]) / self._scale)
+                for i in range(len(pts) - 1):
+                    p.drawLine(pts[i], pts[i + 1])
+                # 绘制顶点
+                p.setBrush(QBrush(QColor(0, 255, 0)))
+                for pt in pts:
+                    p.drawEllipse(pt, 4, 4)
+                # 绘制预览线（从最后一个点到鼠标位置）
+                if self._mouse_pos and not self._is_closed():
+                    mx, my = int(self._mouse_pos[0]), int(self._mouse_pos[1])
+                    p.drawLine(pts[-1], QPoint(mx, my))
+                    p.drawEllipse(QPoint(mx, my), 3, 3)
+            elif len(self._points) == 1:
+                px, py = int(self._points[0][0]), int(self._points[0][1])
+                p.setBrush(QBrush(QColor(0, 255, 0)))
+                p.drawEllipse(QPoint(px, py), 4, 4)
+                # 提示文字
                 p.setPen(QColor(0, 200, 80))
-                p.drawText(r.topRight() + QPoint(6, -4), f"{w}x{h}")
+                p.drawText(self._ox + 10, self._oy + 20, "左键点击添加顶点，Enter完成，右键撤销")
         else:
             p.setPen(QColor(Colors.TEXT_DIM))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        "点击「截屏采集」按钮获取游戏画面")
         p.end()
 
-    def _rect(self) -> QRect:
-        if not self._start or not self._end:
-            return QRect()
-        x1, y1 = self._start
-        x2, y2 = self._end
-        return QRect(int(min(x1, x2)), int(min(y1, y2)),
-                     int(abs(x2 - x1)), int(abs(y2 - y1)))
+    def _is_closed(self) -> bool:
+        """多边形是否已闭合（至少3个点）"""
+        return len(self._points) >= 3
 
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self._pixmap:
-            self._start = (e.position().x(), e.position().y())
-            self._end = self._start
-            self._drawing = True
+        if not self._pixmap:
+            return
+        if e.button() == Qt.MouseButton.LeftButton:
+            # 双击完成多边形
+            if e.type() == e.Type.MouseButtonDblClick:
+                if self._is_closed():
+                    self._mouse_pos = None
+                    self.update()
+                return
+            pos = (e.position().x(), e.position().y())
+            self._points.append(pos)
+            self._mouse_pos = None
             self.update()
+        elif e.button() == Qt.MouseButton.RightButton:
+            # 右键撤销最后一个点
+            if self._points:
+                self._points.pop()
+                self.update()
 
     def mouseMoveEvent(self, e):
-        if self._drawing:
-            self._end = (e.position().x(), e.position().y())
+        if self._pixmap and len(self._points) > 0 and not self._is_closed():
+            self._mouse_pos = (e.position().x(), e.position().y())
             self.update()
 
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self._drawing:
-            self._end = (e.position().x(), e.position().y())
-            self._drawing = False
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter 键完成多边形
+            if self._is_closed():
+                self._mouse_pos = None
+                self.update()
+            e.accept()
+        elif e.key() == Qt.Key.Key_Escape:
+            # Esc 清除所有点
+            self._points = []
+            self._mouse_pos = None
             self.update()
+            e.accept()
+        else:
+            super().keyPressEvent(e)
+
+    def _display_to_original(self, x: float, y: float) -> tuple[int, int]:
+        """将显示坐标转换为原图坐标"""
+        ox = int((x - self._ox) / self._scale)
+        oy = int((y - self._oy) / self._scale)
+        oh, ow = self._bgr.shape[:2]
+        ox = max(0, min(ox, ow - 1))
+        oy = max(0, min(oy, oh - 1))
+        return ox, oy
 
     def get_crop(self) -> tuple | None:
-        if not self._start or not self._end or self._bgr is None or not self._pixmap:
+        """获取多边形区域裁剪（带alpha通道）"""
+        if not self._is_closed() or self._bgr is None or not self._pixmap:
             return None
-        x1 = (min(self._start[0], self._end[0]) - self._ox) / self._scale
-        y1 = (min(self._start[1], self._end[1]) - self._oy) / self._scale
-        x2 = (max(self._start[0], self._end[0]) - self._ox) / self._scale
-        y2 = (max(self._start[1], self._end[1]) - self._oy) / self._scale
-        ox1, oy1, ox2, oy2 = int(x1), int(y1), int(x2), int(y2)
-        if ox2 - ox1 < 5 or oy2 - oy1 < 5:
+
+        # 转换为原图坐标
+        original_points = [self._display_to_original(x, y) for x, y in self._points]
+        pts = np.array(original_points, dtype=np.int32)
+
+        # 计算边界框
+        x, y, w, h = cv2.boundingRect(pts)
+        if w < 5 or h < 5:
             return None
-        oh, ow = self._bgr.shape[:2]
-        ox1, oy1 = max(0, ox1), max(0, oy1)
-        ox2, oy2 = min(ox2, ow), min(oy2, oh)
-        return (self._bgr[oy1:oy2, ox1:ox2].copy(), ox2 - ox1, oy2 - oy1)
+
+        # 裁剪区域
+        cropped = self._bgr[y:y+h, x:x+w].copy()
+
+        # 创建蒙版
+        mask = np.zeros((h, w), dtype=np.uint8)
+        pts_offset = pts - [x, y]
+        cv2.fillPoly(mask, [pts_offset], 255)
+
+        # 合并为 BGRA 四通道图像
+        bgra = cv2.cvtColor(cropped, cv2.COLOR_BGR2BGRA)
+        bgra[:, :, 3] = mask
+
+        return (bgra, w, h)
 
     def clear(self):
         self._pixmap = self._bgr = self._pil = None
         self._img_data = None
-        self._start = self._end = None
+        self._points = []
+        self._mouse_pos = None
         self.update()
 
 
@@ -1502,6 +1615,12 @@ class TemplatePanel(QWidget):
         btn_retake.setStyleSheet(_outline_button())
         btn_retake.clicked.connect(self._on_capture)
         tbl.addWidget(btn_retake)
+
+        self._btn_finish = QPushButton("完成多边形")
+        self._btn_finish.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_finish.setStyleSheet(_icon_button(Colors.PRIMARY, Colors.PRIMARY_HOVER))
+        self._btn_finish.clicked.connect(self._on_finish_polygon)
+        tbl.addWidget(self._btn_finish)
 
         self._btn_save = QPushButton("保存选区")
         self._btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1869,7 +1988,7 @@ class TemplatePanel(QWidget):
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         self._selector.set_image(pil_image, bgr)
         self._show_collector()
-        self._ct_hint.setText("鼠标拖拽框选要采集的区域")
+        self._ct_hint.setText("左键点击添加顶点绘制多边形，Enter完成，右键撤销")
 
     def _on_capture_replace(self):
         """截屏采集替换当前选中的模板"""
@@ -1890,7 +2009,7 @@ class TemplatePanel(QWidget):
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         self._selector.set_image(pil_image, bgr)
         self._show_collector()
-        self._ct_hint.setText(f"框选要替换「{self._replace_target_name}」的区域")
+        self._ct_hint.setText(f"左键点击添加顶点绘制多边形，Enter完成，右键撤销 — 替换「{self._replace_target_name}」")
         # 替换保存按钮的行为
         self._save_btn_override = True
         self._btn_save.clicked.disconnect()
@@ -1900,12 +2019,12 @@ class TemplatePanel(QWidget):
     def _on_save_crop_replace(self):
         result = self._selector.get_crop()
         if not result:
-            box = _styled_msg_box(self, "提示", "请先用鼠标框选一个区域",
+            box = _styled_msg_box(self, "提示", "请先用多边形框选一个区域（至少3个顶点，Enter完成）",
                 icon=QMessageBox.Icon.Information,
                 buttons=QMessageBox.StandardButton.Ok)
             box.exec()
             return
-        crop_bgr, w, h = result
+        crop_bgra, w, h = result
 
         box = _styled_msg_box(self, "确认替换",
             f"确定替换模板「{self._replace_target_name}」？\n"
@@ -1918,7 +2037,10 @@ class TemplatePanel(QWidget):
             return
 
         fp = self._replace_target_path
-        ok, buf = cv2.imencode('.png', crop_bgr)
+        # 确保保存为 BGRA 四通道（保留 alpha 蒙版）
+        if crop_bgra.shape[2] == 3:
+            crop_bgra = cv2.cvtColor(crop_bgra, cv2.COLOR_BGR2BGRA)
+        ok, buf = cv2.imencode('.png', crop_bgra)
         if ok:
             buf.tofile(fp)
             self._ct_hint.setText(f"已替换 {self._replace_target_name}.png ({w}x{h})")
@@ -1949,12 +2071,12 @@ class TemplatePanel(QWidget):
     def _on_save_crop(self):
         result = self._selector.get_crop()
         if not result:
-            box = _styled_msg_box(self, "提示", "请先用鼠标框选一个区域",
+            box = _styled_msg_box(self, "提示", "请先用多边形框选一个区域（至少3个顶点，Enter完成）",
                 icon=QMessageBox.Icon.Information,
                 buttons=QMessageBox.StandardButton.Ok)
             box.exec()
             return
-        crop_bgr, w, h = result
+        crop_bgra, w, h = result
 
         dlg = SaveTemplateDialog((w, h), self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -1970,7 +2092,10 @@ class TemplatePanel(QWidget):
             if box.exec() != QMessageBox.StandardButton.Yes:
                 return
 
-        ok, buf = cv2.imencode('.png', crop_bgr)
+        # 确保保存为 BGRA 四通道（保留 alpha 蒙版）
+        if crop_bgra.shape[2] == 3:
+            crop_bgra = cv2.cvtColor(crop_bgra, cv2.COLOR_BGR2BGRA)
+        ok, buf = cv2.imencode('.png', crop_bgra)
         if ok:
             buf.tofile(fp)
             self._ct_hint.setText(f"已保存 {name}.png ({w}x{h})")
@@ -1981,6 +2106,15 @@ class TemplatePanel(QWidget):
                 icon=QMessageBox.Icon.Warning,
                 buttons=QMessageBox.StandardButton.Ok)
             box.exec()
+
+    def _on_finish_polygon(self):
+        """完成多边形绘制"""
+        if self._selector._is_closed():
+            self._selector._mouse_pos = None
+            self._selector.update()
+            self._ct_hint.setText("多边形已完成，点击「保存选区」保存")
+        else:
+            self._ct_hint.setText("至少需要 3 个顶点才能完成多边形")
 
     def _show_collector(self):
         self._splitter.hide()

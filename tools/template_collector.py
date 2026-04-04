@@ -1,12 +1,12 @@
-"""模板采集工具 - 从游戏截图中裁剪并保存模板图片
+"""模板采集工具 - 从游戏截图中裁剪并保存模板图片（支持多边形框选）
 
 使用方法：
 1. 打开QQ农场小程序窗口
 2. 运行此脚本: python tools/template_collector.py
 3. 程序会截取游戏窗口画面
-4. 用鼠标框选要保存的模板区域
-5. 输入模板名称（如 btn_harvest, icon_weed 等）
-6. 模板自动保存到 templates/ 目录
+4. 用鼠标左键逐点点击绘制多边形轮廓
+5. 按 Enter 完成多边形，右键取消最后一个点
+6. 输入模板名称，保存为带透明通道的 PNG（背景自动剔除）
 
 命名规范：
   btn_xxx    - 按钮（收获、播种、浇水等）
@@ -39,8 +39,7 @@ class TemplateCollector:
         )
         os.makedirs(self.templates_dir, exist_ok=True)
         self._drawing = False
-        self._start_point = None  # 显示坐标
-        self._end_point = None    # 显示坐标
+        self._points = []       # 多边形顶点（显示坐标）
         self._original_image = None   # 原始截图（全分辨率）
         self._display_image = None    # 缩放后用于显示的图
         self._scale = 1.0             # 缩放比例
@@ -92,35 +91,76 @@ class TemplateCollector:
 
     def _mouse_callback(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            self._drawing = True
-            self._start_point = (x, y)
-            self._end_point = (x, y)
-        elif event == cv2.EVENT_MOUSEMOVE and self._drawing:
-            self._end_point = (x, y)
-            # 在缩放后的图上画框
+            self._points.append((x, y))
+            # 在显示图上绘制多边形
             self._display_image = self._resize_for_display(self._original_image)
-            cv2.rectangle(self._display_image, self._start_point,
-                          self._end_point, (0, 255, 0), 2)
-            # 显示原图坐标
-            ox1, oy1 = self._display_to_original(*self._start_point)
-            ox2, oy2 = self._display_to_original(x, y)
-            label = f"({ox1},{oy1})->({ox2},{oy2}) {abs(ox2-ox1)}x{abs(oy2-oy1)}"
-            cv2.putText(self._display_image, label, (x + 10, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        elif event == cv2.EVENT_LBUTTONUP:
-            self._drawing = False
-            self._end_point = (x, y)
+            self._draw_polygon(self._display_image)
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # 右键撤销最后一个点
+            if self._points:
+                self._points.pop()
+                self._display_image = self._resize_for_display(self._original_image)
+                self._draw_polygon(self._display_image)
+        elif event == cv2.EVENT_MOUSEMOVE:
+            # 移动时绘制预览线
+            if self._points:
+                self._display_image = self._resize_for_display(self._original_image)
+                self._draw_polygon(self._display_image)
+                # 绘制从最后一个点到鼠标位置的预览线
+                cv2.line(self._display_image, self._points[-1], (x, y), (0, 200, 80), 1)
+                cv2.circle(self._display_image, (x, y), 3, (0, 200, 80), -1)
+
+    def _draw_polygon(self, img):
+        """在图像上绘制多边形"""
+        if len(self._points) >= 2:
+            pts = np.array(self._points, dtype=np.int32)
+            cv2.polylines(img, [pts], False, (0, 255, 0), 2)
+            # 绘制顶点
+            for pt in self._points:
+                cv2.circle(img, pt, 4, (0, 255, 0), -1)
+        elif len(self._points) == 1:
+            cv2.circle(img, self._points[0], 4, (0, 255, 0), -1)
+
+    def _extract_polygon_region(self) -> np.ndarray | None:
+        """提取多边形区域，返回带透明通道的 PNG"""
+        if len(self._points) < 3:
+            return None
+
+        # 转换为原图坐标
+        original_points = [self._display_to_original(*pt) for pt in self._points]
+        pts = np.array(original_points, dtype=np.int32)
+
+        # 计算边界框
+        x, y, w, h = cv2.boundingRect(pts)
+        if w < 5 or h < 5:
+            return None
+
+        # 裁剪区域
+        cropped = self._original_image[y:y+h, x:x+w].copy()
+
+        # 创建蒙版（多边形内部为白色，外部为黑色）
+        mask = np.zeros((h, w), dtype=np.uint8)
+        # 调整多边形坐标到裁剪区域内
+        pts_offset = pts - [x, y]
+        cv2.fillPoly(mask, [pts_offset], 255)
+
+        # 合并为 BGRA 四通道图像
+        bgra = cv2.cvtColor(cropped, cv2.COLOR_BGR2BGRA)
+        bgra[:, :, 3] = mask  # 设置 alpha 通道
+
+        return bgra
 
     def run(self):
         print("=" * 50)
-        print("  QQ农场模板采集工具")
+        print("  QQ农场模板采集工具（多边形框选）")
         print("=" * 50)
         print()
         print("操作说明：")
-        print("  1. 鼠标左键拖拽框选模板区域")
-        print("  2. 按 S 保存当前框选区域")
-        print("  3. 按 R 重新截屏")
-        print("  4. 按 Q 退出")
+        print("  1. 鼠标左键逐点点击绘制多边形轮廓")
+        print("  2. 按 Enter 完成多边形并保存")
+        print("  3. 右键撤销最后一个点")
+        print("  4. 按 R 重新截屏")
+        print("  5. 按 Q 退出")
         print()
         print("命名规范：")
         print("  btn_harvest  - 收获按钮      icon_weed   - 杂草图标")
@@ -144,7 +184,7 @@ class TemplateCollector:
             dh, dw = self._display_image.shape[:2]
             print(f"显示缩放: {self._scale:.2f} ({dw}x{dh})")
 
-        window_name = "Template Collector - S:Save R:Refresh Q:Quit"
+        window_name = "Template Collector - Enter:Save R:Refresh Q:Quit"
         cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(window_name, self._mouse_callback)
 
@@ -162,46 +202,46 @@ class TemplateCollector:
                 self._original_image = self.capture_game_window()
                 if self._original_image is not None:
                     self._display_image = self._resize_for_display(self._original_image)
-                    self._start_point = None
-                    self._end_point = None
+                    self._points = []
                     h, w = self._original_image.shape[:2]
                     print(f"截屏完成 ({w}x{h})")
 
-            elif key == ord('s'):
-                if self._start_point and self._end_point:
-                    # 转换为原图坐标
-                    ox1, oy1 = self._display_to_original(*self._start_point)
-                    ox2, oy2 = self._display_to_original(*self._end_point)
-                    x1, y1 = min(ox1, ox2), min(oy1, oy2)
-                    x2, y2 = max(ox1, ox2), max(oy1, oy2)
+            elif key == 13 or key == 10:  # Enter
+                if len(self._points) < 3:
+                    print("至少需要 3 个点才能形成多边形")
+                    continue
 
-                    if x2 - x1 < 5 or y2 - y1 < 5:
-                        print("框选区域太小，请重新框选")
-                        continue
+                bgra = self._extract_polygon_region()
+                if bgra is None:
+                    print("提取区域失败，请重新绘制")
+                    continue
 
-                    cropped = self._original_image[y1:y2, x1:x2]
-                    cv2.imshow("Preview", cropped)
-                    print(f"\n原图裁剪: ({x1},{y1})->({x2},{y2}), 大小: {x2-x1}x{y2-y1}")
+                # 显示预览
+                preview = cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
+                # 创建棋盘格背景来显示透明度
+                checker = np.zeros_like(preview)
+                checker[::10, ::10] = 128
+                checker[5::10, 5::10] = 128
+                preview = cv2.addWeighted(preview, 0.7, checker, 0.3, 0)
+                cv2.imshow("Preview", preview)
 
-                    name = input("输入模板名称 (如 btn_harvest): ").strip()
-                    if not name:
-                        print("已取消")
-                        continue
+                name = input("\n输入模板名称 (如 btn_harvest): ").strip()
+                if not name:
+                    print("已取消")
+                    continue
 
-                    filepath = os.path.join(self.templates_dir, f"{name}.png")
-                    # cv2.imwrite 不支持中文路径，用 imencode + 写文件
-                    success, buf = cv2.imencode('.png', cropped)
-                    if success:
-                        buf.tofile(filepath)
-                    saved_count += 1
-                    print(f"✓ 已保存: {filepath} (第{saved_count}个)")
+                filepath = os.path.join(self.templates_dir, f"{name}.png")
+                # cv2.imwrite 不支持中文路径，用 imencode + 写文件
+                success, buf = cv2.imencode('.png', bgra)
+                if success:
+                    buf.tofile(filepath)
+                saved_count += 1
+                print(f"✓ 已保存: {filepath} (第{saved_count}个)")
 
-                    self._display_image = self._resize_for_display(self._original_image)
-                    self._start_point = None
-                    self._end_point = None
-                    cv2.destroyWindow("Preview")
-                else:
-                    print("请先用鼠标框选一个区域")
+                # 重置
+                self._points = []
+                self._display_image = self._resize_for_display(self._original_image)
+                cv2.destroyWindow("Preview")
 
         cv2.destroyAllWindows()
         print(f"\n采集完成，共保存 {saved_count} 个模板到 {self.templates_dir}")

@@ -277,8 +277,8 @@ class CVDetector:
                            r.confidence == float('-inf') or
                            r.confidence > 1.0)]
 
-        # 去重（NMS - 非极大值抑制）
-        results = self._nms(results, iou_threshold=0.5)
+        # 去重：按类别分组 NMS，防止同一位置被多个同类模板重复匹配
+        results = self._nms_by_category(results, iou_threshold=0.3)
         # 按置信度排序
         results.sort(key=lambda r: r.confidence, reverse=True)
         return results
@@ -351,6 +351,9 @@ class CVDetector:
         # 多尺度匹配：应对不同分辨率
         scales = [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3]
 
+        # land 类别使用彩色匹配（保留金色等颜色特征）
+        use_color = tpl["category"] == "land"
+
         for scale in scales:
             new_w = int(tw * scale)
             new_h = int(th * scale)
@@ -362,16 +365,25 @@ class CVDetector:
             if tpl_mask is not None:
                 resized_mask = cv2.resize(tpl_mask, (new_w, new_h))
 
-            # 灰度匹配（更快）
-            gray_tpl = cv2.cvtColor(resized_tpl, cv2.COLOR_BGR2GRAY)
-
-            if resized_mask is not None:
+            if use_color:
+                # 彩色匹配：对 BGR 三通道分别匹配，取平均值
+                confidences = []
+                for c in range(3):
+                    screen_ch = screenshot[:, :, c]
+                    tpl_ch = resized_tpl[:, :, c]
+                    if resized_mask is not None:
+                        match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                    else:
+                        match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED)
+                    confidences.append(match_result)
+                match_result = np.mean(confidences, axis=0)
+            elif resized_mask is not None:
                 match_result = cv2.matchTemplate(
-                    gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED, mask=resized_mask
+                    gray_screen, cv2.cvtColor(resized_tpl, cv2.COLOR_BGR2GRAY), cv2.TM_CCOEFF_NORMED, mask=resized_mask
                 )
             else:
                 match_result = cv2.matchTemplate(
-                    gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED
+                    gray_screen, cv2.cvtColor(resized_tpl, cv2.COLOR_BGR2GRAY), cv2.TM_CCOEFF_NORMED
                 )
 
             # 找到所有超过阈值的匹配位置
@@ -418,6 +430,33 @@ class CVDetector:
             results = remaining
 
         return keep
+
+    def _nms_by_category(self, results: list[DetectResult],
+                         iou_threshold: float = 0.3) -> list[DetectResult]:
+        """按类别分组做 NMS，防止同一块地被多个同类模板重复匹配
+        使用中心点距离去重，阈值 25px
+        """
+        by_cat: dict[str, list[DetectResult]] = {}
+        for r in results:
+            by_cat.setdefault(r.category, []).append(r)
+
+        final = []
+        for cat, cat_results in by_cat.items():
+            cat_results.sort(key=lambda r: r.confidence, reverse=True)
+            kept = []
+            for r in cat_results:
+                is_duplicate = False
+                for k in kept:
+                    dist = ((r.x - k.x) ** 2 + (r.y - k.y) ** 2) ** 0.5
+                    if dist < 25:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    kept.append(r)
+            final.extend(kept)
+
+        final.sort(key=lambda r: r.confidence, reverse=True)
+        return final
 
     @staticmethod
     def pil_to_cv2(image: Image.Image) -> np.ndarray:

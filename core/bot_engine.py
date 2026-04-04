@@ -536,16 +536,16 @@ class BotEngine(QObject):
             for cat in self.cv_detector._templates:
                 if cat in ("seed", "shop"):
                     continue
-                if cat == "land":
-                    thresh = 0.7
-                elif cat == "button":
-                    thresh = 0.8
-                else:
-                    thresh = 0.8
-                detections += self.cv_detector.detect_category(cv_image, cat, threshold=thresh)
+                # 所有类别：逐个模板使用自定义阈值
+                for tpl in self.cv_detector._templates[cat]:
+                    thresh = self.cv_detector.get_template_threshold(tpl["name"])
+                    detections += self.cv_detector.detect_single_template(
+                        cv_image, tpl["name"], threshold=thresh
+                    )
             detections = [d for d in detections
                           if d.name != "btn_shop_close"
                           and not (d.name == "btn_expand" and d.confidence < 0.85)]
+            detections = self.cv_detector._nms_by_category(detections, iou_threshold=0.3)
 
         return cv_image, detections, image
 
@@ -637,8 +637,10 @@ class BotEngine(QObject):
 
             # ---- P-1 异常处理 ----
             if scene == Scene.REMOTE_LOGIN:
-                logger.warning("检测到异地登录，关闭游戏并重启...")
-                self.log_message.emit("⚠ 检测到异地登录，正在重启游戏...")
+                logger.warning("检测到异地登录，关闭游戏并等待 3 分钟后重启...")
+                self.log_message.emit("⚠ 检测到异地登录，正在关闭游戏，等待 3 分钟后重启...")
+                # 设置窗口监控冷却时间，防止抢先重启
+                self.scheduler.set_remote_login_cooldown(180)
                 try:
                     import ctypes
                     if self.window_manager._cached_window:
@@ -648,28 +650,41 @@ class BotEngine(QObject):
                 except Exception as e:
                     logger.error(f"关闭游戏失败: {e}")
                 self.window_manager._cached_window = None
-                window = self.window_manager.find_window(
-                    self.config.window_title_keyword,
-                    auto_launch=True,
-                    shortcut_path=self.config.planting.game_shortcut_path
-                )
-                if not window:
-                    logger.error("异地登录重启游戏失败")
-                    self.log_message.emit("❌ 异地登录重启失败，请手动处理")
-                    result["message"] = "异地登录重启失败"
-                    break
-                w, h = self.config.planting.window_width, self.config.planting.window_height
-                if w > 0 and h > 0:
-                    time.sleep(1)
-                    self.window_manager.resize_window(w, h)
-                    time.sleep(0.5)
-                    window = self.window_manager._cached_window
-                if window:
-                    rect = (window.left, window.top, window.width, window.height)
-                    self.action_executor.update_window_rect(rect)
-                    self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
-                    idle_rounds = 0
-                    continue
+                # 等待 3 分钟再重启，确保游戏完全退出且异地登录状态清除
+                for i in range(180, 0, -10):
+                    if self.popup.stopped:
+                        logger.info("收到停止信号，取消异地登录重启")
+                        result["message"] = "已停止"
+                        break
+                    if i % 60 == 0:
+                        self.log_message.emit(f"等待重启中... 剩余 {i // 60} 分钟")
+                    time.sleep(10)
+                else:
+                    self.log_message.emit("等待结束，正在重启游戏...")
+                    window = self.window_manager.find_window(
+                        self.config.window_title_keyword,
+                        auto_launch=True,
+                        shortcut_path=self.config.planting.game_shortcut_path
+                    )
+                    if not window:
+                        logger.error("异地登录重启游戏失败")
+                        self.log_message.emit("❌ 异地登录重启失败，请手动处理")
+                        result["message"] = "异地登录重启失败"
+                        break
+                    w, h = self.config.planting.window_width, self.config.planting.window_height
+                    if w > 0 and h > 0:
+                        time.sleep(1)
+                        self.window_manager.resize_window(w, h)
+                        time.sleep(0.5)
+                        window = self.window_manager._cached_window
+                    if window:
+                        rect = (window.left, window.top, window.width, window.height)
+                        self.action_executor.update_window_rect(rect)
+                        self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
+                        # 清除冷却时间，恢复窗口监控
+                        self.scheduler._remote_login_cooldown_until = 0.0
+                        idle_rounds = 0
+                        continue
             elif scene == Scene.LEVEL_UP:
                 action_desc = self.popup.handle_popup(detections)
                 self.config.planting.player_level += 1

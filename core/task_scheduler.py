@@ -37,6 +37,8 @@ class TaskScheduler(QObject):
         self._window_monitor_timer.timeout.connect(self._on_window_monitor)
         self._window_monitor_interval_ms = 5000  # 每5秒检查一次
         self._window_check_fn = None  # 外部注入的窗口检查函数
+        self._window_monitor_paused = False  # 窗口监控暂停标志
+        self._remote_login_cooldown_until = 0.0  # 异地登录冷却截止时间戳
 
         # 统计
         self._start_time: float = 0
@@ -138,9 +140,28 @@ class TaskScheduler(QObject):
         """定期检查游戏窗口是否存在"""
         if self._state != BotState.RUNNING:
             return
+        if self._window_monitor_paused:
+            return
+        if time.time() < self._remote_login_cooldown_until:
+            return  # 异地登录冷却期间，禁止窗口监控触发
         if self._window_check_fn and not self._window_check_fn():
             logger.warning("窗口监控：游戏窗口已丢失")
             self.window_lost.emit()
+
+    def set_remote_login_cooldown(self, seconds: int):
+        """设置异地登录冷却时间，期间窗口监控不会触发"""
+        self._remote_login_cooldown_until = time.time() + seconds
+        logger.info(f"窗口监控冷却 {seconds}s（异地登录等待中）")
+
+    def pause_window_monitor(self):
+        """暂停窗口监控（用于异地登录等待等场景）"""
+        self._window_monitor_paused = True
+        logger.info("窗口监控已暂停")
+
+    def resume_window_monitor(self):
+        """恢复窗口监控"""
+        self._window_monitor_paused = False
+        logger.info("窗口监控已恢复")
 
     def record_action(self, action_type: str, count: int = 1):
         """记录操作统计"""
