@@ -12,7 +12,10 @@
     "btn_tujian": 0.9,
     "btn_haoyou": 0.9,
     "btn_zhongzi": 0.9,
-    "btn_shop_close": 0.9
+    "btn_shop_close": 0.9,
+    "btn_weed": 0.69,
+    "btn_water": 0.6,
+    "btn_bug": 0.7
   },
   "category_overrides": {
     "button": 0.8,
