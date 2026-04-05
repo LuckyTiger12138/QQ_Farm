@@ -62,7 +62,7 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
         "btn_shop", "btn_harvest", "btn_weed", "btn_bug", "btn_water",
         "btn_friend_help", "btn_expand",
     }
-    has_land = any(n.startswith("land_empty") for n in names)
+    has_land = any(n.startswith("land_") for n in names)
     if has_land or (names & farm_indicators):
         return Scene.FARM_OVERVIEW
 
