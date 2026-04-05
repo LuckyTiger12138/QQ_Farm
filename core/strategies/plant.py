@@ -33,22 +33,78 @@ class PlantStrategy(BaseStrategy):
         self._purchase_count = 0  # 本轮播种购买次数
         self._max_purchase_per_round = 1  # 每轮最多购买次数
 
-    def _check_and_close_info_page(self, rect: tuple) -> bool:
-        """检测并关闭个人信息页面或任务菜单，返回是否成功关闭"""
+    def _check_and_close_info_page(self, rect: tuple, exclude: list[str] = None) -> bool:
+        """检测并关闭干扰页面（个人信息/任务/宠物/图鉴/仓库），返回是否成功关闭
+        
+        Args:
+            rect: 窗口矩形
+            exclude: 不需要关闭的页面模板名称列表，例如 ["btn_cangku"]
+        """
         if self.stopped:
             return False
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return False
 
-        # 先检测个人信息页面特征（btn_info 或 btn_rw）
+        if exclude is None:
+            exclude = []
+
+        # 定义所有需要检测的干扰页面
+        page_templates = [
+            "btn_info", "btn_rw", "btn_chongwu", "btn_tujian", "btn_cangku", "btn_haoyou"
+        ]
+        # 过滤掉不需要检测的页面
+        targets = [p for p in page_templates if p not in exclude]
+
+        # 检测是否有干扰页面打开
+        is_interfering = False
+        for name in targets:
+            if self.cv_detector.detect_single_template(
+                cv_img, name, threshold=self.cv_detector.get_template_threshold(name)
+            ):
+                is_interfering = True
+                break
+
+        if is_interfering:
+            # 找关闭按钮
+            close_btn = self.cv_detector.detect_single_template(
+                cv_img, "btn_close", threshold=self.cv_detector.get_template_threshold("btn_close"))
+            if not close_btn:
+                close_btn = self.cv_detector.detect_single_template(
+                    cv_img, "btn_info_close", threshold=self.cv_detector.get_template_threshold("btn_info_close"))
+            if close_btn:
+                self.click(close_btn[0].x, close_btn[0].y, "关闭当前页面")
+                for _ in range(3):
+                    if self.stopped:
+                        return False
+                    time.sleep(0.1)
+                return True
+
+            # 没找到关闭按钮，点击空白处
+            self.click_blank(rect)
+            for _ in range(3):
+                if self.stopped:
+                    return False
+                time.sleep(0.1)
+            return True
+
+        return False
+        cv_img, dets, _ = self.capture(rect)
+        if cv_img is None:
+            return False
+
+        # 检测个人信息页面、任务菜单、宠物页、图鉴页特征
         btn_info = self.cv_detector.detect_single_template(
             cv_img, "btn_info", threshold=self.cv_detector.get_template_threshold("btn_info"))
         btn_rw = self.cv_detector.detect_single_template(
             cv_img, "btn_rw", threshold=self.cv_detector.get_template_threshold("btn_rw"))
+        btn_chongwu = self.cv_detector.detect_single_template(
+            cv_img, "btn_chongwu", threshold=self.cv_detector.get_template_threshold("btn_chongwu"))
+        btn_tujian = self.cv_detector.detect_single_template(
+            cv_img, "btn_tujian", threshold=self.cv_detector.get_template_threshold("btn_tujian"))
 
-        if btn_info or btn_rw:
-            # 确认是个人信息页面，再找关闭按钮
+        if btn_info or btn_rw or btn_chongwu or btn_tujian:
+            # 确认是上述页面之一，再找关闭按钮
             close_btn = self.cv_detector.detect_single_template(
                 cv_img, "btn_close", threshold=self.cv_detector.get_template_threshold("btn_close"))
             if not close_btn:
@@ -62,7 +118,7 @@ class PlantStrategy(BaseStrategy):
                     time.sleep(0.1)
                 return True
 
-            # 有个人信息页面但没找到关闭按钮，点击空白处
+            # 有上述页面但没找到关闭按钮，点击空白处
             self.click_blank(rect)
             for _ in range(3):
                 if self.stopped:
