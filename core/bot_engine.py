@@ -100,6 +100,7 @@ class BotEngine(QObject):
         self._is_busy = False
         self._planted = False  # 标记是否已播种完成，等待收获
         self._fertilized = False  # 标记是否已施肥
+        self._planted_idle_rounds = 0  # 已播种但未检测到收获按钮的连续轮数
 
 
         self.scheduler.farm_check_triggered.connect(self._on_farm_check)
@@ -725,14 +726,24 @@ class BotEngine(QObject):
                     if action_desc:
                         self._planted = False
                         self._fertilized = False
+                        self._planted_idle_rounds = 0
+                    elif self._planted:
+                        # 已播种但未检测到收获按钮，累计空闲轮数
+                        self._planted_idle_rounds += 1
+                        # 连续 6 轮（约 3 分钟）未检测到收获，重置播种状态
+                        if self._planted_idle_rounds >= 6:
+                            logger.info(f"已播种但连续 {self._planted_idle_rounds} 轮未检测到收获，重置播种状态")
+                            self._planted = False
+                            self._fertilized = False
+                            self._planted_idle_rounds = 0
 
                 # P1 维护：除草/除虫/浇水
                 if not action_desc:
                     action_desc = self.maintain.try_maintain(detections, features)
 
-                # P2 生产：播种（仅在未播种状态下执行）
+                # P2 生产：播种（plant_all 内部会自动跳过已播种的地块）
                 logger.debug(f"播种检查：action_desc={action_desc}, auto_plant={features.get('auto_plant', True)}, _planted={self._planted}")
-                if not action_desc and features.get("auto_plant", True) and not self._planted:
+                if not action_desc and features.get("auto_plant", True):
                     crop_name = self._resolve_crop_name()
                     logger.info(f"开始播种：{crop_name}, auto_fertilize={features.get('auto_fertilize', False)}")
                     # 如果开启了自动施肥，传入 auto_fertilize=True，播种完成后自动施肥
