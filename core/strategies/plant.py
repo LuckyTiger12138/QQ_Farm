@@ -314,8 +314,10 @@ class PlantStrategy(BaseStrategy):
         total_lands = len(lands)  # 保存总数用于进度显示
         logger.info(f"找到 {len(lands)} 块空地，最高置信度：{lands[0].confidence:.0%}")
 
-        # 点击空地前不再盲目清屏，避免误触仓库等按钮
-        # 播种流程自身会处理弹窗和状态切换
+        # 播种前检测并关闭干扰页面（排除仓库页，避免误关）
+        self._check_and_close_info_page(rect, exclude=["btn_cangku"])
+        if self.stopped:
+            return all_actions
 
         # 第二步：点击第一块空地，弹出种子列表
         self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")

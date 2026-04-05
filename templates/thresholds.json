@@ -5,8 +5,14 @@
     "land_empty2": 0.65,
     "land_金1": 0.6,
     "land_金21": 0.64,
-    "btn_rw": 0.85,
-    "btn_info": 0.85
+    "btn_rw": 0.9,
+    "btn_info": 0.85,
+    "btn_cangku": 0.9,
+    "btn_chongwu": 0.9,
+    "btn_tujian": 0.9,
+    "btn_haoyou": 0.9,
+    "btn_zhongzi": 0.9,
+    "btn_shop_close": 0.9
   },
   "category_overrides": {
     "button": 0.8,
