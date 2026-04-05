@@ -4,7 +4,7 @@ import pyautogui
 from loguru import logger
 
 from models.farm_state import ActionType
-from core.cv_detector import DetectResult
+from core.cv_detector import CVDetector, DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
 
