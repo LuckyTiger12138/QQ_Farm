@@ -16,8 +16,12 @@ def main():
     # 初始化日志
     setup_logger()
 
-    # 加载配置
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    # 加载配置（PyInstaller 打包后在 EXE 所在目录查找）
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(app_dir, "config.json")
     config = AppConfig.load(config_path)
 
     # 启动GUI — 禁用系统暗色主题检测，强制使用 Fusion 浅色
