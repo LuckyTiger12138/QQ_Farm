@@ -1,4 +1,6 @@
-"""屏幕捕获模块"""
+"""屏幕捕获模块 — 支持前台 mss 和后台 PrintWindow"""
+import ctypes
+import ctypes.wintypes
 import os
 import time
 from loguru import logger
@@ -14,7 +16,7 @@ class ScreenCapture:
         os.makedirs(save_dir, exist_ok=True)
 
     def capture_region(self, rect: tuple[int, int, int, int]) -> Image.Image | None:
-        """截取指定区域 (left, top, width, height)"""
+        """前台截取指定区域 (left, top, width, height)"""
         left, top, width, height = rect
         monitor = {
             "left": left,
@@ -23,7 +25,6 @@ class ScreenCapture:
             "height": height,
         }
         try:
-            # 每次截图创建新的mss实例，避免跨线程问题
             with mss.mss() as sct:
                 screenshot = sct.grab(monitor)
                 image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
@@ -32,10 +33,111 @@ class ScreenCapture:
             logger.error(f"截屏失败: {e}")
             return None
 
+    def capture_window_print(self, hwnd: int) -> Image.Image | None:
+        """后台截图：使用 PrintWindow 读取窗口位图，窗口无需在前台"""
+        if not hwnd:
+            return None
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        # 获取窗口尺寸
+        rect = ctypes.wintypes.RECT()
+        if not user32.GetWindowRect(ctypes.wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return None
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+        if width <= 0 or height <= 0:
+            return None
+
+        # 创建设备上下文和位图
+        hwnd_dc = user32.GetWindowDC(ctypes.wintypes.HWND(hwnd))
+        if not hwnd_dc:
+            return None
+
+        mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+        if not mem_dc:
+            user32.ReleaseDC(ctypes.wintypes.HWND(hwnd), hwnd_dc)
+            return None
+
+        bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
+        if not bitmap:
+            gdi32.DeleteDC(mem_dc)
+            user32.ReleaseDC(ctypes.wintypes.HWND(hwnd), hwnd_dc)
+            return None
+
+        old_obj = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            # PW_RENDERFULLCONTENT = 2，支持 DirectX/硬件加速内容
+            PW_RENDERFULLCONTENT = 0x00000002
+            ok = user32.PrintWindow(ctypes.wintypes.HWND(hwnd), mem_dc, PW_RENDERFULLCONTENT)
+            if not ok:
+                ok = user32.PrintWindow(ctypes.wintypes.HWND(hwnd), mem_dc, 0)
+            if not ok:
+                logger.debug("PrintWindow 返回 0，截图失败")
+                return None
+
+            # 读取位图像素数据
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", ctypes.wintypes.DWORD),
+                    ("biWidth", ctypes.wintypes.LONG),
+                    ("biHeight", ctypes.wintypes.LONG),
+                    ("biPlanes", ctypes.wintypes.WORD),
+                    ("biBitCount", ctypes.wintypes.WORD),
+                    ("biCompression", ctypes.wintypes.DWORD),
+                    ("biSizeImage", ctypes.wintypes.DWORD),
+                    ("biXPelsPerMeter", ctypes.wintypes.LONG),
+                    ("biYPelsPerMeter", ctypes.wintypes.LONG),
+                    ("biClrUsed", ctypes.wintypes.DWORD),
+                    ("biClrImportant", ctypes.wintypes.DWORD),
+                ]
+
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = width
+            bmi.biHeight = -height  # 负值表示自顶向下
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            bmi.biCompression = 0  # BI_RGB
+
+            buf_len = width * height * 4
+            buffer = ctypes.create_string_buffer(buf_len)
+            rows = gdi32.GetDIBits(
+                mem_dc, bitmap, 0, height,
+                buffer, ctypes.byref(bmi), 0,  # DIB_RGB_COLORS
+            )
+            if rows != height:
+                logger.debug(f"GetDIBits 行数异常 ({rows}/{height})")
+                return None
+
+            return Image.frombytes("RGB", (width, height), buffer.raw, "raw", "BGRX")
+        except Exception as e:
+            logger.error(f"PrintWindow 截图失败: {e}")
+            return None
+        finally:
+            if old_obj:
+                gdi32.SelectObject(mem_dc, old_obj)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(mem_dc)
+            user32.ReleaseDC(ctypes.wintypes.HWND(hwnd), hwnd_dc)
+
+    def capture(self, rect: tuple[int, int, int, int],
+                hwnd: int | None = None) -> Image.Image | None:
+        """智能截图：有 hwnd 时优先后台截图，否则前台截图"""
+        if hwnd:
+            image = self.capture_window_print(hwnd)
+            if image is not None:
+                return image
+            # 后台失败时回退前台
+            logger.debug("后台截图失败，回退前台截图")
+        return self.capture_region(rect)
+
     def capture_and_save(self, rect: tuple[int, int, int, int],
-                         prefix: str = "farm") -> tuple[Image.Image | None, str]:
+                         prefix: str = "farm",
+                         hwnd: int | None = None) -> tuple[Image.Image | None, str]:
         """截屏并保存到文件，返回(图片, 文件路径)"""
-        image = self.capture_region(rect)
+        image = self.capture(rect, hwnd=hwnd)
         if image is None:
             return None, ""
         ts = time.strftime("%Y%m%d_%H%M%S")

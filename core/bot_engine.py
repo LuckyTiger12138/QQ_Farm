@@ -22,7 +22,7 @@ from loguru import logger
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from models.config import AppConfig, PlantMode
+from models.config import AppConfig, PlantMode, RunMode
 from models.farm_state import ActionType
 from models.game_data import get_best_crop_for_level, get_crop_by_name, format_grow_time
 from core.window_manager import WindowManager
@@ -183,8 +183,12 @@ class BotEngine(QObject):
                 self.log_message.emit(f"窗口已调整为 {window.width}x{window.height}")
 
         rect = (window.left, window.top, window.width, window.height)
+        run_mode = self.config.safety.run_mode
+        hwnd = window.hwnd if run_mode == RunMode.BACKGROUND else None
         self.action_executor = ActionExecutor(
             window_rect=rect,
+            hwnd=hwnd,
+            run_mode=run_mode,
             delay_min=self.config.safety.random_delay_min,
             delay_max=self.config.safety.random_delay_max,
             click_offset=self.config.safety.click_offset_range,
@@ -194,7 +198,8 @@ class BotEngine(QObject):
         farm_ms = self.config.schedule.farm_check_minutes * 60 * 1000
         friend_ms = self.config.schedule.friend_check_minutes * 60 * 1000
         self.scheduler.start(farm_ms, friend_ms)
-        self.log_message.emit(f"Bot已启动 - 窗口: {window.title} | 模板: {tpl_count}个")
+        mode_text = "后台" if run_mode == RunMode.BACKGROUND else "前台"
+        self.log_message.emit(f"Bot已启动 - 窗口: {window.title} | 模板: {tpl_count}个 | 模式: {mode_text}")
         return True
 
     def stop(self):
@@ -285,8 +290,13 @@ class BotEngine(QObject):
 
         # 如果 action_executor 为空，创建新的实例
         if not self.action_executor:
+            run_mode = self.config.safety.run_mode
+            wnd = self.window_manager._cached_window
+            hwnd = wnd.hwnd if (run_mode == RunMode.BACKGROUND and wnd) else None
             self.action_executor = ActionExecutor(
                 window_rect=rect,
+                hwnd=hwnd,
+                run_mode=run_mode,
                 delay_min=self.config.safety.random_delay_min,
                 delay_max=self.config.safety.random_delay_max,
                 click_offset=self.config.safety.click_offset_range,
@@ -467,6 +477,9 @@ class BotEngine(QObject):
             rect = (window.left, window.top, window.width, window.height)
             if self.action_executor:
                 self.action_executor.update_window_rect(rect)
+                self.action_executor.update_window_handle(
+                    window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
+                )
             self.log_message.emit(f"✅ 游戏已自动重启，窗口: {window.title}")
             logger.info(f"窗口监控：游戏已自动重启，窗口: {window.title}")
 
@@ -501,8 +514,10 @@ class BotEngine(QObject):
 
         if not window:
             return None
-        self.window_manager.activate_window()
-        time.sleep(0.3)
+        # 后台模式不激活窗口（不抢焦点）
+        if self.config.safety.run_mode != RunMode.BACKGROUND:
+            self.window_manager.activate_window()
+            time.sleep(0.3)
         rect = (window.left, window.top, window.width, window.height)
         if self.action_executor:
             self.action_executor.update_window_rect(rect)
@@ -518,10 +533,11 @@ class BotEngine(QObject):
             self.cv_detector.load_templates()
             logger.info(f"已加载 {len(self.cv_detector._templates)} 个类别的模板")
 
+        hwnd = self.window_manager.get_window_handle() if self.config.safety.run_mode == RunMode.BACKGROUND else None
         if save:
-            image, _ = self.screen_capture.capture_and_save(rect, prefix)
+            image, _ = self.screen_capture.capture_and_save(rect, prefix, hwnd=hwnd)
         else:
-            image = self.screen_capture.capture_region(rect)
+            image = self.screen_capture.capture(rect, hwnd=hwnd)
         if image is None:
             return None, [], None
         self.screenshot_updated.emit(image)
@@ -622,6 +638,9 @@ class BotEngine(QObject):
                 if window:
                     rect = (window.left, window.top, window.width, window.height)
                     self.action_executor.update_window_rect(rect)
+                    self.action_executor.update_window_handle(
+                        window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
+                    )
                     self.log_message.emit(f"游戏已自动重启，窗口: {window.title}")
 
             cv_image, detections, _ = self._capture_and_detect(rect, save=False)
@@ -681,6 +700,9 @@ class BotEngine(QObject):
                     if window:
                         rect = (window.left, window.top, window.width, window.height)
                         self.action_executor.update_window_rect(rect)
+                        self.action_executor.update_window_handle(
+                            window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
+                        )
                         self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
                         # 清除冷却时间，恢复窗口监控
                         self.scheduler._remote_login_cooldown_until = 0.0

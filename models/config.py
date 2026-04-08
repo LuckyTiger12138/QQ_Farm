@@ -5,6 +5,11 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
+class RunMode(str, Enum):
+    FOREGROUND = "foreground"
+    BACKGROUND = "background"
+
+
 class PlantMode(str, Enum):
     PREFERRED = "preferred"          # 用户手动指定作物
     BEST_EXP_RATE = "best_exp_rate"  # 当前等级下单位时间经验最高
@@ -41,6 +46,7 @@ class SafetyConfig(BaseModel):
     random_delay_max: float = 0.3
     click_offset_range: int = 5
     max_actions_per_round: int = 20
+    run_mode: RunMode = RunMode.FOREGROUND
 
 
 class ScreenshotConfig(BaseModel):

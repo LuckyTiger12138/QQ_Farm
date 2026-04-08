@@ -177,6 +177,12 @@ class WindowManager:
         except Exception:
             return False
 
+    def get_window_handle(self) -> int | None:
+        """获取当前缓存窗口的句柄"""
+        if not self._cached_window:
+            return None
+        return self._cached_window.hwnd
+
     def refresh_window_info(self, title_keyword: str = "QQ 农场", auto_launch: bool = False, shortcut_path: str = "") -> WindowInfo | None:
         """刷新窗口位置信息，可选自动启动游戏"""
         return self.find_window(title_keyword, auto_launch, shortcut_path)

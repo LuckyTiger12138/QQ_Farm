@@ -1,25 +1,39 @@
-"""操作执行器 - 模拟鼠标操作"""
+"""操作执行器 - 支持前台 pyautogui 和后台 PostMessageW"""
+import ctypes
+import ctypes.wintypes
 import random
 import time
 from loguru import logger
 
 import pyautogui
+from models.config import RunMode
 from models.farm_state import Action, OperationResult
 
+# Win32 鼠标消息常量
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+MK_LBUTTON = 0x0001
 
-# 禁用pyautogui的安全暂停（我们自己控制延迟）
+user32 = ctypes.windll.user32
+
+# 禁用 pyautogui 的安全暂停（我们自己控制延迟）
 pyautogui.PAUSE = 0.1
 pyautogui.FAILSAFE = True  # 鼠标移到左上角可紧急停止
 
 
 class ActionExecutor:
     def __init__(self, window_rect: tuple[int, int, int, int],
+                 hwnd: int | None = None,
+                 run_mode: RunMode = RunMode.FOREGROUND,
                  delay_min: float = 0.5, delay_max: float = 2.0,
                  click_offset: int = 5):
         self._window_left = window_rect[0]
         self._window_top = window_rect[1]
         self._window_width = window_rect[2]
         self._window_height = window_rect[3]
+        self._hwnd = hwnd
+        self._run_mode = run_mode
         self._delay_min = delay_min
         self._delay_max = delay_max
         self._click_offset = click_offset
@@ -28,6 +42,13 @@ class ActionExecutor:
         self._window_left, self._window_top = rect[0], rect[1]
         self._window_width, self._window_height = rect[2], rect[3]
 
+    def update_window_handle(self, hwnd: int | None):
+        self._hwnd = hwnd
+
+    @property
+    def is_background(self) -> bool:
+        return self._run_mode == RunMode.BACKGROUND and self._hwnd is not None
+
     def relative_to_absolute(self, rel_x: int, rel_y: int) -> tuple[int, int]:
         """将相对于窗口的坐标转为屏幕绝对坐标"""
         abs_x = self._window_left + rel_x
@@ -35,26 +56,66 @@ class ActionExecutor:
         return abs_x, abs_y
 
     def _random_offset(self) -> tuple[int, int]:
-        """生成随机偏移"""
         ox = random.randint(-self._click_offset, self._click_offset)
         oy = random.randint(-self._click_offset, self._click_offset)
         return ox, oy
 
     def _random_delay(self):
-        """操作间延迟"""
         time.sleep(0.3)
 
+    @staticmethod
+    def _make_lparam(x: int, y: int) -> int:
+        """构造鼠标消息的 lparam（低16位x，高16位y）"""
+        return ((int(y) & 0xFFFF) << 16) | (int(x) & 0xFFFF)
+
+    def _screen_to_client(self, abs_x: int, abs_y: int) -> tuple[int, int] | None:
+        """屏幕坐标转窗口客户区坐标"""
+        if not self._hwnd:
+            return None
+        point = ctypes.wintypes.POINT(int(abs_x), int(abs_y))
+        ok = user32.ScreenToClient(ctypes.wintypes.HWND(self._hwnd), ctypes.byref(point))
+        if not ok:
+            return None
+        return int(point.x), int(point.y)
+
+    def _click_background(self, abs_x: int, abs_y: int) -> bool:
+        """后台消息点击：通过 PostMessageW 发送鼠标消息"""
+        if not self._hwnd:
+            return False
+        client = self._screen_to_client(abs_x, abs_y)
+        if not client:
+            return False
+        cx, cy = client
+        lparam = self._make_lparam(cx, cy)
+        hwnd = ctypes.wintypes.HWND(self._hwnd)
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.03)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        return True
+
+    def _click_foreground(self, abs_x: int, abs_y: int) -> bool:
+        """前台鼠标点击"""
+        pyautogui.moveTo(int(abs_x), int(abs_y), duration=0.02)
+        time.sleep(0.05)
+        pyautogui.click(int(abs_x), int(abs_y))
+        return True
+
     def click(self, x: int, y: int) -> bool:
-        """点击指定坐标"""
+        """点击指定坐标，自动选择后台/前台模式"""
         try:
             ox, oy = self._random_offset()
             target_x = x + ox
             target_y = y + oy
-            pyautogui.moveTo(target_x, target_y, duration=0.02)
-            time.sleep(0.05)
-            pyautogui.click(target_x, target_y)
-            logger.debug(f"点击 ({target_x}, {target_y})")
-            return True
+
+            if self.is_background:
+                ok = self._click_background(target_x, target_y)
+            else:
+                ok = self._click_foreground(target_x, target_y)
+
+            if ok:
+                logger.debug(f"点击 ({target_x}, {target_y}) [{'后台' if self.is_background else '前台'}]")
+            return ok
         except Exception as e:
             logger.error(f"点击失败: {e}")
             return False

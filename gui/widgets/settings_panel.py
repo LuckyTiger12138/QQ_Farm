@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
-from models.config import AppConfig, PlantMode, SellMode
+from models.config import AppConfig, PlantMode, RunMode, SellMode
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
 from gui.styles import Colors
 
@@ -462,6 +462,13 @@ class SettingsPanel(QWidget):
         interval_row.addStretch()
 
         misc_layout.addWidget(self._make_row("🔍", "窗口关键词", self._window_keyword))
+
+        self._run_mode_combo = QComboBox()
+        self._run_mode_combo.addItem("前台模式（需要窗口置顶）", RunMode.FOREGROUND.value)
+        self._run_mode_combo.addItem("后台模式（QQ窗口可遮挡）", RunMode.BACKGROUND.value)
+        self._run_mode_combo.setFixedWidth(200)
+
+        misc_layout.addWidget(self._make_row("🖥️", "运行模式", self._run_mode_combo))
         misc_layout.addWidget(self._make_row("📁", "游戏路径", shortcut_row))
         misc_layout.addWidget(self._make_row("⏰", "检查间隔", interval_row))
 
@@ -526,6 +533,7 @@ class SettingsPanel(QWidget):
         self._crop_combo.currentIndexChanged.connect(self._auto_save)
         self._window_keyword.editingFinished.connect(self._auto_save)
         self._game_shortcut.editingFinished.connect(self._auto_save)
+        self._run_mode_combo.currentIndexChanged.connect(self._auto_save)
         self._farm_interval.valueChanged.connect(self._auto_save)
         self._friend_interval.valueChanged.connect(self._auto_save)
         for cb in self._toggle_grid._checkboxes.values():
@@ -543,6 +551,7 @@ class SettingsPanel(QWidget):
         if 0 <= idx < len(self._crop_names):
             c.planting.preferred_crop = self._crop_names[idx]
         c.window_title_keyword = self._window_keyword.text().strip()
+        c.safety.run_mode = RunMode(self._run_mode_combo.currentData())
         c.planting.game_shortcut_path = self._game_shortcut.text().strip()
         c.schedule.farm_check_minutes = self._farm_interval.value()
         c.schedule.friend_check_minutes = self._friend_interval.value()
@@ -607,6 +616,8 @@ class SettingsPanel(QWidget):
                 self._crop_names.index(c.planting.preferred_crop))
         self._on_level_changed(c.planting.player_level)
         self._window_keyword.setText(c.window_title_keyword)
+        run_mode_idx = 0 if c.safety.run_mode == RunMode.FOREGROUND else 1
+        self._run_mode_combo.setCurrentIndex(run_mode_idx)
         self._game_shortcut.setText(c.planting.game_shortcut_path)
         self._farm_interval.setValue(c.schedule.farm_check_minutes)
         self._friend_interval.setValue(c.schedule.friend_check_minutes)
