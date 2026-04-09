@@ -153,16 +153,19 @@ class MainWindow(QMainWindow):
         self._btn_pause = self._make_btn("暂停", Colors.WARNING, "#b45309")
         self._btn_stop = self._make_btn("停止", Colors.DANGER, "#b91c1c")
         self._btn_test = self._make_btn("测试", Colors.PRIMARY, Colors.PRIMARY_HOVER)
+        self._btn_friend = self._make_btn("巡查好友", "#7c3aed", "#6d28d9")
 
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
+        self._btn_friend.setEnabled(False)
 
         self._btn_start.clicked.connect(self._on_start)
         self._btn_pause.clicked.connect(self._on_pause)
         self._btn_stop.clicked.connect(self._on_stop)
         self._btn_test.clicked.connect(self._on_test)
+        self._btn_friend.clicked.connect(self._on_friend)
 
-        for b in (self._btn_start, self._btn_pause, self._btn_stop, self._btn_test):
+        for b in (self._btn_start, self._btn_pause, self._btn_stop, self._btn_test, self._btn_friend):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -216,6 +219,7 @@ class MainWindow(QMainWindow):
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
             self._btn_stop.setEnabled(True)
+            self._btn_friend.setEnabled(True)
             self._status_refresh_timer.start()
 
     def _on_pause(self):
@@ -233,12 +237,17 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
+        self._btn_friend.setEnabled(False)
         self._btn_pause.setText("暂停")
         self._status_refresh_timer.stop()
 
     def _on_test(self):
         """测试施肥流程"""
         self.engine.test_fertilize()
+
+    def _on_friend(self):
+        """手动触发好友巡查"""
+        self.engine.run_friend_once()
 
     def _on_state_changed(self, state: str):
         self._refresh_status()

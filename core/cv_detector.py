@@ -41,6 +41,7 @@ TEMPLATE_CATEGORIES = {
     "land": "land",
     "seed": "seed",
     "shop": "shop",
+    "friend": "ui_element",  # 好友列表页标识
 }
 
 
@@ -337,6 +338,161 @@ class CVDetector:
                     return results
         return []
 
+    def detect_quick(self, screenshot: np.ndarray,
+                     name: str,
+                     threshold: float = 0.8) -> DetectResult | None:
+        """极速检测：单模板 + 仅 scale 1.0，返回首个匹配或 None"""
+        if not self._loaded:
+            self.load_templates()
+
+        tpl = self._find_template(name)
+        if tpl is None:
+            return None
+
+        tpl_img = tpl["image"]
+        tpl_mask = tpl["mask"]
+        th, tw = tpl_img.shape[:2]
+        sh, sw = screenshot.shape[:2]
+        if tw >= sw or th >= sh:
+            return None
+
+        use_color = tpl["category"] == "land"
+
+        if use_color:
+            confidences = []
+            for c in range(3):
+                screen_ch = screenshot[:, :, c]
+                tpl_ch = tpl_img[:, :, c]
+                if tpl_mask is not None:
+                    match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED, mask=tpl_mask)
+                else:
+                    match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED)
+                confidences.append(match_result)
+            match_result = np.mean(confidences, axis=0)
+        else:
+            gray_screen = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+            gray_tpl = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
+            if tpl_mask is not None:
+                match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED, mask=tpl_mask)
+            else:
+                match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED)
+
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(match_result)
+        if max_val < threshold:
+            return None
+
+        return DetectResult(
+            name=name,
+            category=tpl["category"],
+            x=max_loc[0] + tw // 2,
+            y=max_loc[1] + th // 2,
+            w=tw,
+            h=th,
+            confidence=float(max_val),
+        )
+
+    def detect_targeted(self, screenshot: np.ndarray,
+                        names: list[str],
+                        thresholds: dict[str, float] | None = None,
+                        scales: list[float] | None = None) -> list[DetectResult]:
+        """快速检测：只扫描指定模板名称，使用精简尺度集合"""
+        if not self._loaded:
+            self.load_templates()
+
+        name_set = set(names)
+        # 精简尺度：只试 3 个尺度而非 13 个
+        fast_scales = scales or [1.0, 0.9, 1.1]
+
+        results = []
+        for category, templates in self._templates.items():
+            for tpl in templates:
+                if tpl["name"] not in name_set:
+                    continue
+                thresh = (thresholds.get(tpl["name"], 0.8)
+                          if thresholds else self.get_template_threshold(tpl["name"]))
+                results.extend(
+                    self._match_template_with_scales(
+                        screenshot, tpl, thresh, fast_scales
+                    )
+                )
+
+        results = [r for r in results
+                   if not (r.confidence != r.confidence or
+                           r.confidence == float('inf') or
+                           r.confidence > 1.0)]
+        return self._nms_by_category(results, iou_threshold=0.3)
+
+    def _find_template(self, name: str) -> dict | None:
+        """按名称查找模板数据"""
+        for templates in self._templates.values():
+            for tpl in templates:
+                if tpl["name"] == name:
+                    return tpl
+        return None
+
+    def _match_template_with_scales(self, screenshot: np.ndarray,
+                                     tpl: dict,
+                                     threshold: float,
+                                     scales: list[float]) -> list[DetectResult]:
+        """使用指定尺度集合进行模板匹配"""
+        results = []
+        tpl_img = tpl["image"]
+        tpl_mask = tpl["mask"]
+        th, tw = tpl_img.shape[:2]
+        sh, sw = screenshot.shape[:2]
+        use_color = tpl["category"] == "land"
+
+        gray_screen = None if use_color else cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+
+        for scale in scales:
+            new_w = int(tw * scale)
+            new_h = int(th * scale)
+            if new_w >= sw or new_h >= sh or new_w < 10 or new_h < 10:
+                continue
+
+            resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
+            resized_mask = None
+            if tpl_mask is not None:
+                # mask 必须用最近邻插值，保持 0/255 二值
+                resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
+                                          interpolation=cv2.INTER_NEAREST)
+
+            if use_color:
+                confidences = []
+                for c in range(3):
+                    screen_ch = screenshot[:, :, c]
+                    tpl_ch = resized_tpl[:, :, c]
+                    if resized_mask is not None:
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                    else:
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED)
+                    confidences.append(mr)
+                match_result = np.mean(confidences, axis=0)
+            else:
+                gray_tpl = cv2.cvtColor(resized_tpl, cv2.COLOR_BGR2GRAY)
+                if resized_mask is not None:
+                    match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                else:
+                    match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED)
+
+            locations = np.where(match_result >= threshold)
+            for pt_y, pt_x in zip(*locations):
+                confidence = float(match_result[pt_y, pt_x])
+                results.append(DetectResult(
+                    name=tpl["name"],
+                    category=tpl["category"],
+                    x=pt_x + new_w // 2,
+                    y=pt_y + new_h // 2,
+                    w=new_w,
+                    h=new_h,
+                    confidence=confidence,
+                ))
+
+            if scale == 1.0 and any(r.confidence > 0.95 for r in results):
+                break
+
+        return results
+
     def _match_template(self, screenshot: np.ndarray,
                         gray_screen: np.ndarray,
                         tpl: dict,
@@ -363,7 +519,9 @@ class CVDetector:
             resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
             resized_mask = None
             if tpl_mask is not None:
-                resized_mask = cv2.resize(tpl_mask, (new_w, new_h))
+                # mask 必须用最近邻插值，保持 0/255 二值
+                resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
+                                          interpolation=cv2.INTER_NEAREST)
 
             if use_color:
                 # 彩色匹配：对 BGR 三通道分别匹配，取平均值
