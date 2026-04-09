@@ -6,6 +6,7 @@ a = Analysis(
     datas=[
         ('templates', 'templates'),
         ('gui/icons', 'gui/icons'),
+        ('configs', 'configs'),
     ],
     hiddenimports=['PyQt6.sip'],
     hookspath=[],
