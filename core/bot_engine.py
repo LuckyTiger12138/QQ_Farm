@@ -460,7 +460,7 @@ class BotEngine(QObject):
             return
         self._is_busy = True
         self._worker = BotWorker(self, "farm")
-        self._worker.finished.connect(self._on_task_finished)
+        self._worker.finished.connect(self._on_farm_finished)
         self._worker.error.connect(self._on_task_error)
         self._worker.start()
 
@@ -475,19 +475,45 @@ class BotEngine(QObject):
         self.scheduler._next_friend_check = time.time() + self.scheduler._friend_timer.interval() / 1000
         self._is_busy = True
         self._worker = BotWorker(self, "friend")
-        self._worker.finished.connect(self._on_task_finished)
+        self._worker.finished.connect(self._on_friend_finished)
         self._worker.error.connect(self._on_task_error)
         self._worker.start()
 
-    def _on_task_finished(self, result: dict):
-        # 如果已停止，不处理结果
+    def _on_farm_finished(self, result: dict):
+        """农场任务完成回调"""
         if self.scheduler.state == BotState.IDLE:
             return
         self._is_busy = False
+        self._record_actions(result)
+
+        next_sec = result.get("next_check_seconds", 0)
+        if next_sec > 0:
+            self.scheduler.set_farm_interval(next_sec)
+
+        # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
+        has_friend_feature = (self.config.features.auto_steal
+                              or self.config.features.auto_help)
+        if self.action_executor and has_friend_feature:
+            now = time.time()
+            next_friend = self.scheduler._next_friend_check
+            # next_friend == 0 表示从未执行过好友巡查，应立即触发
+            if next_friend == 0 or now >= next_friend:
+                logger.info("农场任务完成，触发好友巡查")
+                self._on_friend_check()
+
+    def _on_friend_finished(self, result: dict):
+        """好友巡查完成回调"""
+        if self.scheduler.state == BotState.IDLE:
+            return
+        self._is_busy = False
+        self._record_actions(result)
+        # 好友巡查不修改农场检查间隔，避免覆盖农场设置的间隔
+
+    def _record_actions(self, result: dict):
+        """记录操作统计信息"""
         actions = result.get("actions_done", [])
         if actions:
             self.log_message.emit(f"本轮完成: {', '.join(actions)}")
-            # 记录每个操作的统计信息
             for action in actions:
                 if "收获" in action:
                     self.scheduler.record_action("harvest")
@@ -503,20 +529,6 @@ class BotEngine(QObject):
                     self.scheduler.record_action("sell")
                 elif "施肥" in action:
                     self.scheduler.record_action("fertilize")
-        next_sec = result.get("next_check_seconds", 0)
-        if next_sec > 0:
-            self.scheduler.set_farm_interval(next_sec)
-
-        # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
-        has_friend_feature = (self.config.features.auto_steal
-                              or self.config.features.auto_help)
-        if self.action_executor and has_friend_feature:
-            now = time.time()
-            next_friend = self.scheduler._next_friend_check
-            # next_friend == 0 表示从未执行过好友巡查，应立即触发
-            if next_friend == 0 or now >= next_friend:
-                logger.info("农场任务完成，触发好友巡查")
-                self._on_friend_check()
 
     def _on_task_error(self, error_msg: str):
         self._is_busy = False
