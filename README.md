@@ -6,6 +6,10 @@
 
 **Gitee 镜像**：[luckytiger12138/qq-farm](https://gitee.com/luckytiger12138/qq-farm)
 
+**GitHub 仓库**：[LuckyTiger12138/QQ_Farm](https://github.com/LuckyTiger12138/QQ_Farm)
+
+> 由于 Gitee 个人仓库发行版附件大小限制为 100MB，可执行文件发布在 [GitHub Releases](https://github.com/LuckyTiger12138/QQ_Farm/releases) 页面。
+
 ## 工作原理
 
 ```
