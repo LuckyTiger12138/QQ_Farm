@@ -995,20 +995,16 @@ class BotEngine(QObject):
 
             time.sleep(0.3)
 
-        # 设置下次检查间隔
-        # 有播种操作 → 5分钟后检查维护（除虫/除草/浇水）
-        # 无播种操作 → 30秒后再检查（可能有新状态）
+        # 设置下次检查间隔：始终使用用户配置的间隔
+        interval = self.config.schedule.farm_check_minutes * 60
+        result["next_check_seconds"] = interval
         has_planted = any("播种" in a for a in result.get("actions_done", []))
         if has_planted:
-            interval = self.config.schedule.farm_check_minutes * 60
-            result["next_check_seconds"] = interval
             crop_name = self._resolve_crop_name()
             crop = get_crop_by_name(crop_name)
             if crop:
                 grow_time = crop[3]
                 logger.info(f"已播种{crop_name}，{format_grow_time(grow_time)}后成熟，每{self.config.schedule.farm_check_minutes}分钟检查维护")
-        else:
-            result["next_check_seconds"] = 30
 
         result["success"] = True
         self.screen_capture.cleanup_old_screenshots(0)
