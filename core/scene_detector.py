@@ -15,6 +15,7 @@ class Scene(str, Enum):
     BUY_CONFIRM = "buy_confirm"
     POPUP = "popup"
     LEVEL_UP = "level_up"
+    FRIEND_LIST = "friend_list"  # 好友列表页
     INFO_PAGE = "info_page"  # 个人信息页面
     REMOTE_LOGIN = "remote_login"  # 异地登录
     UNKNOWN = "unknown"
@@ -42,6 +43,12 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
     if "btn_zhongzi" in names and "btn_warehouse" in names:
         return Scene.WAREHOUSE
 
+    # 好友列表页（有访问按钮或好友列表标识，但没有回家按钮）
+    # 注意：btn_visit_first 和 friend_check 模板可能是全截图，匹配率低
+    if "btn_visit_first" in names or "friend_check" in names:
+        if "btn_home" not in names:
+            return Scene.FRIEND_LIST
+
     if "btn_home" in names:
         return Scene.FRIEND_FARM
 
@@ -61,6 +68,7 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
         "icon_mature", "icon_weed", "icon_bug", "icon_water",
         "btn_shop", "btn_harvest", "btn_weed", "btn_bug", "btn_water",
         "btn_friend_help", "btn_expand",
+        "ui_goto_friend", "btn_warehouse", "btn_haoyou",
     }
     has_land = any(n.startswith("land_") for n in names)
     if has_land or (names & farm_indicators):

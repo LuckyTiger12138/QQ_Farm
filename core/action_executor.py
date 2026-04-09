@@ -101,6 +101,59 @@ class ActionExecutor:
         pyautogui.click(int(abs_x), int(abs_y))
         return True
 
+    def drag(self, x: int, y: int, dx: int, dy: int,
+             duration: float = 0.3, steps: int = 10) -> bool:
+        """从 (x,y) 拖拽到 (x+dx, y+dy)
+
+        后台模式通过 PostMessage 发送 MOUSEMOVE 序列模拟拖拽。
+        """
+        try:
+            ox, oy = self._random_offset()
+            sx, sy = x + ox, y + oy
+            ex, ey = sx + dx, sy + dy
+
+            if self.is_background:
+                return self._drag_background(sx, sy, ex, ey, steps)
+            else:
+                pyautogui.moveTo(int(sx), int(sy), duration=0.02)
+                pyautogui.drag(int(dx), int(dy), duration=duration)
+                return True
+        except Exception as e:
+            logger.error(f"拖拽失败: {e}")
+            return False
+
+    def _drag_background(self, sx: int, sy: int,
+                         ex: int, ey: int, steps: int = 10) -> bool:
+        """后台模式拖拽：发送 MOUSEMOVE 序列"""
+        if not self._hwnd:
+            return False
+        hwnd = ctypes.wintypes.HWND(self._hwnd)
+
+        start = self._screen_to_client(sx, sy)
+        end = self._screen_to_client(ex, ey)
+        if not start or not end:
+            return False
+
+        # 按下
+        lparam = self._make_lparam(*start)
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+
+        # 移动
+        for i in range(1, steps + 1):
+            t = i / steps
+            cx = int(start[0] + (end[0] - start[0]) * t)
+            cy = int(start[1] + (end[1] - start[1]) * t)
+            lparam = self._make_lparam(cx, cy)
+            user32.PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+            time.sleep(0.02)
+
+        # 释放
+        lparam = self._make_lparam(*end)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        return True
+
     def click(self, x: int, y: int) -> bool:
         """点击指定坐标，自动选择后台/前台模式"""
         try:

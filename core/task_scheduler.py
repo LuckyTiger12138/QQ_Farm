@@ -72,8 +72,13 @@ class TaskScheduler(QObject):
         self._next_farm_check = time.time()
         self._next_friend_check = time.time() + friend_interval_ms / 1000
 
-        # 首次立即触发
+        # 首次立即触发农场检查
         QTimer.singleShot(500, self._on_farm_timer)
+
+        # 首次好友检查：设置 next_friend_check 为当前时间，
+        # 等农场首轮完成后由 _on_task_finished 补触发
+        self._next_friend_check = time.time()
+        QTimer.singleShot(10000, self._on_friend_timer)
 
         # 启动窗口监控
         self._window_monitor_timer.start(self._window_monitor_interval_ms)
@@ -109,6 +114,11 @@ class TaskScheduler(QObject):
         """手动触发一次农场检查"""
         logger.info("手动触发农场检查")
         self.farm_check_triggered.emit()
+
+    def run_friend_once(self):
+        """手动触发一次好友检查"""
+        logger.info("手动触发好友巡查")
+        self.friend_check_triggered.emit()
 
     def set_farm_interval(self, seconds: int):
         """动态调整农场检查间隔（秒）"""

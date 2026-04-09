@@ -62,6 +62,39 @@ class BotWorker(QThread):
             self.error.emit(str(e))
 
 
+# ── 快速检测用的模板名称集合 ──────────────────────────────────────
+# 只包含场景判断和农场操作所需的模板（跳过 seed/shop 等 70+ 模板）
+SCENE_TEMPLATES = [
+    # 弹窗指标
+    "btn_close", "btn_info", "btn_info_close", "btn_buy_confirm", "btn_buy_max",
+    "btn_shop_close", "btn_shop", "btn_claim", "btn_rw_close",
+    "btn_share", "btn_confirm", "btn_cancel",
+    # 场景指标
+    "btn_home", "btn_zhongzi", "btn_warehouse",
+    "btn_plant", "btn_remove", "btn_fertilize",
+    # 农场操作按钮
+    "btn_harvest", "btn_weed", "btn_bug", "btn_water",
+    "btn_expand", "btn_friend_help", "btn_task",
+    "btn_steal", "btn_visit_first",
+    "friend_check", "btn_friend_apply", "btn_friend_agreed",
+    "ui_goto_friend",
+    "icon_steal_in_friend_detail",
+    "icon_water_in_friend_detail",
+    "icon_weed_in_friend_detail",
+    "icon_bug_in_friend_detail",
+    # 状态图标
+    "icon_mature", "icon_bug", "icon_water",
+    # UI 元素（异地登录等）
+    "ui_remote_login", "ui_next_time", "icon_levelup",
+]
+
+LAND_TEMPLATES = [
+    f"land_empty{i}" for i in ["", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+] + ["land_金1", "land_金21"]
+
+MAINTAIN_TEMPLATES = ["btn_weed", "btn_bug", "btn_water"]
+
+
 class BotEngine(QObject):
     log_message = pyqtSignal(str)
     screenshot_updated = pyqtSignal(object)
@@ -110,15 +143,40 @@ class BotEngine(QObject):
         self.scheduler.window_lost.connect(self._on_window_lost)
         self.scheduler.set_window_check_fn(self._is_window_alive)
 
+    # 策略用快速截屏检测所需的额外模板
+    _STRATEGY_EXTRA_TEMPLATES = [
+        "btn_expand_confirm", "btn_fertilize_popup",
+        "bth_feiliao2_yj", "bth_feiliao_pt",
+        "btn_batch_sell", "btn_sell", "btn_cangku",
+        "btn_haoyou", "btn_task",
+    ]
+
     def _init_strategies(self):
         """初始化所有策略的依赖"""
         for s in self._strategies:
             s.action_executor = self.action_executor
-            s.set_capture_fn(self._capture_and_detect)
+            s.set_capture_fn(self._fast_strategy_capture)
             s._stop_requested = False
         self.task.sell_config = self.config.sell
         self.plant.auto_buy_seed = self.config.features.auto_buy_seed
         self.plant.auto_fertilize = self.config.features.auto_fertilize
+
+    def _fast_strategy_capture(self, rect: tuple, save: bool = False,
+                                prefix: str = "strategy",
+                                categories: list[str] | None = None
+                                ) -> tuple[np.ndarray | None, list[DetectResult], None]:
+        """策略专用快速截屏+检测：只扫描核心模板，3 个尺度"""
+        cv_image = self._capture_only(rect)
+        if cv_image is None:
+            return None, [], None
+
+        all_names = list(set(
+            SCENE_TEMPLATES + LAND_TEMPLATES + self._STRATEGY_EXTRA_TEMPLATES
+        ))
+        detections = self.cv_detector.detect_targeted(
+            cv_image, all_names, scales=[1.0, 0.9, 1.1]
+        )
+        return cv_image, detections, None
 
     def update_config(self, config: AppConfig):
         self.config = config
@@ -253,6 +311,10 @@ class BotEngine(QObject):
 
     def run_once(self):
         self._on_farm_check()
+
+    def run_friend_once(self):
+        """手动触发好友巡查"""
+        self._on_friend_check()
 
     def test_fertilize(self):
         """测试施肥流程"""
@@ -403,8 +465,10 @@ class BotEngine(QObject):
 
     def _on_friend_check(self):
         if self._is_busy:
+            logger.debug("上一轮操作尚未完成，跳过好友巡查")
             return
-        if not self.config.features.auto_steal and not self.config.features.auto_help:
+        if not self.action_executor:
+            logger.warning("好友巡查: Bot 尚未启动，跳过")
             return
         self._is_busy = True
         self._worker = BotWorker(self, "friend")
@@ -439,6 +503,16 @@ class BotEngine(QObject):
         next_sec = result.get("next_check_seconds", 0)
         if next_sec > 0:
             self.scheduler.set_farm_interval(next_sec)
+
+        # 农场任务完成后，如果好友巡查时间已到，立即触发
+        has_friend_feature = (self.config.features.auto_steal
+                              or self.config.features.auto_help)
+        if self.action_executor and has_friend_feature:
+            now = time.time()
+            next_friend = self.scheduler._next_friend_check
+            if next_friend > 0 and now >= next_friend:
+                logger.info("农场任务完成，好友巡查时间已到，立即触发")
+                self._on_friend_check()
 
     def _on_task_error(self, error_msg: str):
         self._is_busy = False
@@ -486,6 +560,40 @@ class BotEngine(QObject):
     # ============================================================
     # 截屏 + 检测
     # ============================================================
+
+    def _capture_only(self, rect: tuple) -> np.ndarray | None:
+        """仅截屏返回 cv_image，不做任何检测"""
+        if not self.cv_detector._loaded:
+            self.cv_detector.load_templates()
+
+        hwnd = self.window_manager.get_window_handle() if self.config.safety.run_mode == RunMode.BACKGROUND else None
+        image = self.screen_capture.capture(rect, hwnd=hwnd)
+        if image is None:
+            return None
+        self.screenshot_updated.emit(image)
+        return self.cv_detector.pil_to_cv2(image)
+
+    def _fast_capture_and_detect(self, rect: tuple,
+                                  extra_names: list[str] | None = None
+                                  ) -> tuple[np.ndarray | None, list[DetectResult]]:
+        """快速截图+检测：只扫描核心模板，使用 3 个尺度（vs 13 个），速度提升 5-10x"""
+        cv_image = self._capture_only(rect)
+        if cv_image is None:
+            return None, []
+
+        names = list(SCENE_TEMPLATES)
+        if extra_names:
+            names.extend(extra_names)
+
+        detections = self.cv_detector.detect_targeted(
+            cv_image, names, scales=[1.0, 0.9, 1.1]
+        )
+        detections = [d for d in detections
+                      if d.name != "btn_shop_close"
+                      and not (d.name == "btn_expand" and d.confidence < 0.85)]
+
+        self._emit_annotated(cv_image, detections)
+        return cv_image, detections
 
     def _prepare_window(self) -> tuple | None:
         window = self.window_manager._cached_window
@@ -592,9 +700,37 @@ class BotEngine(QObject):
         result = {"success": False, "actions_done": [], "next_check_seconds": 5}
         features = self.config.features.model_dump()
 
+        # 判断是否有农场操作需求（排除好友功能）
+        farm_features = {
+            "auto_harvest", "auto_plant", "auto_weed", "auto_water",
+            "auto_bug", "auto_fertilize", "auto_sell", "auto_upgrade",
+            "auto_task", "auto_bad",
+        }
+        has_farm_work = any(features.get(f, False) for f in farm_features)
+
         rect = self._prepare_window()
         if not rect:
             result["message"] = "窗口未找到"
+            return result
+
+        # 没有农场操作需求时，只做最轻量的检查
+        if not has_farm_work:
+            if not self.popup.stopped:
+                self._clear_screen(rect)
+            cv_image, detections = self._fast_capture_and_detect(rect)
+            if cv_image is not None:
+                scene = identify_scene(detections, self.cv_detector, cv_image)
+                det_summary = ", ".join(f"{d.name}({d.confidence:.0%})" for d in detections[:3])
+                logger.debug(f"[轻量检查] 场景={scene.value} | {det_summary}")
+                # 处理弹窗，确保不会卡住
+                if scene == Scene.POPUP:
+                    self.popup.handle_popup(detections)
+                elif scene == Scene.INFO_PAGE:
+                    info_close = self.popup.find_any(detections, ["btn_close", "btn_info_close", "btn_rw_close"])
+                    if info_close:
+                        self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
+            result["success"] = True
+            result["next_check_seconds"] = self.config.schedule.farm_check_minutes * 60
             return result
 
         # 清屏：点击天空区域关闭残留弹窗/菜单
@@ -643,7 +779,9 @@ class BotEngine(QObject):
                     )
                     self.log_message.emit(f"游戏已自动重启，窗口: {window.title}")
 
-            cv_image, detections, _ = self._capture_and_detect(rect, save=False)
+            cv_image, detections = self._fast_capture_and_detect(
+                rect, extra_names=LAND_TEMPLATES
+            )
             if cv_image is None:
                 result["message"] = "截屏失败"
                 break
@@ -651,7 +789,6 @@ class BotEngine(QObject):
             scene = identify_scene(detections, self.cv_detector, cv_image)
             det_summary = ", ".join(f"{d.name}({d.confidence:.0%})" for d in detections[:6])
             logger.info(f"[轮{round_num}] 场景={scene.value} | {det_summary}")
-            self._emit_annotated(cv_image, detections)
 
             action_desc = None
 
@@ -799,10 +936,23 @@ class BotEngine(QObject):
 
             # ---- 好友家园 ----
             elif scene == Scene.FRIEND_FARM:
-                fa = self.friend._help_in_friend_farm(rect)
-                if fa:
-                    result["actions_done"].extend(fa)
-                    action_desc = fa[-1]
+                # 偷菜
+                if features.get("auto_steal", False):
+                    steal = self.friend.try_steal(rect)
+                    if steal:
+                        result["actions_done"].append(steal)
+                        action_desc = steal
+                # 帮忙
+                if not action_desc and features.get("auto_help", True):
+                    fa = self.friend._help_in_friend_farm(rect)
+                    if fa:
+                        result["actions_done"].extend(fa)
+                        action_desc = fa[-1]
+                # 回家
+                home_btn = self.friend.find_by_name(detections, "btn_home")
+                if home_btn:
+                    self.friend.click(home_btn.x, home_btn.y, "回家")
+                    time.sleep(0.5)
 
             elif scene == Scene.SEED_SELECT:
                 crop_name = self._resolve_crop_name()
@@ -850,5 +1000,26 @@ class BotEngine(QObject):
 
     def check_friends(self) -> dict:
         result = {"success": True, "actions_done": [], "next_check_seconds": 1800}
-        logger.info("好友巡查功能开发中...")
+        features = self.config.features
+
+        if not features.auto_steal and not features.auto_help:
+            logger.info("好友巡查: 未启用偷菜和帮忙，跳过")
+            return result
+
+        rect = self._prepare_window()
+        if not rect:
+            result["message"] = "窗口未找到"
+            return result
+
+        # 调用 FriendStrategy 完整流程
+        actions = self.friend.run_friend_round(
+            rect,
+            enable_steal=features.auto_steal,
+            enable_help=features.auto_help,
+        )
+        result["actions_done"] = actions
+
+        if actions:
+            self.log_message.emit(f"好友巡查完成: {', '.join(actions)}")
+
         return result
