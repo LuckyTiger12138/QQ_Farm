@@ -154,6 +154,109 @@ class ActionExecutor:
         user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
         return True
 
+    def drag_multi_points(self, start_x: int, start_y: int,
+                          points: list[tuple[int, int]],
+                          check_stopped=None,
+                          steps_per_point: int = 10) -> bool:
+        """按住起点，依次拖过多个目标点后释放。
+
+        后台模式使用 PostMessageW，前台模式使用 pyautogui。
+        每步检查 check_stopped 回调，返回 True 表示应中断。
+
+        Args:
+            start_x, start_y: 起点（屏幕绝对坐标）
+            points: 目标点列表 [(x, y), ...]（屏幕绝对坐标）
+            check_stopped: 无参回调，返回 True 时中断拖拽
+            steps_per_point: 每个目标点的插值步数
+        Returns:
+            True 完成, False 被中断或失败
+        """
+        if self.is_background:
+            return self._drag_multi_points_background(
+                start_x, start_y, points, check_stopped, steps_per_point)
+
+        # ── 前台模式 ──
+        try:
+            pyautogui.moveTo(int(start_x), int(start_y), duration=0.05)
+            for _ in range(5):
+                if check_stopped and check_stopped():
+                    return False
+                time.sleep(0.05)
+            pyautogui.mouseDown()
+            for _ in range(2):
+                if check_stopped and check_stopped():
+                    pyautogui.mouseUp()
+                    return False
+                time.sleep(0.05)
+
+            for px, py_ in points:
+                if check_stopped and check_stopped():
+                    pyautogui.mouseUp()
+                    return False
+                for _ in range(steps_per_point):
+                    if check_stopped and check_stopped():
+                        pyautogui.mouseUp()
+                        return False
+                    pyautogui.moveTo(int(px), int(py_), duration=0.01)
+
+            pyautogui.mouseUp()
+            return True
+        except Exception as e:
+            logger.error(f"前台拖拽多点失败: {e}")
+            try:
+                pyautogui.mouseUp()
+            except Exception:
+                pass
+            return False
+
+    def _drag_multi_points_background(self, start_x: int, start_y: int,
+                                       points: list[tuple[int, int]],
+                                       check_stopped=None,
+                                       steps_per_point: int = 10) -> bool:
+        """后台模式：按住起点 → 依次拖过多个目标点 → 释放"""
+        if not self._hwnd:
+            return False
+        hwnd = ctypes.wintypes.HWND(self._hwnd)
+
+        start_client = self._screen_to_client(start_x, start_y)
+        if not start_client:
+            return False
+
+        # 按下
+        lparam = self._make_lparam(*start_client)
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.05)
+
+        # 依次拖到每个目标点
+        for px, py_ in points:
+            if check_stopped and check_stopped():
+                lparam = self._make_lparam(*start_client)
+                user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+                return False
+            end_client = self._screen_to_client(px, py_)
+            if not end_client:
+                continue
+            for i in range(1, steps_per_point + 1):
+                if check_stopped and check_stopped():
+                    lparam = self._make_lparam(*end_client)
+                    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+                    return False
+                t = i / steps_per_point
+                cx = int(start_client[0] + (end_client[0] - start_client[0]) * t)
+                cy = int(start_client[1] + (end_client[1] - start_client[1]) * t)
+                lparam = self._make_lparam(cx, cy)
+                user32.PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+                time.sleep(0.01)
+            # 更新起点为当前点，下次从此处开始插值
+            start_client = end_client
+
+        # 释放
+        if start_client:
+            lparam = self._make_lparam(*start_client)
+            user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        return True
+
     def click(self, x: int, y: int) -> bool:
         """点击指定坐标，自动选择后台/前台模式"""
         try:

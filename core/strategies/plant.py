@@ -1,6 +1,5 @@
 """P2 生产 — 播种 + 购买种子 + 施肥"""
 import time
-import pyautogui
 from loguru import logger
 
 from models.farm_state import ActionType
@@ -223,40 +222,18 @@ class PlantStrategy(BaseStrategy):
 
         seed_abs_x, seed_abs_y = self.action_executor.relative_to_absolute(
             seed_det.x, seed_det.y)
-        pyautogui.moveTo(seed_abs_x, seed_abs_y, duration=0.05)
-        for _ in range(4):
-            if self.stopped:
-                return all_actions
-            time.sleep(0.05)
-        pyautogui.mouseDown()
-        for _ in range(2):
-            if self.stopped:
-                pyautogui.mouseUp()
-                return all_actions
-            time.sleep(0.05)
-
-        # 依次拖到每块空地（每块地前 + 移动中检查停止）
-        planted_count = 0
+        land_points = [
+            self.action_executor.relative_to_absolute(land.x, land.y)
+            for land in lands
+        ]
         total_count = len(lands)
-        for i, land in enumerate(lands, 1):
-            if self.stopped:
-                pyautogui.mouseUp()
-                logger.info("播种流程：拖拽中途停止")
-                return all_actions
-            abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
-            # 将 0.1s 移动拆分为 10 段 0.01s，每段前检查停止标志（快速响应）
-            for _ in range(10):
-                if self.stopped:
-                    pyautogui.mouseUp()
-                    logger.info("播种流程：拖拽中途停止")
-                    return all_actions
-                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
-            planted_count += 1
-            # 每播种 10 块地显示一次进度
-            if i % 10 == 0 or i == total_count:
-                logger.info(f"播种进度：{i}/{total_count} ({i*100//total_count}%)")
-
-        pyautogui.mouseUp()
+        done = self.action_executor.drag_multi_points(
+            seed_abs_x, seed_abs_y, land_points,
+            check_stopped=lambda: self.stopped)
+        planted_count = total_count if done else 0
+        if not done:
+            logger.info("播种流程：拖拽中途停止")
+            return all_actions
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
 
@@ -409,44 +386,20 @@ class PlantStrategy(BaseStrategy):
         if not self.action_executor:
             return all_actions
 
-        # 按住种子位置（按下前检查停止）
         seed_abs_x, seed_abs_y = self.action_executor.relative_to_absolute(
             seed_det.x, seed_det.y)
-        pyautogui.moveTo(seed_abs_x, seed_abs_y, duration=0.05)
-        for _ in range(5):
-            if self.stopped:
-                return all_actions
-            time.sleep(0.05)
-        pyautogui.mouseDown()
-        for _ in range(2):
-            if self.stopped:
-                pyautogui.mouseUp()
-                return all_actions
-            time.sleep(0.05)
-
-        # 依次拖到每块空地（每块地前 + 移动中检查停止）
-        planted_count = 0
+        land_points = [
+            self.action_executor.relative_to_absolute(land.x, land.y)
+            for land in lands
+        ]
         total_count = len(lands)
-        for i, land in enumerate(lands, 1):
-            if self.stopped:
-                pyautogui.mouseUp()
-                logger.info("播种流程：拖拽中途停止")
-                return all_actions
-            abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
-            # 将 0.1s 移动拆分为 10 段 0.01s，每段前检查停止标志（快速响应）
-            for _ in range(10):
-                if self.stopped:
-                    pyautogui.mouseUp()
-                    logger.info("播种流程：拖拽中途停止")
-                    return all_actions
-                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
-            planted_count += 1
-            # 每播种 10 块地显示一次进度
-            if i % 10 == 0 or i == total_count:
-                logger.info(f"播种进度：{i}/{total_count} ({i*100//total_count}%)")
-
-        # 松开鼠标
-        pyautogui.mouseUp()
+        done = self.action_executor.drag_multi_points(
+            seed_abs_x, seed_abs_y, land_points,
+            check_stopped=lambda: self.stopped)
+        planted_count = total_count if done else 0
+        if not done:
+            logger.info("播种流程：拖拽中途停止")
+            return all_actions
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
         logger.info(f"播种流程：准备验证弹窗，planted_count={planted_count}")
@@ -1049,48 +1002,28 @@ class PlantStrategy(BaseStrategy):
 
         fert_abs_x, fert_abs_y = self.action_executor.relative_to_absolute(
             fertilizer_det.x, fertilizer_det.y)
-        pyautogui.moveTo(fert_abs_x, fert_abs_y, duration=0.05)
-        for _ in range(4):
-            if self.stopped:
-                return all_actions
-            time.sleep(0.05)
-        pyautogui.mouseDown()
-        for _ in range(2):
-            if self.stopped:
-                pyautogui.mouseUp()
-                return all_actions
-            time.sleep(0.05)
 
-        # 依次拖到所有土地（测试模式下使用所有土地，正常模式使用传入的 lands）
-        fertilized_count = 0
+        # 确定要施肥的土地列表
         if is_test and land_dets:
-            # 测试模式：对所有土地施肥
             total_count = len(land_dets)
             lands_to_fertilize = land_dets
             logger.info(f"施肥流程：测试模式，对所有 {total_count} 块土地施肥")
         else:
-            # 正常模式：只对传入的地块施肥
             total_count = len(lands)
             lands_to_fertilize = lands
             logger.info(f"施肥流程：正常模式，对 {total_count} 块土地施肥")
 
-        for i, land in enumerate(lands_to_fertilize, 1):
-            if self.stopped:
-                pyautogui.mouseUp()
-                logger.info("施肥流程：拖拽中途停止")
-                return all_actions
-            abs_x, abs_y = self.action_executor.relative_to_absolute(land.x, land.y)
-            for _ in range(10):
-                if self.stopped:
-                    pyautogui.mouseUp()
-                    logger.info("施肥流程：拖拽中途停止")
-                    return all_actions
-                pyautogui.moveTo(abs_x, abs_y, duration=0.01)
-            fertilized_count += 1
-            if i % 10 == 0 or i == total_count:
-                logger.info(f"施肥进度：{i}/{total_count} ({i*100//total_count}%)")
-
-        pyautogui.mouseUp()
+        fert_points = [
+            self.action_executor.relative_to_absolute(land.x, land.y)
+            for land in lands_to_fertilize
+        ]
+        done = self.action_executor.drag_multi_points(
+            fert_abs_x, fert_abs_y, fert_points,
+            check_stopped=lambda: self.stopped)
+        fertilized_count = total_count if done else 0
+        if not done:
+            logger.info("施肥流程：拖拽中途停止")
+            return all_actions
         logger.info(f"施肥流程：拖拽施肥完成，共 {fertilized_count} 块")
         all_actions.append(f"施肥×{fertilized_count}")
 
