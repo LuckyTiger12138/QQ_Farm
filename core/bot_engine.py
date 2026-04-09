@@ -471,6 +471,8 @@ class BotEngine(QObject):
         if not self.action_executor:
             logger.warning("好友巡查: Bot 尚未启动，跳过")
             return
+        # 标记好友巡查已开始，更新下次检查时间
+        self.scheduler._next_friend_check = time.time() + self.scheduler._friend_timer.interval() / 1000
         self._is_busy = True
         self._worker = BotWorker(self, "friend")
         self._worker.finished.connect(self._on_task_finished)
@@ -505,14 +507,15 @@ class BotEngine(QObject):
         if next_sec > 0:
             self.scheduler.set_farm_interval(next_sec)
 
-        # 农场任务完成后，如果好友巡查时间已到，立即触发
+        # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
         has_friend_feature = (self.config.features.auto_steal
                               or self.config.features.auto_help)
         if self.action_executor and has_friend_feature:
             now = time.time()
             next_friend = self.scheduler._next_friend_check
-            if next_friend > 0 and now >= next_friend:
-                logger.info("农场任务完成，好友巡查时间已到，立即触发")
+            # next_friend == 0 表示从未执行过好友巡查，应立即触发
+            if next_friend == 0 or now >= next_friend:
+                logger.info("农场任务完成，触发好友巡查")
                 self._on_friend_check()
 
     def _on_task_error(self, error_msg: str):

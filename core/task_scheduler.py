@@ -70,14 +70,13 @@ class TaskScheduler(QObject):
         self._farm_timer.start(farm_interval_ms)
         self._friend_timer.start(friend_interval_ms)
         self._next_farm_check = time.time()
-        self._next_friend_check = time.time() + friend_interval_ms / 1000
 
         # 首次立即触发农场检查
         QTimer.singleShot(500, self._on_farm_timer)
 
-        # 首次好友检查：设置 next_friend_check 为当前时间，
-        # 等农场首轮完成后由 _on_task_finished 补触发
-        self._next_friend_check = time.time()
+        # 首次好友检查：10秒后触发，但可能因 _is_busy 被跳过
+        # _next_friend_check 保持为 0，等实际执行后再更新
+        self._next_friend_check = 0
         QTimer.singleShot(10000, self._on_friend_timer)
 
         # 启动窗口监控
@@ -139,7 +138,8 @@ class TaskScheduler(QObject):
     def _on_friend_timer(self):
         if self._state not in (BotState.RUNNING,):
             return
-        self._next_friend_check = time.time() + self._friend_timer.interval() / 1000
+        # 不在这里更新 _next_friend_check，让实际执行成功后再更新
+        # 避免因 _is_busy 跳过时把下次检查时间推后
         self.friend_check_triggered.emit()
 
     def set_window_check_fn(self, fn):
