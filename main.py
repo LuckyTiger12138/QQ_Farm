@@ -16,11 +16,18 @@ def main():
     # 初始化日志
     setup_logger()
 
-    # 加载配置（PyInstaller 打包后在 EXE 所在目录查找）
+    # 路径解析：
+    #   sys._MEIPASS — PyInstaller 解压的临时目录（打包的 templates 等）
+    #   EXE 所在目录 — 用户文件（config.json、logs、screenshots）
     if getattr(sys, 'frozen', False):
-        app_dir = os.path.dirname(sys.executable)
+        _internal = sys._MEIPASS  # 打包资源
+        app_dir = os.path.dirname(sys.executable)  # 用户文件
     else:
-        app_dir = os.path.dirname(os.path.abspath(__file__))
+        _internal = os.path.dirname(os.path.abspath(__file__))
+        app_dir = _internal
+
+    # 切换工作目录到打包资源目录，确保 templates/ 相对路径正确
+    os.chdir(_internal)
     config_path = os.path.join(app_dir, "config.json")
     config = AppConfig.load(config_path)
 

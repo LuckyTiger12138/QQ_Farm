@@ -16,7 +16,8 @@
     "btn_weed": 0.69,
     "btn_water": 0.53,
     "btn_bug": 0.7,
-    "btn_home": 0.62
+    "btn_home": 0.62,
+    "shop_椰子": 0.73
   },
   "category_overrides": {
     "button": 0.8,

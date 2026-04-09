@@ -23,17 +23,17 @@ class SellMode(str, Enum):
 class FeaturesConfig(BaseModel):
     auto_harvest: bool = True
     auto_plant: bool = True
-    auto_buy_seed: bool = False  # 自动购买种子（种子不足时）
+    auto_buy_seed: bool = True
     auto_weed: bool = True
     auto_water: bool = True
     auto_bug: bool = True
-    auto_fertilize: bool = False
-    auto_sell: bool = True
-    auto_steal: bool = False
+    auto_fertilize: bool = True
+    auto_sell: bool = False
+    auto_steal: bool = True
     auto_help: bool = True
     auto_bad: bool = False
-    auto_task: bool = True
-    auto_upgrade: bool = True
+    auto_task: bool = False
+    auto_upgrade: bool = False
 
 
 class SellConfig(BaseModel):
@@ -46,7 +46,7 @@ class SafetyConfig(BaseModel):
     random_delay_max: float = 0.3
     click_offset_range: int = 5
     max_actions_per_round: int = 20
-    run_mode: RunMode = RunMode.FOREGROUND
+    run_mode: RunMode = RunMode.BACKGROUND
 
 
 class ScreenshotConfig(BaseModel):
@@ -56,15 +56,15 @@ class ScreenshotConfig(BaseModel):
 
 
 class ScheduleConfig(BaseModel):
-    farm_check_minutes: int = 1
-    friend_check_minutes: int = 30
+    farm_check_minutes: int = 2
+    friend_check_minutes: int = 5
     task_check_minutes: int = 60
 
 
 class PlantingConfig(BaseModel):
-    strategy: PlantMode = PlantMode.BEST_EXP_RATE
-    preferred_crop: str = "白萝卜"  # strategy=preferred 时使用
-    player_level: int = 10
+    strategy: PlantMode = PlantMode.PREFERRED
+    preferred_crop: str = "椰子"  # strategy=preferred 时使用
+    player_level: int = 69
     window_width: int = 581
     window_height: int = 1054
     game_shortcut_path: str = ""  # 游戏快捷方式路径，用于自动启动

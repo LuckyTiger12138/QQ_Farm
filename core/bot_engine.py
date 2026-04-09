@@ -14,6 +14,7 @@
   P3  资源:     expand    — 扩建土地 + 领取任务
   P4  社交:     friend    — 好友巡查/帮忙/偷菜/同意好友
 """
+import sys
 import time
 import cv2
 import numpy as np
