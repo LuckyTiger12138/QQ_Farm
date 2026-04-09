@@ -40,7 +40,7 @@ python test_plant_capture.py         # 播种流程测试
 ### 数据流
 
 ```
-截屏 (mss) → OpenCV 多尺度模板匹配 → 场景识别状态机 → 策略决策 → pyautogui 模拟点击 → 循环
+截屏 (mss) → OpenCV 多尺度模板匹配 → 场景识别状态机 → 策略决策 → ActionExecutor (前台 pyautogui / 后台 PostMessageW) → 循环
 ```
 
 ### 四层架构
@@ -62,7 +62,8 @@ python test_plant_capture.py         # 播种流程测试
 │  window_manager.py + screen_capture.py       │
 ├─────────────────────────────────────────────┤
 │  操作执行层                                  │
-│  action_executor.py (pyautogui 模拟点击)     │
+│  action_executor.py (前台 pyautogui /        │
+│  后台 PostMessageW，RunMode 切换)            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -97,16 +98,18 @@ python test_plant_capture.py         # 播种流程测试
 
 ```python
 class Scene(str, Enum):
-    INFO_PAGE = "info_page"       # 个人信息页面（最高优先级检测）
-    BUY_CONFIRM = "buy_confirm"
-    SHOP_PAGE = "shop_page"
-    WAREHOUSE = "warehouse"
+    FARM_OVERVIEW = "farm_overview"
     FRIEND_FARM = "friend_farm"
     PLOT_MENU = "plot_menu"
     SEED_SELECT = "seed_select"
-    LEVEL_UP = "level_up"
+    SHOP_PAGE = "shop_page"
+    WAREHOUSE = "warehouse"
+    BUY_CONFIRM = "buy_confirm"
     POPUP = "popup"
-    FARM_OVERVIEW = "farm_overview"
+    LEVEL_UP = "level_up"
+    FRIEND_LIST = "friend_list"
+    INFO_PAGE = "info_page"       # 最高优先级检测
+    REMOTE_LOGIN = "remote_login"
     UNKNOWN = "unknown"
 ```
 
@@ -114,7 +117,7 @@ class Scene(str, Enum):
 
 ### 图像检测 (core/cv_detector.py)
 
-- **模板加载**: 从 `templates/` 目录加载，文件名前缀决定类别（btn→button, icon→status_icon, crop→crop, land→land, seed→seed, shop→shop, ui→ui_element, bth→button）
+- **模板加载**: 从 `templates/` 目录加载，文件名前缀决定类别（btn→button, bth→button, icon→status_icon, crop→crop, land→land, seed→seed, shop→shop, ui→ui_element, friend→ui_element）
 - **多尺度检测**: 0.8x ~ 1.3x 缩放范围
 - **NMS**: 非极大值抑制去除重叠结果（IoU 阈值 0.5）
 - **DetectResult**: 包含 name, category, x, y, w, h, confidence
@@ -139,6 +142,7 @@ Pydantic BaseModel 层级结构，GUI 修改实时生效:
 | `btn_` | button | `btn_harvest.png` |
 | `bth_` | button（特殊按钮如施肥） | `bth_fertilize.png` |
 | `icon_` | status_icon | `icon_mature.png` |
+| `friend_` | ui_element（好友列表标识） | `friend_list.png` |
 | `crop_` | crop | `crop_mature.png` |
 | `seed_` | seed（播种列表） | `seed_小麦.png` |
 | `shop_` | shop（商店卡片） | `shop_小麦.png` |
@@ -158,7 +162,9 @@ Pydantic BaseModel 层级结构，GUI 修改实时生效:
 ## Key Design Decisions
 
 - **纯视觉识别**: 不读取内存、不修改数据包、不调用游戏 API，仅通过屏幕截图 + 模板匹配
+- **双模式执行**: ActionExecutor 支持 `RunMode.FOREGROUND`（pyautogui）和 `RunMode.BACKGROUND`（PostMessageW），后台模式不抢占鼠标
 - **线程模型**: PyQt6 GUI 在主线程，BotWorker(QThread) 执行任务，通过 Qt 信号通信
 - **停止机制**: 所有策略共享 `_stop_requested` 标志，每个 click 操作前检查，支持优雅停止
 - **安全措施**: 随机点击偏移（`click_offset_range`）、操作间随机延迟、pyautogui FAILSAFE
 - **中文路径**: `cv_detector.py` 使用 `np.fromfile` + `cv2.imdecode` 读取模板，因为 `cv2.imread` 不支持中文路径
+- **Git 双仓库**: origin → Gitee, github → GitHub。发行版文件发布在 GitHub Releases（Gitee 有 100MB 限制）
