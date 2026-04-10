@@ -18,7 +18,8 @@
     "btn_bug": 0.7,
     "btn_home": 0.62,
     "shop_椰子": 0.73,
-    "seed_爱心果": 0.61
+    "seed_爱心果": 0.61,
+    "shop_金针菇": 0.76
   },
   "category_overrides": {
     "button": 0.8,
