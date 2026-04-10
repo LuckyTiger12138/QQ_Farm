@@ -1653,6 +1653,7 @@ class TemplatePanel(QWidget):
         return w
 
     def _load_templates(self):
+        self._detector.load_templates()
         d = self._detector._templates_dir
         if not os.path.exists(d):
             self._items = []
