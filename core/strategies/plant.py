@@ -50,7 +50,8 @@ class PlantStrategy(BaseStrategy):
 
         # 定义所有需要检测的干扰页面
         page_templates = [
-            "btn_info", "btn_rw", "btn_chongwu", "btn_tujian", "btn_cangku", "btn_haoyou"
+            "btn_info", "btn_rw", "btn_chongwu", "btn_tujian", "btn_cangku", "btn_haoyou",
+            "ui_shangcheng",
         ]
         # 过滤掉不需要检测的页面
         targets = [p for p in page_templates if p not in exclude]
@@ -65,7 +66,20 @@ class PlantStrategy(BaseStrategy):
                 break
 
         if is_interfering:
-            # 找关闭按钮
+            # 优先检测商城返回按钮
+            mall_back = self.cv_detector.detect_single_template(
+                cv_img, "btn_shangcehng_fanhui", threshold=self.cv_detector.get_template_threshold("btn_shangcehng_fanhui"))
+            if mall_back:
+                self.click(mall_back[0].x, mall_back[0].y, "关闭商城")
+                for _ in range(3):
+                    if self.stopped:
+                        return False
+                    time.sleep(0.1)
+                return True
+
+            # 通用关闭按钮
+            close_btn = self.cv_detector.detect_single_template(
+                cv_img, "btn_close", threshold=self.cv_detector.get_template_threshold("btn_close"))
             close_btn = self.cv_detector.detect_single_template(
                 cv_img, "btn_close", threshold=self.cv_detector.get_template_threshold("btn_close"))
             if not close_btn:

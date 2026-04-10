@@ -11,6 +11,7 @@ class Scene(str, Enum):
     PLOT_MENU = "plot_menu"
     SEED_SELECT = "seed_select"
     SHOP_PAGE = "shop_page"
+    MALL_PAGE = "mall_page"      # 商城页面（非种子商店）
     WAREHOUSE = "warehouse"
     BUY_CONFIRM = "buy_confirm"
     POPUP = "popup"
@@ -33,6 +34,10 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
     # 个人信息页面（优先级高，需要先检测）
     if "btn_info" in names:
         return Scene.INFO_PAGE
+
+    # 商城页面（干扰页面，需关闭）
+    if "ui_shangcheng" in names:
+        return Scene.MALL_PAGE
 
     if {"btn_buy_confirm", "btn_buy_max"} & names:
         return Scene.BUY_CONFIRM

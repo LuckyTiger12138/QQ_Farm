@@ -87,6 +87,7 @@ SCENE_TEMPLATES = [
     "icon_mature", "icon_bug", "icon_water",
     # UI 元素（异地登录等）
     "ui_remote_login", "ui_next_time", "icon_levelup",
+    "ui_shangcheng", "btn_shangcehng_fanhui",
 ]
 
 LAND_TEMPLATES = [
@@ -888,6 +889,13 @@ class BotEngine(QObject):
             elif scene == Scene.SHOP_PAGE:
                 self.popup.close_shop(rect)
                 action_desc = "关闭商店"
+            elif scene == Scene.MALL_PAGE:
+                mall_back = self.popup.find_by_name(detections, "btn_shangcehng_fanhui")
+                if mall_back:
+                    self.popup.click(mall_back.x, mall_back.y, "关闭商城")
+                else:
+                    self.popup.click_blank(rect)
+                action_desc = "关闭商城"
             elif scene == Scene.PLOT_MENU:
                 action_desc = self.popup.handle_popup(detections)
 
