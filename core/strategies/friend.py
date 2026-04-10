@@ -27,8 +27,8 @@ HOME_BTN_POS = (487, 713)       # btn_home
 CLOSE_BTN_POS = (510, 71)       # btn_close
 
 # 底部好友列表滑动区域（detail 页面下的横向好友列表）
-SWIPE_START = (405, 860)
-SWIPE_END = (150, 860)
+SWIPE_START = (405, 920)
+SWIPE_END = (150, 920)
 
 # 一次截图检测的全部好友相关模板
 _ALL_FRIEND_TEMPLATES = [
@@ -64,15 +64,30 @@ class FriendStrategy(BaseStrategy):
 
     def run_friend_round(self, rect: tuple,
                          enable_steal: bool = True,
-                         enable_help: bool = True) -> list[str]:
+                         enable_weed: bool = True,
+                         enable_water: bool = True,
+                         enable_bug: bool = True,
+                         max_steal: int = 0) -> list[str]:
+        """执行好友巡查回合
+        
+        Args:
+            rect: 游戏窗口矩形
+            enable_steal: 是否偷菜
+            enable_weed: 是否帮忙除草
+            enable_water: 是否帮忙浇水
+            enable_bug: 是否帮忙除虫
+            max_steal: 每轮偷菜次数上限（0=无限制）
+        """
         actions: list[str] = []
         if self.stopped:
             return actions
+        
+        enable_help = enable_weed or enable_water or enable_bug
         if not enable_steal and not enable_help:
-            logger.info("好友流程: 未启用偷菜和帮忙，跳过")
+            logger.info("好友流程: 未启用任何操作，跳过")
             return actions
 
-        logger.info(f"好友流程: 开始 | 偷菜={enable_steal} 帮忙={enable_help}")
+        logger.info(f"好友流程: 开始 | 偷菜={enable_steal}(上限{max_steal or '无'}) 除草={enable_weed} 浇水={enable_water} 除虫={enable_bug}")
 
         # 1. 进入好友列表
         if not self._enter_friend_list(rect):
@@ -97,19 +112,25 @@ class FriendStrategy(BaseStrategy):
             if cv_img is None:
                 break
 
-            # 偷菜
+            # 偷菜（检查次数限制）
             if enable_steal:
-                if self._do_steal(cv_img, dets):
-                    steal_count += 1
+                if max_steal == 0 or steal_count < max_steal:
+                    if self._do_steal(cv_img, dets):
+                        steal_count += 1
+                else:
+                    logger.debug(f"偷菜次数已达上限 {max_steal}，跳过")
 
-            # 帮忙
+            # 帮忙（根据独立开关）
             if enable_help:
-                helped = self._do_help(cv_img, dets)
+                helped = self._do_help(cv_img, dets, enable_weed, enable_water, enable_bug)
                 help_count += len(helped)
 
             # 切换下一位好友（含滑动）
             if not self._goto_next_friend(cv_img, dets, rect,
-                                          enable_steal, enable_help):
+                                          enable_steal and (max_steal == 0 or steal_count < max_steal),
+                                          enable_weed,
+                                          enable_water,
+                                          enable_bug):
                 break
 
         # 4. 回家
@@ -269,15 +290,31 @@ class FriendStrategy(BaseStrategy):
 
     # ── 帮忙 ────────────────────────────────────────────────────
 
-    def _do_help(self, cv_img, dets: list[DetectResult]) -> list[str]:
-        """基于已有检测结果执行帮忙"""
+    def _do_help(self, cv_img, dets: list[DetectResult],
+                 enable_weed: bool = True,
+                 enable_water: bool = True,
+                 enable_bug: bool = True) -> list[str]:
+        """基于已有检测结果执行帮忙
+        
+        Args:
+            cv_img: 截图
+            dets: 检测结果
+            enable_weed: 是否帮忙除草
+            enable_water: 是否帮忙浇水
+            enable_bug: 是否帮忙除虫
+        """
         actions_done: list[str] = []
 
-        for btn_name, desc, action_type in [
-            ("btn_water", "帮好友浇水", ActionType.HELP_WATER),
-            ("btn_weed", "帮好友除草", ActionType.HELP_WEED),
-            ("btn_bug", "帮好友除虫", ActionType.HELP_BUG),
-        ]:
+        # 根据独立开关决定是否执行
+        help_actions = []
+        if enable_water:
+            help_actions.append(("btn_water", "帮好友浇水", ActionType.HELP_WATER))
+        if enable_weed:
+            help_actions.append(("btn_weed", "帮好友除草", ActionType.HELP_WEED))
+        if enable_bug:
+            help_actions.append(("btn_bug", "帮好友除虫", ActionType.HELP_BUG))
+
+        for btn_name, desc, action_type in help_actions:
             if self.stopped:
                 break
             btn = self._find_any_name(dets, [btn_name])
@@ -292,20 +329,31 @@ class FriendStrategy(BaseStrategy):
 
     def _goto_next_friend(self, cv_img, dets: list[DetectResult],
                           rect: tuple,
-                          enable_steal: bool, enable_help: bool) -> bool:
-        """切换到下一位可操作的好友，无结果时滑动翻页"""
+                          enable_steal: bool = False,
+                          enable_weed: bool = False,
+                          enable_water: bool = False,
+                          enable_bug: bool = False) -> bool:
+        """切换到下一位可操作的好友，无结果时滑动翻页
+        
+        根据启用的操作筛选对应的底部好友 icon，避免误点不可操作的好友。
+        """
         if self.stopped:
             return False
 
+        # 根据启用的操作构建需要检测的 icon 名称
         icon_names = []
         if enable_steal:
             icon_names.append("icon_steal_in_friend_detail")
-        if enable_help:
-            icon_names.extend([
-                "icon_water_in_friend_detail",
-                "icon_weed_in_friend_detail",
-                "icon_bug_in_friend_detail",
-            ])
+        if enable_water:
+            icon_names.append("icon_water_in_friend_detail")
+        if enable_weed:
+            icon_names.append("icon_weed_in_friend_detail")
+        if enable_bug:
+            icon_names.append("icon_bug_in_friend_detail")
+
+        if not icon_names:
+            logger.debug("未启用任何好友操作，跳过切换")
+            return False
 
         # 第一次尝试：当前截图的检测结果
         candidate = self._find_friend_icon(cv_img, dets, icon_names)
@@ -342,8 +390,9 @@ class FriendStrategy(BaseStrategy):
         h, w = cv_img.shape[:2]
         x_min = int(w * 0.12)
         x_max = int(w * 0.93)
-        y_min = int(h * 0.75)   # ~790, 涵盖 y=807
-        y_max = int(h * 0.83)   # ~874, 排除 y=940+
+        # 扩大 Y 范围：75% ~ 95%，涵盖 Y=940+ 的 icon
+        y_min = int(h * 0.75)   # ~790
+        y_max = int(h * 0.95)   # ~1001，覆盖 Y=940-945
 
         name_set = set(icon_names)
         # 日志：列出所有匹配 icon 的位置（不管是否在区域内）

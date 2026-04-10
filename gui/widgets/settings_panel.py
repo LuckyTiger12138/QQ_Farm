@@ -4,13 +4,415 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QCheckBox, QComboBox,
     QFrame, QFormLayout, QGridLayout, QPushButton,
-    QFileDialog, QScrollArea,
+    QFileDialog, QScrollArea, QTimeEdit,
 )
+from PyQt6.QtCore import QTime
 from PyQt6.QtCore import pyqtSignal, Qt
 
 from models.config import AppConfig, PlantMode, RunMode, SellMode
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
 from gui.styles import Colors
+
+
+class FriendSettingsWidget(QFrame):
+    """好友操作设置"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loading = True
+        self._init_ui()
+        self._loading = False
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # 4个独立开关
+        self._cb_steal = QCheckBox("👀 偷菜")
+        self._cb_weed = QCheckBox("🌿 除草")
+        self._cb_water = QCheckBox("💧 浇水")
+        self._cb_bug = QCheckBox("🐛 除虫")
+
+        for cb in [self._cb_steal, self._cb_weed, self._cb_water, self._cb_bug]:
+            cb.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {Colors.TEXT};
+                    font-size: 13px;
+                    spacing: 6px;
+                }}
+                QCheckBox::indicator {{
+                    width: 18px; height: 18px;
+                    border: 1.5px solid rgba(0, 0, 0, 30);
+                    border-radius: 4px;
+                    background: {Colors.INPUT_BG};
+                }}
+                QCheckBox::indicator:checked {{
+                    background: {Colors.PRIMARY};
+                    border-color: {Colors.PRIMARY};
+                    image: url(gui/icons/check.svg);
+                }}
+            """)
+
+        # 偷菜次数上限
+        max_steal_row = QHBoxLayout()
+        max_steal_row.setSpacing(8)
+        max_steal_label = QLabel("每轮偷菜上限")
+        max_steal_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        max_steal_row.addWidget(max_steal_label)
+
+        self._max_steal_spin = QSpinBox()
+        self._max_steal_spin.setRange(0, 100)
+        self._max_steal_spin.setSpecialValueText("无限制")
+        self._max_steal_spin.setFixedWidth(100)
+        self._max_steal_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+        """)
+        max_steal_row.addWidget(self._max_steal_spin)
+        max_steal_row.addStretch()
+
+        layout.addWidget(self._cb_steal)
+        layout.addWidget(self._cb_weed)
+        layout.addWidget(self._cb_water)
+        layout.addWidget(self._cb_bug)
+        layout.addLayout(max_steal_row)
+
+    def get_enable_steal(self) -> bool:
+        return self._cb_steal.isChecked()
+
+    def get_enable_weed(self) -> bool:
+        return self._cb_weed.isChecked()
+
+    def get_enable_water(self) -> bool:
+        return self._cb_water.isChecked()
+
+    def get_enable_bug(self) -> bool:
+        return self._cb_bug.isChecked()
+
+    def get_max_steal(self) -> int:
+        return self._max_steal_spin.value()
+
+    def set_enable_steal(self, val: bool):
+        self._cb_steal.setChecked(val)
+
+    def set_enable_weed(self, val: bool):
+        self._cb_weed.setChecked(val)
+
+    def set_enable_water(self, val: bool):
+        self._cb_water.setChecked(val)
+
+    def set_enable_bug(self, val: bool):
+        self._cb_bug.setChecked(val)
+
+    def set_max_steal(self, val: int):
+        self._max_steal_spin.setValue(val)
+
+    def connect_changed(self, callback):
+        for cb in [self._cb_steal, self._cb_weed, self._cb_water, self._cb_bug]:
+            cb.toggled.connect(callback)
+        self._max_steal_spin.valueChanged.connect(callback)
+
+
+class SilentHoursWidget(QFrame):
+    """静默时段设置"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loading = True
+        self._init_ui()
+        self._loading = False
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # 启用开关
+        self._cb_enabled = QCheckBox("启用静默时段")
+        self._cb_enabled.setStyleSheet(f"""
+            QCheckBox {{
+                color: {Colors.TEXT};
+                font-size: 13px;
+                font-weight: 600;
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px; height: 18px;
+                border: 1.5px solid rgba(0, 0, 0, 30);
+                border-radius: 4px;
+                background: {Colors.INPUT_BG};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {Colors.PRIMARY};
+                border-color: {Colors.PRIMARY};
+                image: url(gui/icons/check.svg);
+            }}
+        """)
+        layout.addWidget(self._cb_enabled)
+
+        # 时间行
+        time_row = QHBoxLayout()
+        time_row.setSpacing(8)
+
+        start_label = QLabel("开始")
+        start_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        time_row.addWidget(start_label)
+
+        from PyQt6.QtCore import QTime
+        self._start_time = QTimeEdit()
+        self._start_time.setDisplayFormat("HH:mm")
+        self._start_time.setTime(QTime(2, 0))
+        self._start_time.setFixedWidth(90)
+        self._start_time.setStyleSheet(f"""
+            QTimeEdit {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+        """)
+        time_row.addWidget(self._start_time)
+
+        end_label = QLabel("结束")
+        end_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        time_row.addWidget(end_label)
+
+        self._end_time = QTimeEdit()
+        self._end_time.setDisplayFormat("HH:mm")
+        self._end_time.setTime(QTime(6, 0))
+        self._end_time.setFixedWidth(90)
+        self._end_time.setStyleSheet(f"""
+            QTimeEdit {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+        """)
+        time_row.addWidget(self._end_time)
+
+        time_row.addStretch()
+        layout.addLayout(time_row)
+
+    def get_enabled(self) -> bool:
+        return self._cb_enabled.isChecked()
+
+    def get_start_hour(self) -> int:
+        return self._start_time.time().hour()
+
+    def get_start_minute(self) -> int:
+        return self._start_time.time().minute()
+
+    def get_end_hour(self) -> int:
+        return self._end_time.time().hour()
+
+    def get_end_minute(self) -> int:
+        return self._end_time.time().minute()
+
+    def set_enabled_state(self, val: bool):
+        self._cb_enabled.setChecked(val)
+
+    def set_start_time(self, hour: int, minute: int):
+        from PyQt6.QtCore import QTime
+        self._start_time.setTime(QTime(hour, minute))
+
+    def set_end_time(self, hour: int, minute: int):
+        from PyQt6.QtCore import QTime
+        self._end_time.setTime(QTime(hour, minute))
+
+    def connect_changed(self, callback):
+        self._cb_enabled.toggled.connect(callback)
+        self._start_time.timeChanged.connect(callback)
+        self._end_time.timeChanged.connect(callback)
+
+
+class WebServerWidget(QFrame):
+    """Web 服务设置"""
+    web_server_toggled = pyqtSignal(bool)  # True=启动, False=停止
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loading = True
+        self._init_ui()
+        self._loading = False
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # 状态行 + 启停按钮
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(10)
+
+        self._status_label = QLabel("● 已停止")
+        self._status_label.setStyleSheet(
+            f"color: {Colors.TEXT_DIM}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
+        )
+        ctrl_row.addWidget(self._status_label)
+
+        self._toggle_btn = QPushButton("启动")
+        self._toggle_btn.setFixedWidth(80)
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.SUCCESS};
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                padding: 6px 14px;
+                font-weight: 600;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: #2db84e;
+            }}
+            QPushButton:pressed {{
+                background-color: #27a544;
+            }}
+        """)
+        self._toggle_btn.clicked.connect(self._on_toggle)
+        ctrl_row.addWidget(self._toggle_btn)
+        ctrl_row.addStretch()
+        layout.addLayout(ctrl_row)
+
+        # 地址和端口行
+        addr_row = QHBoxLayout()
+        addr_row.setSpacing(8)
+
+        host_label = QLabel("地址")
+        host_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        addr_row.addWidget(host_label)
+
+        self._host_edit = QLineEdit()
+        self._host_edit.setText("0.0.0.0")
+        self._host_edit.setFixedWidth(120)
+        self._host_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+        """)
+        addr_row.addWidget(self._host_edit)
+
+        port_label = QLabel("端口")
+        port_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        addr_row.addWidget(port_label)
+
+        self._port_spin = QSpinBox()
+        self._port_spin.setRange(1024, 65535)
+        self._port_spin.setValue(8080)
+        self._port_spin.setFixedWidth(80)
+        self._port_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {Colors.INPUT_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 5px 10px;
+                color: {Colors.TEXT};
+                min-height: 22px;
+            }}
+        """)
+        addr_row.addWidget(self._port_spin)
+        addr_row.addStretch()
+
+        layout.addLayout(addr_row)
+
+    def _on_toggle(self):
+        """点击启动/停止按钮"""
+        new_state = not self._is_running()
+        self.web_server_toggled.emit(new_state)
+        self._update_ui(new_state)
+
+    def _is_running(self) -> bool:
+        return self._toggle_btn.text() == "停止"
+
+    def _update_ui(self, running: bool):
+        if running:
+            self._status_label.setText("● 运行中")
+            self._status_label.setStyleSheet(
+                f"color: {Colors.SUCCESS}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
+            )
+            self._toggle_btn.setText("停止")
+            self._toggle_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {Colors.DANGER};
+                    border: none;
+                    border-radius: 8px;
+                    color: #FFFFFF;
+                    padding: 6px 14px;
+                    font-weight: 600;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: #d62f26;
+                }}
+            """)
+            self._host_edit.setEnabled(False)
+            self._port_spin.setEnabled(False)
+        else:
+            self._status_label.setText("● 已停止")
+            self._status_label.setStyleSheet(
+                f"color: {Colors.TEXT_DIM}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
+            )
+            self._toggle_btn.setText("启动")
+            self._toggle_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {Colors.SUCCESS};
+                    border: none;
+                    border-radius: 8px;
+                    color: #FFFFFF;
+                    padding: 6px 14px;
+                    font-weight: 600;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: #2db84e;
+                }}
+                QPushButton:pressed {{
+                    background-color: #27a544;
+                }}
+            """)
+            self._host_edit.setEnabled(True)
+            self._port_spin.setEnabled(True)
+
+    def get_enabled(self) -> bool:
+        return self._is_running()
+
+    def get_host(self) -> str:
+        return self._host_edit.text().strip()
+
+    def get_port(self) -> int:
+        return self._port_spin.value()
+
+    def set_enabled_state(self, val: bool):
+        """从配置加载时设置 UI 状态"""
+        self._loading = True
+        self._update_ui(val)
+        self._loading = False
+
+    def set_host(self, val: str):
+        self._host_edit.setText(val)
+
+    def set_port(self, val: int):
+        self._port_spin.setValue(val)
+
+    def connect_changed(self, callback):
+        """地址/端口变化时触发保存（不包含按钮）"""
+        self._host_edit.editingFinished.connect(callback)
+        self._port_spin.valueChanged.connect(callback)
 
 
 class SellStrategyWidget(QFrame):
@@ -272,6 +674,7 @@ class ToggleGrid(QFrame):
 
 class SettingsPanel(QWidget):
     config_changed = pyqtSignal(object)
+    web_server_toggled = pyqtSignal(bool)  # 转发 WebServerWidget 的启停信号
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -368,12 +771,17 @@ class SettingsPanel(QWidget):
         toggle_items = [
             ("🌾", "收获"), ("🌱", "播种"), ("💊", "施肥"), ("🛒", "买种"),
             ("💧", "浇水"), ("🌿", "除草"), ("🐛", "除虫"), ("💰", "出售"),
-            ("👀", "偷菜"), ("🤝", "帮忙"), ("🎯", "任务"), ("🔨", "扩建"),
+            ("🎯", "任务"), ("🔨", "扩建"),
         ]
         self._toggle_grid = ToggleGrid(toggle_items)
 
         feat_card = SettingCard("⚙️", "功能开关", "选择需要自动执行的操作", self._toggle_grid)
         layout.addWidget(feat_card)
+
+        # ===== 好友操作设置卡片 =====
+        self._friend_widget = FriendSettingsWidget()
+        friend_card = SettingCard("👥", "好友操作", "偷菜/帮忙独立开关与次数限制", self._friend_widget)
+        layout.addWidget(friend_card)
 
         # ===== 出售策略卡片 =====
         self._sell_widget = SellStrategyWidget()
@@ -413,9 +821,10 @@ class SettingsPanel(QWidget):
         shortcut_row.addWidget(self._btn_browse)
 
         self._farm_interval = QSpinBox()
-        self._farm_interval.setRange(1, 120)
-        self._farm_interval.setSuffix(" 分")
+        self._farm_interval.setRange(1, 99999)
+        self._farm_interval.setSuffix(" 秒")
         self._farm_interval.setFixedWidth(90)
+        self._farm_interval.setValue(120)
         self._farm_interval.setStyleSheet(f"""
             QSpinBox {{
                 background-color: {Colors.INPUT_BG};
@@ -434,9 +843,10 @@ class SettingsPanel(QWidget):
         """)
 
         self._friend_interval = QSpinBox()
-        self._friend_interval.setRange(5, 180)
-        self._friend_interval.setSuffix(" 分")
+        self._friend_interval.setRange(1, 99999)
+        self._friend_interval.setSuffix(" 秒")
         self._friend_interval.setFixedWidth(90)
+        self._friend_interval.setValue(300)
         self._friend_interval.setStyleSheet(f"""
             QSpinBox {{
                 background-color: {Colors.INPUT_BG};
@@ -474,6 +884,17 @@ class SettingsPanel(QWidget):
 
         misc_card = SettingCard("🔧", "其他", "窗口、路径与调度设置", misc_widget)
         layout.addWidget(misc_card)
+
+        # ===== 静默时段卡片 =====
+        self._silent_widget = SilentHoursWidget()
+        silent_card = SettingCard("🌙", "静默时段", "指定时间段内不执行任何操作", self._silent_widget)
+        layout.addWidget(silent_card)
+
+        # ===== Web 服务卡片 =====
+        self._web_widget = WebServerWidget()
+        self._web_widget.web_server_toggled.connect(self.web_server_toggled.emit)
+        web_card = SettingCard("🌐", "Web 服务", "通过网页查看截图与控制 Bot", self._web_widget)
+        layout.addWidget(web_card)
 
         layout.addStretch()
 
@@ -540,6 +961,10 @@ class SettingsPanel(QWidget):
             cb.toggled.connect(self._auto_save)
         self._sell_widget.connect_mode_changed(self._auto_save)
         self._sell_widget.connect_crops_changed(self._auto_save)
+        # 新组件连接
+        self._friend_widget.connect_changed(self._auto_save)
+        self._silent_widget.connect_changed(self._auto_save)
+        self._web_widget.connect_changed(self._auto_save)
 
     def _auto_save(self):
         if self._loading:
@@ -553,8 +978,8 @@ class SettingsPanel(QWidget):
         c.window_title_keyword = self._window_keyword.text().strip()
         c.safety.run_mode = RunMode(self._run_mode_combo.currentData())
         c.planting.game_shortcut_path = self._game_shortcut.text().strip()
-        c.schedule.farm_check_minutes = self._farm_interval.value()
-        c.schedule.friend_check_minutes = self._friend_interval.value()
+        c.schedule.farm_check_seconds = self._farm_interval.value()
+        c.schedule.friend_check_seconds = self._friend_interval.value()
         c.features.auto_harvest = self._toggle_grid.get_checkbox("收获").isChecked()
         c.features.auto_plant = self._toggle_grid.get_checkbox("播种").isChecked()
         c.features.auto_fertilize = self._toggle_grid.get_checkbox("施肥").isChecked()
@@ -563,12 +988,26 @@ class SettingsPanel(QWidget):
         c.features.auto_weed = self._toggle_grid.get_checkbox("除草").isChecked()
         c.features.auto_bug = self._toggle_grid.get_checkbox("除虫").isChecked()
         c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
-        c.features.auto_steal = self._toggle_grid.get_checkbox("偷菜").isChecked()
-        c.features.auto_help = self._toggle_grid.get_checkbox("帮忙").isChecked()
         c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
         c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
+        # 好友操作新配置
+        c.features.friend.enable_steal = self._friend_widget.get_enable_steal()
+        c.features.friend.enable_weed = self._friend_widget.get_enable_weed()
+        c.features.friend.enable_water = self._friend_widget.get_enable_water()
+        c.features.friend.enable_bug = self._friend_widget.get_enable_bug()
+        c.features.friend.max_steal_per_round = self._friend_widget.get_max_steal()
+        # 出售策略
         c.sell.mode = self._sell_widget.get_mode()
         c.sell.sell_crops = self._sell_widget.get_sell_crops()
+        # 静默时段
+        c.silent_hours.enabled = self._silent_widget.get_enabled()
+        c.silent_hours.start_hour = self._silent_widget.get_start_hour()
+        c.silent_hours.start_minute = self._silent_widget.get_start_minute()
+        c.silent_hours.end_hour = self._silent_widget.get_end_hour()
+        c.silent_hours.end_minute = self._silent_widget.get_end_minute()
+        # Web 服务（地址/端口）
+        c.web.host = self._web_widget.get_host()
+        c.web.port = self._web_widget.get_port()
         c.save()
         self.config_changed.emit(c)
 
@@ -619,8 +1058,8 @@ class SettingsPanel(QWidget):
         run_mode_idx = 0 if c.safety.run_mode == RunMode.FOREGROUND else 1
         self._run_mode_combo.setCurrentIndex(run_mode_idx)
         self._game_shortcut.setText(c.planting.game_shortcut_path)
-        self._farm_interval.setValue(c.schedule.farm_check_minutes)
-        self._friend_interval.setValue(c.schedule.friend_check_minutes)
+        self._farm_interval.setValue(c.schedule.farm_check_seconds)
+        self._friend_interval.setValue(c.schedule.friend_check_seconds)
         self._toggle_grid.get_checkbox("收获").setChecked(c.features.auto_harvest)
         self._toggle_grid.get_checkbox("播种").setChecked(c.features.auto_plant)
         self._toggle_grid.get_checkbox("施肥").setChecked(c.features.auto_fertilize)
@@ -629,9 +1068,22 @@ class SettingsPanel(QWidget):
         self._toggle_grid.get_checkbox("除草").setChecked(c.features.auto_weed)
         self._toggle_grid.get_checkbox("除虫").setChecked(c.features.auto_bug)
         self._toggle_grid.get_checkbox("出售").setChecked(c.features.auto_sell)
-        self._toggle_grid.get_checkbox("偷菜").setChecked(c.features.auto_steal)
-        self._toggle_grid.get_checkbox("帮忙").setChecked(c.features.auto_help)
         self._toggle_grid.get_checkbox("任务").setChecked(c.features.auto_task)
         self._toggle_grid.get_checkbox("扩建").setChecked(c.features.auto_upgrade)
+        # 好友操作
+        self._friend_widget.set_enable_steal(c.features.friend.enable_steal)
+        self._friend_widget.set_enable_weed(c.features.friend.enable_weed)
+        self._friend_widget.set_enable_water(c.features.friend.enable_water)
+        self._friend_widget.set_enable_bug(c.features.friend.enable_bug)
+        self._friend_widget.set_max_steal(c.features.friend.max_steal_per_round)
+        # 出售策略
         self._sell_widget.set_mode(c.sell.mode)
         self._sell_widget.set_sell_crops(c.sell.sell_crops)
+        # 静默时段
+        self._silent_widget.set_enabled_state(c.silent_hours.enabled)
+        self._silent_widget.set_start_time(c.silent_hours.start_hour, c.silent_hours.start_minute)
+        self._silent_widget.set_end_time(c.silent_hours.end_hour, c.silent_hours.end_minute)
+        # Web 服务
+        self._web_widget.set_enabled_state(c.web.enabled)
+        self._web_widget.set_host(c.web.host)
+        self._web_widget.set_port(c.web.port)

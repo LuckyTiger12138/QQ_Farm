@@ -25,6 +25,13 @@ config.json
 logs/
 screenshots/
 
+# 测试与调试脚本
+test_*.py
+test_*.png
+
+# 临时截图
+Snipaste_*.png
+
 # 内部文档
 docs/
 

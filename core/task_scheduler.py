@@ -185,12 +185,18 @@ class TaskScheduler(QObject):
         elapsed = time.time() - self._start_time if self._start_time else 0
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
+        state_map = {
+            BotState.RUNNING.value: "运行中",
+            BotState.PAUSED.value: "已暂停",
+            BotState.IDLE.value: "已停止",
+            BotState.ERROR.value: "异常",
+        }
         return {
             **self._stats,
             "elapsed": f"{hours}小时{minutes}分",
             "next_farm_check": datetime.fromtimestamp(self._next_farm_check).strftime("%H:%M:%S") if self._next_farm_check else "--",
             "next_friend_check": datetime.fromtimestamp(self._next_friend_check).strftime("%H:%M:%S") if self._next_friend_check else "--",
-            "state": self._state.value,
+            "state": state_map.get(self._state.value, self._state.value),
         }
 
     def reset_stats(self):

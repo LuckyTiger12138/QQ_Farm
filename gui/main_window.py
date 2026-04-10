@@ -152,20 +152,15 @@ class MainWindow(QMainWindow):
         self._btn_start = self._make_btn("开始", Colors.SUCCESS, "#15803d")
         self._btn_pause = self._make_btn("暂停", Colors.WARNING, "#b45309")
         self._btn_stop = self._make_btn("停止", Colors.DANGER, "#b91c1c")
-        self._btn_test = self._make_btn("测试", Colors.PRIMARY, Colors.PRIMARY_HOVER)
-        self._btn_friend = self._make_btn("巡查好友", "#7c3aed", "#6d28d9")
 
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
-        self._btn_friend.setEnabled(False)
 
         self._btn_start.clicked.connect(self._on_start)
         self._btn_pause.clicked.connect(self._on_pause)
         self._btn_stop.clicked.connect(self._on_stop)
-        self._btn_test.clicked.connect(self._on_test)
-        self._btn_friend.clicked.connect(self._on_friend)
 
-        for b in (self._btn_start, self._btn_pause, self._btn_stop, self._btn_test, self._btn_friend):
+        for b in (self._btn_start, self._btn_pause, self._btn_stop):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -187,6 +182,8 @@ class MainWindow(QMainWindow):
         self.engine.stats_updated.connect(self._status_panel.update_stats)
         get_log_signal().new_log.connect(self._log_panel.append_log)
         self._settings_panel.config_changed.connect(self._on_config_changed)
+        self._settings_panel.web_server_toggled.connect(self._on_web_server_toggled)
+        self.engine.config_updated.connect(self._on_config_updated)  # Web/引擎配置更新同步
 
     # ── 导航切换 ────────────────────────────────────────────
 
@@ -219,7 +216,6 @@ class MainWindow(QMainWindow):
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
             self._btn_stop.setEnabled(True)
-            self._btn_friend.setEnabled(True)
             self._status_refresh_timer.start()
 
     def _on_pause(self):
@@ -237,19 +233,21 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
-        self._btn_friend.setEnabled(False)
         self._btn_pause.setText("暂停")
         self._status_refresh_timer.stop()
 
-    def _on_test(self):
-        """测试施肥流程"""
-        self.engine.test_fertilize()
-
-    def _on_friend(self):
-        """手动触发好友巡查"""
-        self.engine.run_friend_once()
-
     def _on_state_changed(self, state: str):
+        """Bot 状态变化时更新按钮"""
+        state_map = {"running": True, "paused": True, "idle": False, "error": False}
+        running = state_map.get(state, False)
+        paused = state == "paused"
+        self._btn_start.setEnabled(not running)
+        self._btn_pause.setEnabled(running)
+        self._btn_stop.setEnabled(running)
+        if paused:
+            self._btn_pause.setText("恢复")
+        else:
+            self._btn_pause.setText("暂停")
         self._refresh_status()
 
     def _refresh_status(self):
@@ -260,6 +258,22 @@ class MainWindow(QMainWindow):
     def _on_config_changed(self, config: AppConfig):
         self.config = config
         self.engine.update_config(config)
+
+    def _on_config_updated(self, config: AppConfig):
+        """引擎配置更新时同步 GUI（如 Web 端修改配置）"""
+        self.config = config
+        self._settings_panel.config = config
+        self._settings_panel._loading = True
+        self._settings_panel._load_config()
+        self._settings_panel._loading = False
+
+    def _on_web_server_toggled(self, start: bool):
+        """Web 服务启动/停止"""
+        import main as _main
+        if start:
+            _main._start_web_server(self.config, self)
+        else:
+            _main._stop_web_server()
 
     def showEvent(self, event):
         super().showEvent(event)

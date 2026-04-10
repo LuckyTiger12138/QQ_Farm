@@ -20,6 +20,14 @@ class SellMode(str, Enum):
     SELECTIVE = "selective"        # 选择性出售（只卖勾选的作物）
 
 
+class FriendConfig(BaseModel):
+    enable_steal: bool = True       # 是否偷菜
+    enable_weed: bool = True        # 是否帮忙除草
+    enable_water: bool = True       # 是否帮忙浇水
+    enable_bug: bool = True         # 是否帮忙除虫
+    max_steal_per_round: int = 0    # 每轮偷菜次数上限（0=无限制）
+
+
 class FeaturesConfig(BaseModel):
     auto_harvest: bool = True
     auto_plant: bool = True
@@ -29,11 +37,10 @@ class FeaturesConfig(BaseModel):
     auto_bug: bool = True
     auto_fertilize: bool = True
     auto_sell: bool = False
-    auto_steal: bool = True
-    auto_help: bool = True
     auto_bad: bool = False
     auto_task: bool = False
     auto_upgrade: bool = False
+    friend: FriendConfig = Field(default_factory=FriendConfig)  # 好友操作配置
 
 
 class SellConfig(BaseModel):
@@ -56,9 +63,23 @@ class ScreenshotConfig(BaseModel):
 
 
 class ScheduleConfig(BaseModel):
-    farm_check_minutes: int = 2
-    friend_check_minutes: int = 5
-    task_check_minutes: int = 60
+    farm_check_seconds: int = 120    # 农场巡查间隔（秒）
+    friend_check_seconds: int = 300  # 好友巡查间隔（秒）
+    task_check_minutes: int = 60     # 任务检查间隔（分钟）
+
+
+class SilentHoursConfig(BaseModel):
+    enabled: bool = False
+    start_hour: int = 2     # 0-23
+    start_minute: int = 0   # 0-59
+    end_hour: int = 6       # 0-23
+    end_minute: int = 0     # 0-59
+
+
+class WebConfig(BaseModel):
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8080
 
 
 class PlantingConfig(BaseModel):
@@ -78,6 +99,8 @@ class AppConfig(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     planting: PlantingConfig = Field(default_factory=PlantingConfig)
     sell: SellConfig = Field(default_factory=SellConfig)
+    silent_hours: SilentHoursConfig = Field(default_factory=SilentHoursConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     _config_path: str = ""
 

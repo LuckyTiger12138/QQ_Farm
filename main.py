@@ -1,6 +1,8 @@
 """QQ农场自动化助手 - 程序入口"""
 import sys
 import os
+import time
+import threading
 
 # 确保项目根目录在 Python 路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +12,10 @@ from PyQt6.QtWidgets import QApplication
 from models.config import AppConfig
 from gui.main_window import MainWindow
 from utils.logger import setup_logger
+from loguru import logger
+
+
+_global_web_server = None  # 全局 Web 服务实例
 
 
 def main():
@@ -101,12 +107,114 @@ def main():
     # 注册全局热键 (F9 暂停/恢复, F10 停止)
     window.register_hotkeys()
 
+    # 启动 Web 服务（如果配置启用）
+    _start_web_server(config, window)
+
     ret = app.exec()
+
+    # 停止 Web 服务
+    _stop_web_server()
 
     # 清理热键
     window.unregister_hotkeys()
 
     sys.exit(ret)
+
+
+def _start_web_server(config: AppConfig, window: MainWindow):
+    """根据配置启动 Web 服务"""
+    global _global_web_server
+
+    # 如果已经在运行，先停止再重新启动
+    if _global_web_server and _global_web_server._running:
+        _global_web_server.stop()
+        import time
+        time.sleep(0.5)
+
+    if not config.web.enabled:
+        return
+
+    try:
+        from web.server import WebServer
+
+        web = WebServer(host=config.web.host, port=config.web.port, engine=window.engine)
+
+        # 注入回调
+        def get_bot_state():
+            engine = window.engine
+            if not engine:
+                return "stopped"
+            from core.task_scheduler import BotState
+            state_map = {
+                BotState.RUNNING: "running",
+                BotState.PAUSED: "paused",
+                BotState.IDLE: "stopped",
+                BotState.ERROR: "stopped",
+            }
+            return state_map.get(engine.scheduler.state, "stopped")
+
+        def get_stats():
+            return window.engine.scheduler.get_stats() if window.engine else {}
+
+        def get_screenshot():
+            """获取实时截图（优先内存，其次磁盘）"""
+            engine = window.engine
+            if not engine:
+                return None
+            try:
+                # 尝试实时截图
+                wnd = engine.window_manager._cached_window
+                if wnd:
+                    rect = (wnd.left, wnd.top, wnd.width, wnd.height)
+                    run_mode = engine.config.safety.run_mode
+                    hwnd = wnd.hwnd if run_mode == "background" else None
+                    img = engine.screen_capture.capture(rect, hwnd=hwnd)
+                    if img:
+                        import cv2
+                        import numpy as np
+                        arr = np.array(img)
+                        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            except Exception:
+                pass
+            # 兜底：读取磁盘最新截图
+            try:
+                import glob
+                shots = glob.glob("screenshots/farm_*.png")
+                if not shots:
+                    shots = glob.glob("screenshots/*.png")
+                if shots:
+                    shots.sort(key=os.path.getmtime, reverse=True)
+                    import cv2
+                    import numpy as np
+                    img = cv2.imdecode(np.fromfile(shots[0], dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if img is not None:
+                        return img
+            except Exception:
+                pass
+            return None
+
+        web.get_bot_state = get_bot_state
+        web.get_stats = get_stats
+        web.get_screenshot = get_screenshot
+        web.start_bot = window.engine.start
+        web.stop_bot = window.engine.stop
+        web.pause_bot = window.engine.pause
+        web.resume_bot = window.engine.resume
+
+        _global_web_server = web
+        web.start()
+
+        logger.info(f"Web 服务已启动: http://{config.web.host}:{config.web.port}")
+    except Exception as e:
+        logger.warning(f"Web 服务启动失败: {e}")
+
+
+def _stop_web_server():
+    """停止 Web 服务"""
+    global _global_web_server
+    if _global_web_server:
+        _global_web_server.stop()
+        _global_web_server = None
 
 
 if __name__ == "__main__":

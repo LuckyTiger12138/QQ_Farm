@@ -9,3 +9,6 @@ pydantic>=2.5.0
 opencv-python>=4.9.0
 numpy>=1.26.0
 keyboard>=0.13.5
+# Web 服务（可选）
+fastapi>=0.110.0
+uvicorn>=0.29.0

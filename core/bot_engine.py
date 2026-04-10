@@ -32,6 +32,7 @@ from core.cv_detector import CVDetector, DetectResult
 from core.action_executor import ActionExecutor
 from core.task_scheduler import TaskScheduler, BotState
 from core.scene_detector import Scene, identify_scene
+from core.silent_hours import is_silent_time, get_silent_remaining_seconds
 from core.strategies import (
     PopupStrategy, HarvestStrategy, MaintainStrategy,
     PlantStrategy, ExpandStrategy, FriendStrategy, TaskStrategy,
@@ -103,6 +104,8 @@ class BotEngine(QObject):
     state_changed = pyqtSignal(str)
     stats_updated = pyqtSignal(dict)
     detection_result = pyqtSignal(object)
+    _request_farm_check = pyqtSignal()
+    config_updated = pyqtSignal(object)  # 配置更新信号，通知 GUI 刷新
 
     def __init__(self, config: AppConfig):
         super().__init__()
@@ -140,6 +143,7 @@ class BotEngine(QObject):
 
         self.scheduler.farm_check_triggered.connect(self._on_farm_check)
         self.scheduler.friend_check_triggered.connect(self._on_friend_check)
+        self._request_farm_check.connect(self._on_farm_check)  # 内部信号连接
         self.scheduler.state_changed.connect(self.state_changed.emit)
         self.scheduler.stats_updated.connect(self.stats_updated.emit)
         self.scheduler.window_lost.connect(self._on_window_lost)
@@ -185,6 +189,13 @@ class BotEngine(QObject):
         self.task.sell_config = config.sell
         self.plant.auto_buy_seed = config.features.auto_buy_seed
         self.plant.auto_fertilize = self.config.features.auto_fertilize
+        self.config_updated.emit(config)  # 通知 GUI 刷新
+
+        # 新增：配置更新后检查静默时段状态，若已结束则立即唤醒定时器
+        # 防止用户修改了截止时间，但定时器还在等待原来的时间
+        if not is_silent_time(self.config.silent_hours):
+            logger.info("静默时段配置已更新，当前已不在静默时段，立即唤醒巡查")
+            self.scheduler.set_farm_interval(1)  # 立即触发检查
 
     def _resolve_crop_name(self) -> str:
         """根据策略决定种植作物"""
@@ -255,8 +266,9 @@ class BotEngine(QObject):
         )
         self._init_strategies()
 
-        farm_ms = self.config.schedule.farm_check_minutes * 60 * 1000
-        friend_ms = self.config.schedule.friend_check_minutes * 60 * 1000
+        # 使用秒级间隔（配置值 * 1000 转毫秒）
+        farm_ms = self.config.schedule.farm_check_seconds * 1000
+        friend_ms = self.config.schedule.friend_check_seconds * 1000
         self.scheduler.start(farm_ms, friend_ms)
         mode_text = "后台" if run_mode == RunMode.BACKGROUND else "前台"
         self.log_message.emit(f"Bot已启动 - 窗口: {window.title} | 模板: {tpl_count}个 | 模式: {mode_text}")
@@ -492,8 +504,9 @@ class BotEngine(QObject):
             self.scheduler.set_farm_interval(next_sec)
 
         # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
-        has_friend_feature = (self.config.features.auto_steal
-                              or self.config.features.auto_help)
+        friend_cfg = self.config.features.friend
+        has_friend_feature = (friend_cfg.enable_steal or friend_cfg.enable_weed
+                              or friend_cfg.enable_water or friend_cfg.enable_bug)
         if self.action_executor and has_friend_feature:
             now = time.time()
             next_friend = self.scheduler._next_friend_check
@@ -505,10 +518,12 @@ class BotEngine(QObject):
     def _on_friend_finished(self, result: dict):
         """好友巡查完成回调"""
         if self.scheduler.state == BotState.IDLE:
+            logger.debug("Bot 已停止，忽略好友巡查完成回调")
             return
         self._is_busy = False
         self._record_actions(result)
-        # 好友巡查不修改农场检查间隔，避免覆盖农场设置的间隔
+        logger.info("好友巡查完成，立即触发农场检查")
+        self._request_farm_check.emit()
 
     def _record_actions(self, result: dict):
         """记录操作统计信息"""
@@ -715,6 +730,16 @@ class BotEngine(QObject):
 
     def check_farm(self) -> dict:
         result = {"success": False, "actions_done": [], "next_check_seconds": 5}
+        
+        # 检查静默时段
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            logger.info(f"静默时段内，跳过农场巡查（剩余 {remaining} 秒）")
+            result["success"] = True
+            result["message"] = f"静默时段，跳过执行（剩余 {remaining} 秒）"
+            result["next_check_seconds"] = min(remaining, 300)  # 最多 5 分钟后重试
+            return result
+        
         features = self.config.features.model_dump()
 
         # 判断是否有农场操作需求（排除好友功能）
@@ -747,7 +772,7 @@ class BotEngine(QObject):
                     if info_close:
                         self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
             result["success"] = True
-            result["next_check_seconds"] = self.config.schedule.farm_check_minutes * 60
+            result["next_check_seconds"] = self.config.schedule.farm_check_seconds
             return result
 
         # 清屏：点击天空区域关闭残留弹窗/菜单
@@ -960,23 +985,12 @@ class BotEngine(QObject):
 
             # ---- 好友家园 ----
             elif scene == Scene.FRIEND_FARM:
-                # 偷菜
-                if features.get("auto_steal", False):
-                    steal = self.friend.try_steal(rect)
-                    if steal:
-                        result["actions_done"].append(steal)
-                        action_desc = steal
-                # 帮忙
-                if not action_desc and features.get("auto_help", True):
-                    fa = self.friend._help_in_friend_farm(rect)
-                    if fa:
-                        result["actions_done"].extend(fa)
-                        action_desc = fa[-1]
-                # 回家
+                # 农场巡查中误入好友农场，直接回家
+                logger.debug("误入好友农场，直接回家")
                 home_btn = self.friend.find_by_name(detections, "btn_home")
                 if home_btn:
                     self.friend.click(home_btn.x, home_btn.y, "回家")
-                    time.sleep(0.5)
+                    action_desc = "回家"
 
             elif scene == Scene.SEED_SELECT:
                 crop_name = self._resolve_crop_name()
@@ -1004,7 +1018,7 @@ class BotEngine(QObject):
             time.sleep(0.3)
 
         # 设置下次检查间隔：始终使用用户配置的间隔
-        interval = self.config.schedule.farm_check_minutes * 60
+        interval = self.config.schedule.farm_check_seconds
         result["next_check_seconds"] = interval
         has_planted = any("播种" in a for a in result.get("actions_done", []))
         if has_planted:
@@ -1012,7 +1026,7 @@ class BotEngine(QObject):
             crop = get_crop_by_name(crop_name)
             if crop:
                 grow_time = crop[3]
-                logger.info(f"已播种{crop_name}，{format_grow_time(grow_time)}后成熟，每{self.config.schedule.farm_check_minutes}分钟检查维护")
+                logger.info(f"已播种{crop_name}，{format_grow_time(grow_time)}后成熟，每{self.config.schedule.farm_check_seconds}秒检查维护")
 
         result["success"] = True
         self.screen_capture.cleanup_old_screenshots(0)
@@ -1020,10 +1034,23 @@ class BotEngine(QObject):
 
     def check_friends(self) -> dict:
         result = {"success": True, "actions_done": [], "next_check_seconds": 1800}
+        
+        # 检查静默时段
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            logger.info(f"静默时段内，跳过好友巡查（剩余 {remaining} 秒）")
+            result["success"] = True
+            result["message"] = f"静默时段，跳过执行（剩余 {remaining} 秒）"
+            result["next_check_seconds"] = min(remaining, 300)
+            return result
+        
         features = self.config.features
+        friend_cfg = features.friend
 
-        if not features.auto_steal and not features.auto_help:
-            logger.info("好友巡查: 未启用偷菜和帮忙，跳过")
+        # 新配置：4个独立开关全关则跳过
+        if not friend_cfg.enable_steal and not friend_cfg.enable_weed \
+           and not friend_cfg.enable_water and not friend_cfg.enable_bug:
+            logger.info("好友巡查: 未启用任何操作，跳过")
             return result
 
         rect = self._prepare_window()
@@ -1031,11 +1058,14 @@ class BotEngine(QObject):
             result["message"] = "窗口未找到"
             return result
 
-        # 调用 FriendStrategy 完整流程
+        # 调用 FriendStrategy 完整流程（传入独立开关和偷菜上限）
         actions = self.friend.run_friend_round(
             rect,
-            enable_steal=features.auto_steal,
-            enable_help=features.auto_help,
+            enable_steal=friend_cfg.enable_steal,
+            enable_weed=friend_cfg.enable_weed,
+            enable_water=friend_cfg.enable_water,
+            enable_bug=friend_cfg.enable_bug,
+            max_steal=friend_cfg.max_steal_per_round,
         )
         result["actions_done"] = actions
 
