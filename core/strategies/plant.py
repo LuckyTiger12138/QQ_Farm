@@ -7,6 +7,14 @@ from core.cv_detector import CVDetector, DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
 
+# 尝试导入 OCR 模块（可选依赖）
+try:
+    from utils.shop_item_ocr import ShopItemOCR
+    HAS_OCR = True
+except ImportError:
+    HAS_OCR = False
+    logger.warning("OCR 模块不可用，商店买种将使用模板匹配。安装 rapidocr_onnxruntime 可启用 OCR 识别。")
+
 # 注意：旧的硬编码阈值已废弃，现在统一从配置文件读取。
 # 如果需要为特定作物设置特殊阈值，请在 GUI 的“模板管理”中修改并保存。
 # CROP_THRESHOLDS = { ... } 
@@ -743,11 +751,13 @@ class PlantStrategy(BaseStrategy):
             actions_done.append(f"播种{crop_name}")
 
     def _buy_seeds(self, rect: tuple, crop_name: str) -> str | None:
-        """购买种子流程：打开商店 → 用 shop_xx 模板匹配找种子 → 点击 → 确认购买
+        """购买种子流程：打开商店 → OCR/模板匹配找种子 → 点击 → 确认购买
 
         安全策略：
         - 购买前验证仓库中种子数量
         - 如果仓库已有足够种子，跳过购买
+        
+        优先使用 OCR 识别（如果可用），否则回退到模板匹配
         """
         logger.info("购买流程：打开商店")
         if self.stopped:
@@ -776,7 +786,7 @@ class PlantStrategy(BaseStrategy):
                 return None
             time.sleep(0.05)
 
-        # 等待商店打开并查找种子
+        # 等待商店打开
         for attempt in range(5):
             if self.stopped:
                 return None
@@ -795,12 +805,112 @@ class PlantStrategy(BaseStrategy):
                 continue
 
             logger.info("购买流程：商店已打开，查找种子")
+            
+            # ✅ 尝试使用 OCR 识别（如果可用）
+            if HAS_OCR:
+                result = self._buy_seeds_with_ocr(rect, crop_name)
+                if result is not None:
+                    return result
+                # OCR 失败，回退到模板匹配
+                logger.info("购买流程：OCR 识别失败，回退到模板匹配")
+            
+            # ✅ 模板匹配方式（回退方案）
+            result = self._buy_seeds_with_template(rect, crop_name)
+            return result
+        else:
+            logger.warning("购买流程：商店加载超时")
+            self._close_shop(rect)
+            return None
+
+    def _buy_seeds_with_ocr(self, rect: tuple, crop_name: str) -> str | None:
+        """使用 OCR 识别商店种子并购买"""
+        try:
+            shop_ocr = ShopItemOCR()
+        except Exception as e:
+            logger.warning(f"购买流程：OCR 初始化失败: {e}")
+            return None
+        
+        max_swipe_attempts = 5
+        swipe_count = 0
+        
+        while swipe_count <= max_swipe_attempts:
+            if self.stopped:
+                self._close_shop(rect)
+                return None
+
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                time.sleep(0.3)
+                swipe_count += 1
+                continue
+
+            # 使用 OCR 查找目标作物
+            match = shop_ocr.find_item(cv_img, crop_name, min_similarity=0.70)
+            
+            if match.target:
+                # 找到了
+                logger.info(f"购买流程：OCR 找到 '{crop_name}' (中心点: {match.target.center_x}, {match.target.center_y})")
+                if self.stopped:
+                    logger.info("购买流程：收到停止信号，取消购买")
+                    self._close_shop(rect)
+                    return None
+                    
+                self.click(match.target.center_x, match.target.center_y, f"选择{crop_name}")
+                for _ in range(20):
+                    if self.stopped:
+                        logger.info("购买流程：等待弹窗时收到停止信号，取消")
+                        self._close_shop(rect)
+                        return None
+                    time.sleep(0.05)
+                return self._confirm_purchase(rect, crop_name)
+            else:
+                # 未找到，尝试滑动列表
+                if swipe_count < max_swipe_attempts:
+                    logger.info(f"购买流程：OCR 当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
+                    if self.action_executor:
+                        start_x, start_y = 270, 300
+                        dx, dy = 0, 560
+                        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+                    time.sleep(0.8)
+                    swipe_count += 1
+                else:
+                    logger.warning(f"购买流程：OCR 滑动 {max_swipe_attempts} 次后仍未找到 '{crop_name}'")
+                    self._close_shop(rect)
+                    return None
+        
+        self._close_shop(rect)
+        return None
+
+    def _buy_seeds_with_template(self, rect: tuple, crop_name: str) -> str | None:
+        """使用模板匹配查找商店种子并购买（回退方案）"""
+        max_swipe_attempts = 5
+        swipe_count = 0
+        
+        while swipe_count <= max_swipe_attempts:
+            if self.stopped:
+                self._close_shop(rect)
+                return None
+
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                time.sleep(0.3)
+                swipe_count += 1
+                continue
+
+            shop_close = self.cv_detector.detect_single_template(
+                cv_img, "btn_shop_close", threshold=self.cv_detector.get_template_threshold("btn_shop_close"))
+            if not shop_close:
+                logger.warning(f"购买流程：商店关闭按钮消失，可能已意外关闭")
+                self._close_shop(rect)
+                return None
+
+            # 尝试匹配种子模板
             seed_dets = self.cv_detector.detect_single_template(
                 cv_img, f"shop_{crop_name}", threshold=self.cv_detector.get_template_threshold(f"shop_{crop_name}"))
 
             if seed_dets:
                 det = seed_dets[0]
-                logger.info(f"购买流程：找到 '{crop_name}' ({det.confidence:.0%})")
+                logger.info(f"购买流程：模板匹配找到 '{crop_name}' ({det.confidence:.0%})")
                 if self.stopped:
                     logger.info("购买流程：收到停止信号，取消购买")
                     self._close_shop(rect)
@@ -812,17 +922,24 @@ class PlantStrategy(BaseStrategy):
                         self._close_shop(rect)
                         return None
                     time.sleep(0.05)
-                break
+                return self._confirm_purchase(rect, crop_name)
             else:
-                logger.warning(f"购买流程：商店中未找到 'shop_{crop_name}' 模板")
-                self._close_shop(rect)
-                return None
-        else:
-            logger.warning("购买流程：商店加载超时")
-            self._close_shop(rect)
-            return None
-
-        return self._confirm_purchase(rect, crop_name)
+                # 未找到，尝试滑动列表
+                if swipe_count < max_swipe_attempts:
+                    logger.info(f"购买流程：模板匹配当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
+                    if self.action_executor:
+                        start_x, start_y = 270, 300
+                        dx, dy = 0, 560
+                        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+                    time.sleep(0.8)
+                    swipe_count += 1
+                else:
+                    logger.warning(f"购买流程：模板匹配滑动 {max_swipe_attempts} 次后仍未找到 'shop_{crop_name}'")
+                    self._close_shop(rect)
+                    return None
+        
+        self._close_shop(rect)
+        return None
 
     def _confirm_purchase(self, rect: tuple, crop_name: str) -> str | None:
         """购买确认：直接点击确定（游戏自动填充最大数量）"""

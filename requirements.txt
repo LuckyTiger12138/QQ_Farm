@@ -12,3 +12,5 @@ keyboard>=0.13.5
 # Web 服务（可选）
 fastapi>=0.110.0
 uvicorn>=0.29.0
+# OCR 识别（用于商店买种）
+rapidocr_onnxruntime>=1.4.0
