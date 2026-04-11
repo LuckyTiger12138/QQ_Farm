@@ -127,7 +127,7 @@ class FriendStrategy(BaseStrategy):
             # 偷菜（检查次数限制）
             if enable_steal:
                 if max_steal == 0 or steal_count < max_steal:
-                    if self._do_steal(cv_img, dets):
+                    if self._do_steal(cv_img, dets, rect):  # ✅ 传入 rect 参数
                         steal_count += 1
                         has_action_this_round = True
 
@@ -396,22 +396,84 @@ class FriendStrategy(BaseStrategy):
 
     # ── 偷菜 ────────────────────────────────────────────────────
 
-    def _do_steal(self, cv_img, dets: list[DetectResult]) -> bool:
-        """基于已有检测结果执行偷菜"""
-        btn = self._find_any_name(dets, ["btn_steal"])
-        if btn:
-            self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
-            time.sleep(0.2)  # ✅ 缩短等待时间：0.3 -> 0.2
-            return True
+    def _do_steal(self, cv_img, dets: list[DetectResult], rect: tuple = None) -> bool:
+        """基于已有检测结果执行偷菜（参考 qq-farm-copilot 确认机制）
 
-        # icon 确认 + 固定坐标
-        if any(d.name == "icon_steal_in_friend_detail" for d in dets):
+        流程：
+        1. 检测偷菜按钮
+        2. 点击按钮
+        3. 循环检测确认按钮消失（确认偷菜成功）
+        """
+        btn = self._find_any_name(dets, ["btn_steal"])
+        if not btn:
+            # icon 确认 + 固定坐标
+            if not any(d.name == "icon_steal_in_friend_detail" for d in dets):
+                return False
             h, w = cv_img.shape[:2]
             fx, fy = _scale_pos(STEAL_BTN_POS, h, w)
+            logger.info(f"偷菜流程：使用固定坐标 ({fx}, {fy})")
             self.click(fx, fy, "偷菜(坐标)", ActionType.STEAL)
-            time.sleep(0.2)
-            return True
+        else:
+            logger.info(f"偷菜流程：检测到 btn_steal ({btn.x}, {btn.y}, 置信度: {btn.confidence:.0%})")
+            self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
+        
+        # ✅ 确认机制：循环检测直到按钮消失（参考 qq-farm-copilot）
+        if rect:
+            return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+        return True  # 如果没有 rect，直接返回 True（兼容旧逻辑）
 
+    def _confirm_action_disappear(self, btn_name: str, rect: tuple, timeout: float = 2.0) -> bool:
+        """确认操作成功：循环检测直到按钮消失
+
+        参考 qq-farm-copilot 的确认机制：
+        - 点击后持续检测按钮
+        - 按钮消失后等待 0.2 秒确认
+        - 超时则认为失败
+
+        Args:
+            btn_name: 需要检测消失的按钮名称
+            rect: 窗口矩形
+            timeout: 超时时间（秒）
+
+        Returns:
+            bool: True 表示操作成功（按钮消失），False 表示超时
+        """
+        start_time = time.time()
+        confirm_wait = 0.2  # 按钮消失后需要等待的时间
+
+        while time.time() - start_time < timeout:
+            if self.stopped:
+                return False
+
+            # 快速检测
+            cv_img, dets = self._quick_detect(rect, [btn_name])
+            if cv_img is None:
+                time.sleep(0.1)
+                continue
+
+            # 检查按钮是否还存在
+            btn_exists = any(d.name == btn_name for d in dets)
+
+            if not btn_exists:
+                # 按钮已消失，等待确认时间
+                logger.debug(f"按钮 {btn_name} 已消失，等待确认 {confirm_wait}s")
+                time.sleep(confirm_wait)
+                
+                # 再次确认
+                cv_img2, dets2 = self._quick_detect(rect, [btn_name])
+                if cv_img2 is not None:
+                    btn_still_gone = not any(d.name == btn_name for d in dets2)
+                    if btn_still_gone:
+                        logger.debug(f"确认：按钮 {btn_name} 已消失，操作成功")
+                        return True
+                
+                # 如果按钮又出现了，继续等待
+                logger.debug(f"按钮 {btn_name} 重新出现，继续等待")
+            else:
+                # 按钮还存在，继续等待
+                time.sleep(0.1)
+
+        logger.warning(f"确认超时：按钮 {btn_name} 在 {timeout}s 内未消失")
         return False
 
     # ── 帮忙 ────────────────────────────────────────────────────
@@ -717,4 +779,4 @@ class FriendStrategy(BaseStrategy):
         cv_img, dets = self._friend_detect(rect)
         if cv_img is None:
             return False
-        return self._do_steal(cv_img, dets)
+        return self._do_steal(cv_img, dets, rect)  # ✅ 传入 rect 参数
