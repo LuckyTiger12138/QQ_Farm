@@ -778,7 +778,7 @@ class BotEngine(QObject):
             self._clear_screen(rect)
 
         idle_rounds = 0
-        max_idle = 3
+        max_idle = 1  # ✅ 优化：降为 1，一轮无操作即退出（避免无效等待）
         
         # ✅ 添加状态变化检测：避免重复相同检测
         prev_scene = None
