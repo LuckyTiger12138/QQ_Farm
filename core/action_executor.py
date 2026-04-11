@@ -37,10 +37,38 @@ class ActionExecutor:
         self._delay_min = delay_min
         self._delay_max = delay_max
         self._click_offset = click_offset
+        
+        # ✅ 客户区相对于窗口左上角的偏移（用于坐标转换）
+        self._client_offset_x = 0
+        self._client_offset_y = 0
+        
+        # 初始化时获取客户区偏移
+        if hwnd:
+            self._update_client_offset()
 
     def update_window_rect(self, rect: tuple[int, int, int, int]):
         self._window_left, self._window_top = rect[0], rect[1]
         self._window_width, self._window_height = rect[2], rect[3]
+        
+        # ✅ 获取客户区的屏幕位置（用于坐标转换）
+        self._client_offset_x = 0
+        self._client_offset_y = 0
+        if self._hwnd:
+            self._update_client_offset()
+
+    def _update_client_offset(self):
+        """更新客户区相对于窗口左上角的偏移"""
+        try:
+            # 获取客户区位置 (0, 0)
+            point = ctypes.wintypes.POINT(0, 0)
+            ok = user32.ClientToScreen(ctypes.wintypes.HWND(self._hwnd), ctypes.byref(point))
+            if ok:
+                # 客户区相对于窗口左上角的偏移
+                self._client_offset_x = point.x - self._window_left
+                self._client_offset_y = point.y - self._window_top
+                logger.debug(f"客户区偏移: ({self._client_offset_x}, {self._client_offset_y})")
+        except Exception as e:
+            logger.warning(f"获取客户区偏移失败: {e}")
 
     def update_window_handle(self, hwnd: int | None):
         self._hwnd = hwnd
@@ -50,9 +78,14 @@ class ActionExecutor:
         return self._run_mode == RunMode.BACKGROUND and self._hwnd is not None
 
     def relative_to_absolute(self, rel_x: int, rel_y: int) -> tuple[int, int]:
-        """将相对于窗口的坐标转为屏幕绝对坐标"""
-        abs_x = self._window_left + rel_x
-        abs_y = self._window_top + rel_y
+        """将相对于窗口客户区的坐标转为屏幕绝对坐标
+        
+        rel_x, rel_y 是相对于客户区 (0, 0) 的坐标（来自模板匹配）
+        返回屏幕绝对坐标
+        """
+        # ✅ 使用客户区偏移进行转换
+        abs_x = self._window_left + self._client_offset_x + rel_x
+        abs_y = self._window_top + self._client_offset_y + rel_y
         return abs_x, abs_y
 
     def _random_offset(self) -> tuple[int, int]:
