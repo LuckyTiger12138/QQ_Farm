@@ -21,16 +21,24 @@
     "seed_爱心果": 0.61,
     "shop_金针菇": 0.76,
     "btn_seed_select_right": 0.9,
-    "seed_白萝卜": 0.88
+    "seed_白萝卜": 0.88,
+    "ws_鲜姜": 0.77,
+    "ws_金针菇": 0.77,
+    "ws_西瓜": 0.86,
+    "ws_银莲花": 0.87,
+    "ws_水稻": 0.86,
+    "ws_胡萝卜": 0.84,
+    "shop_胡萝卜": 0.71
   },
   "category_overrides": {
     "button": 0.8,
     "status_icon": 0.8,
     "crop": 0.8,
     "ui_element": 0.8,
-    "land": 0.73,
+    "land": 0.74,
     "seed": 0.8,
-    "shop": 0.8,
-    "unknown": 0.8
+    "shop": 0.74,
+    "unknown": 0.8,
+    "warehouse_seed": 0.88
   }
 }

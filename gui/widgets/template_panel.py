@@ -16,8 +16,618 @@ from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QThread, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QFont
 
 from gui.styles import Colors, ghost_button_style
-from core.cv_detector import CVDetector, TEMPLATE_CATEGORIES
+from core.cv_detector import CVDetector, TEMPLATE_CATEGORIES, DetectResult
 from loguru import logger
+
+
+# ── 可点击的 QLabel ──────────────────────────────────────────
+
+class ClickableLabel(QLabel):
+    """支持点击事件的 QLabel"""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
+
+
+# ── 图片放大预览对话框 ──────────────────────────────────────
+
+class ImagePreviewDialog(QDialog):
+    """全屏/大窗口图片预览对话框（带匹配结果列表）"""
+
+    def __init__(self, bgr_image: np.ndarray, title: str = "预览",
+                 match_results: list[DetectResult] | None = None, parent=None):
+        super().__init__(parent)
+        self._bgr = bgr_image
+        self._results = match_results or []
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.setMinimumSize(900, 600)
+        self._init_ui()
+
+    def _init_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 主分割器：左预览 右列表
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # 左侧预览区
+        left_widget = QWidget()
+        left_lay = QVBoxLayout(left_widget)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(0)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(8, 4, 8, 4)
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setStyleSheet(f"font-size:12px; color:{Colors.TEXT_DIM}; background:transparent;")
+        toolbar.addWidget(self._zoom_label)
+        toolbar.addStretch()
+        close_btn = QPushButton("✕ 关闭")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {Colors.TEXT_DIM}; font-size: 13px;
+                padding: 4px 12px; border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(0,0,0,8);
+                color: {Colors.TEXT};
+            }}
+        """)
+        close_btn.clicked.connect(self.close)
+        toolbar.addWidget(close_btn)
+        left_lay.addLayout(toolbar)
+
+        self._viewer = QLabel()
+        self._viewer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._viewer.setStyleSheet("background-color: #1e1e1e;")
+        self._viewer.setCursor(Qt.CursorShape.OpenHandCursor)
+        left_lay.addWidget(self._viewer, 1)
+
+        splitter.addWidget(left_widget)
+
+        # 右侧匹配列表
+        right_widget = QWidget()
+        right_widget.setFixedWidth(280)
+        right_widget.setStyleSheet(f"background-color:{Colors.CARD_BG}; border-left:1px solid {Colors.BORDER};")
+        right_lay = QVBoxLayout(right_widget)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(0)
+
+        list_title = QLabel("匹配结果")
+        list_title.setStyleSheet(f"font-weight:700; font-size:13px; color:{Colors.TEXT}; padding:10px 12px 6px;")
+        right_lay.addWidget(list_title)
+
+        self._list_scroll = QScrollArea()
+        self._list_scroll.setWidgetResizable(True)
+        self._list_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._list_widget = QWidget()
+        self._list_inner = QVBoxLayout(self._list_widget)
+        self._list_inner.setContentsMargins(8, 4, 8, 8)
+        self._list_inner.setSpacing(4)
+        self._list_inner.addStretch()
+        self._list_scroll.setWidget(self._list_widget)
+        right_lay.addWidget(self._list_scroll, 1)
+
+        splitter.addWidget(right_widget)
+        splitter.setSizes([620, 280])
+        root.addWidget(splitter, 1)
+
+        # 标注图片（带编号）
+        annotated = self._draw_numbered_boxes(self._bgr, self._results)
+        self._build_result_list()
+        self._set_image(annotated)
+
+    def _build_result_list(self):
+        """构建右侧匹配结果列表"""
+        # 清除旧条目
+        while self._list_inner.count() > 1:
+            item = self._list_inner.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._results:
+            hint = QLabel("无匹配结果")
+            hint.setStyleSheet(f"color:{Colors.TEXT_DIM}; font-size:12px; padding:8px;")
+            self._list_inner.insertWidget(0, hint)
+            return
+
+        # 按置信度排序
+        sorted_results = sorted(self._results, key=lambda r: r.confidence, reverse=True)
+
+        for i, res in enumerate(sorted_results):
+            card = self._make_result_card(res, i + 1)
+            self._list_inner.insertWidget(i, card)
+
+    def _draw_numbered_boxes(self, bgr: np.ndarray, results: list) -> np.ndarray:
+        """在图片上画带编号的矩形框"""
+        output = bgr.copy()
+
+        # 类别颜色映射
+        cat_colors = {
+            "button": (0, 200, 255),
+            "status_icon": (0, 100, 255),
+            "crop": (0, 255, 100),
+            "ui_element": (255, 255, 0),
+            "land": (180, 180, 180),
+            "seed": (255, 50, 255),
+            "shop": (0, 200, 200),
+            "warehouse_seed": (130, 159, 255),
+            "unknown": (0, 0, 255),
+        }
+
+        # 按置信度排序，保证编号一致
+        sorted_results = sorted(results, key=lambda r: r.confidence, reverse=True)
+
+        for idx, res in enumerate(sorted_results):
+            num = idx + 1
+            color = cat_colors.get(res.category, (0, 0, 255))
+            x1, y1, x2, y2 = res.bbox
+
+            # 半透明填充
+            overlay = output.copy()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+            cv2.addWeighted(overlay, 0.2, output, 0.8, 0, output)
+
+            # 边框
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 3)
+
+            # 编号圆形徽章（左上角）
+            cx, cy = x1 + 18, y1 + 18
+            radius = 14
+            cv2.circle(output, (cx, cy), radius, color, -1)
+            cv2.circle(output, (cx, cy), radius, (255, 255, 255), 2)
+            cv2.putText(output, str(num), (cx - 6, cy + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
+        return output
+
+    def _make_result_card(self, res: 'DetectResult', index: int) -> QFrame:
+        """创建单条匹配结果卡片（带模板缩略图）"""
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {Colors.WINDOW_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 6px 8px;
+            }}
+        """)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(8)
+
+        # 左侧编号徽章
+        badge = QLabel(str(index))
+        badge.setFixedSize(24, 24)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cat_colors = {
+            "button": "#00C8FF", "status_icon": "#0064FF", "crop": "#00FF64",
+            "ui_element": "#FFFF00", "land": "#B4B4B4", "seed": "#FF32FF",
+            "shop": "#00C8C8", "warehouse_seed": "#829FFF", "unknown": "#FF0000",
+        }
+        badge_color = cat_colors.get(res.category, "#FF0000")
+        badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {badge_color};
+                color: white; font-weight: 700; font-size: 13px;
+                border-radius: 12px;
+            }}
+        """)
+        lay.addWidget(badge)
+
+        # 模板缩略图
+        thumb = QLabel()
+        thumb.setFixedSize(40, 40)
+        thumb.setStyleSheet(f"""
+            QLabel {{
+                background-color: rgba(0,0,0,6);
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+            }}
+        """)
+        px = self._load_thumb(res.name)
+        if px:
+            thumb.setPixmap(px.scaled(36, 36, Qt.AspectRatioMode.KeepAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation))
+        lay.addWidget(thumb)
+
+        # 右侧信息
+        info_lay = QVBoxLayout()
+        info_lay.setSpacing(2)
+
+        # 模板名称
+        name_lbl = QLabel(res.name)
+        name_lbl.setStyleSheet(f"font-weight:600; font-size:12px; color:{Colors.TEXT};")
+        info_lay.addWidget(name_lbl)
+
+        # 置信度
+        conf_lbl = QLabel(f"{res.confidence:.2%}")
+        conf_color = "#34C759" if res.confidence >= 0.8 else "#FF9500" if res.confidence >= 0.65 else Colors.DANGER
+        conf_lbl.setStyleSheet(f"font-size:11px; color:{conf_color}; font-weight:600;")
+        info_lay.addWidget(conf_lbl)
+
+        # 坐标
+        pos_lbl = QLabel(f"({res.x}, {res.y})  {res.w}×{res.h}")
+        pos_lbl.setStyleSheet(f"font-size:10px; color:{Colors.TEXT_DIM};")
+        info_lay.addWidget(pos_lbl)
+
+        info_lay.addStretch()
+        lay.addLayout(info_lay, 1)
+
+        return card
+
+    def _load_thumb(self, name: str) -> QPixmap | None:
+        """加载模板缩略图"""
+        try:
+            fp = os.path.join("templates", f"{name}.png")
+            if not os.path.exists(fp):
+                return None
+            buf = np.fromfile(fp, dtype=np.uint8)
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if img is None:
+                return None
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            data = rgb.tobytes()
+            qimg = QImage(data, w, h, ch * w, QImage.Format.Format_RGB888)
+            return QPixmap.fromImage(qimg)
+        except Exception:
+            return None
+
+    def _set_image(self, bgr: np.ndarray):
+        if bgr is None:
+            return
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        data = rgb.tobytes()
+        qimg = QImage(data, w, h, ch * w, QImage.Format.Format_RGB888)
+        self._pixmap = QPixmap.fromImage(qimg)
+        self._fit_to_view()
+
+    def _fit_to_view(self):
+        if not hasattr(self, '_pixmap') or self._pixmap.isNull():
+            return
+        vw = self._viewer.width() - 20
+        vh = self._viewer.height() - 20
+        if vw <= 0 or vh <= 0:
+            return
+        scaled = self._pixmap.scaled(vw, vh, Qt.AspectRatioMode.KeepAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation)
+        self._viewer.setPixmap(scaled)
+        scale_pct = scaled.width() / self._pixmap.width() * 100
+        self._zoom_label.setText(f"{scale_pct:.0f}%")
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_to_view()
+
+
+# ── 裁切画布（支持鼠标拖拽矩形框选） ──────────────────────────
+
+class CropCanvas(QLabel):
+    """可交互的裁切画布：鼠标拖拽绘制矩形选区"""
+
+    rect_changed = pyqtSignal(int, int, int, int)  # x, y, w, h（原始图坐标）
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._original: np.ndarray | None = None   # 原始 BGRA 图像
+        self._display_px: QPixmap | None = None     # 缩放后的显示 QPixmap
+        self._scale = 1.0                           # 缩放比例
+        self._dragging = False
+        self._start_pos: QPoint | None = None
+        self._end_pos: QPoint | None = None
+        self._crop_rect: tuple[int, int, int, int] | None = None  # (x, y, w, h) 原始坐标
+        self.setMinimumSize(400, 300)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: rgba(0,0,0,6);
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+
+    def set_image(self, bgra: np.ndarray):
+        """加载图像并渲染"""
+        self._original = bgra.copy()
+        self._crop_rect = None
+        self._draw_rect = None
+        h, w = bgra.shape[:2]
+
+        # 创建棋盘格 + alpha 混合的显示图
+        checker = np.zeros((h, w, 3), dtype=np.uint8)
+        tile = 10
+        for y in range(h):
+            for x in range(w):
+                if ((x // tile) + (y // tile)) % 2 == 0:
+                    checker[y, x] = (240, 240, 240)
+                else:
+                    checker[y, x] = (200, 200, 200)
+        if bgra.shape[2] == 4:
+            alpha = bgra[:, :, 3:4].astype(np.float32) / 255.0
+            bgr = bgra[:, :, :3].astype(np.float32)
+            blended = (bgr * alpha + checker.astype(np.float32) * (1 - alpha)).astype(np.uint8)
+        else:
+            blended = bgra[:, :, :3]
+
+        rgb = cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)
+        dh, dw, ch = rgb.shape
+        data = rgb.tobytes()
+        qimg = QImage(data, dw, dh, ch * dw, QImage.Format.Format_RGB888)
+        px = QPixmap.fromImage(qimg)
+
+        # 自适应缩放
+        max_w, max_h = 600, 400
+        self._scale = min(max_w / w, max_h / h, 1.0)
+        scaled = px.scaled(int(w * self._scale), int(h * self._scale),
+                           Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+        self._display_px = scaled
+        self.setPixmap(scaled)
+        self.setMinimumSize(scaled.size())
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._original is not None:
+            self._dragging = True
+            self._start_pos = e.pos()
+            self._end_pos = e.pos()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._dragging:
+            self._end_pos = e.pos()
+            self._update_crop_rect()
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            self._end_pos = e.pos()
+            self._update_crop_rect()
+        super().mouseReleaseEvent(e)
+
+    def _update_crop_rect(self):
+        """计算裁切矩形（映射回原始图坐标）"""
+        if self._start_pos is None or self._end_pos is None:
+            return
+
+        # 获取图片在 QLabel 中的偏移（因为 AlignCenter）
+        px_w = self._display_px.width() if self._display_px else 0
+        px_h = self._display_px.height() if self._display_px else 0
+        off_x = (self.width() - px_w) // 2
+        off_y = (self.height() - px_h) // 2
+
+        # 转为画布内坐标
+        x1 = self._start_pos.x() - off_x
+        y1 = self._start_pos.y() - off_y
+        x2 = self._end_pos.x() - off_x
+        y2 = self._end_pos.y() - off_y
+
+        # 映射回原始图坐标
+        ox1 = int(x1 / self._scale)
+        oy1 = int(y1 / self._scale)
+        ox2 = int(x2 / self._scale)
+        oy2 = int(y2 / self._scale)
+
+        # 规范化
+        cx = max(0, min(ox1, ox2))
+        cy = max(0, min(oy1, oy2))
+        h, w = self._original.shape[:2]
+        cw = min(max(abs(ox2 - ox1), 1), w - cx)
+        ch = min(max(abs(oy2 - oy1), 1), h - cy)
+
+        self._crop_rect = (cx, cy, cw, ch)
+        self.rect_changed.emit(cx, cy, cw, ch)
+        self._redraw()
+
+    def _redraw(self):
+        """重绘：显示图 + 矩形框"""
+        if self._display_px is None:
+            return
+        overlay = QPixmap(self._display_px)
+        if self._crop_rect:
+            cx, cy, cw, ch = self._crop_rect
+            # 映射到显示坐标
+            dx = int(cx * self._scale)
+            dy = int(cy * self._scale)
+            dw = int(cw * self._scale)
+            dh = int(ch * self._scale)
+
+            painter = QPainter(overlay)
+            painter.setPen(QPen(QColor("#007AFF"), 2, Qt.PenStyle.SolidLine))
+            painter.setBrush(QBrush(QColor(0, 122, 255, 30)))
+            painter.drawRect(dx, dy, dw, dh)
+            painter.end()
+
+        self.setPixmap(overlay)
+
+    def get_crop(self) -> np.ndarray | None:
+        """获取裁切后的 BGRA 图像"""
+        if self._original is None or self._crop_rect is None:
+            return None
+        cx, cy, cw, ch = self._crop_rect
+        return self._original[cy:cy+ch, cx:cx+cw].copy()
+
+    def reset(self):
+        """重置裁切"""
+        self._crop_rect = None
+        if self._original is not None:
+            self._redraw()
+
+
+# ── 裁切对话框 ────────────────────────────────────────────────
+
+class CropDialog(QDialog):
+    """模板裁切对话框：鼠标拖拽矩形框选裁切"""
+
+    def __init__(self, name: str, filepath: str, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._filepath = filepath
+        self._original_bgra: np.ndarray | None = None
+        self._init_ui()
+        self._load_image()
+
+    def _init_ui(self):
+        self.setWindowTitle(f"裁切模板: {self._name}")
+        self.setModal(True)
+        self.setMinimumWidth(650)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {Colors.CARD_BG};
+                color: {Colors.TEXT};
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        # 标题
+        title = QLabel(f"✂ 裁切: {self._name}")
+        title.setStyleSheet(f"font-weight:700; font-size:16px; color:{Colors.TEXT}; background:transparent;")
+        root.addWidget(title)
+
+        # 裁切画布
+        self._canvas = CropCanvas()
+        self._canvas.rect_changed.connect(self._on_rect_changed)
+        root.addWidget(self._canvas)
+
+        # 信息行
+        self._info_label = QLabel("鼠标拖拽框选要保留的区域")
+        self._info_label.setStyleSheet(f"font-size:12px; color:{Colors.TEXT_DIM}; background:transparent;")
+        root.addWidget(self._info_label)
+
+        # 快捷按钮行
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(6)
+
+        self._btn_auto_crop = QPushButton("自动裁切透明边")
+        self._btn_auto_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_auto_crop.setFixedHeight(28)
+        self._btn_auto_crop.setStyleSheet(_outline_button("#34C759"))
+        self._btn_auto_crop.clicked.connect(self._auto_crop_transparent)
+        quick_row.addWidget(self._btn_auto_crop)
+
+        self._btn_reset = QPushButton("重置选区")
+        self._btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_reset.setFixedHeight(28)
+        self._btn_reset.setStyleSheet(_outline_button())
+        self._btn_reset.clicked.connect(self._reset_crop)
+        quick_row.addWidget(self._btn_reset)
+
+        quick_row.addStretch()
+        root.addLayout(quick_row)
+
+        # 按钮行
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self._btn_cancel = QPushButton("取消")
+        self._btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_cancel.setFixedHeight(32)
+        self._btn_cancel.setStyleSheet(_outline_button())
+        self._btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(self._btn_cancel)
+
+        self._btn_save = QPushButton("保存")
+        self._btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_save.setFixedHeight(32)
+        self._btn_save.setStyleSheet(_icon_button(Colors.PRIMARY, Colors.PRIMARY_HOVER))
+        self._btn_save.clicked.connect(self._on_save)
+        btn_row.addWidget(self._btn_save)
+
+        root.addLayout(btn_row)
+
+    def _load_image(self):
+        """加载模板图片"""
+        try:
+            buf = np.fromfile(self._filepath, dtype=np.uint8)
+            img = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                self._info_label.setText("✗ 图片加载失败")
+                return
+
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
+            elif img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                img[:, :, 3] = 255
+
+            self._original_bgra = img
+            h, w = img.shape[:2]
+            self._info_label.setText(f"原始尺寸: {w} × {h} px | 鼠标拖拽框选要保留的区域")
+            self._canvas.set_image(img)
+        except Exception as e:
+            self._info_label.setText(f"✗ 加载失败: {e}")
+            logger.error(f"裁切对话框加载图片失败: {e}")
+
+    def _on_rect_changed(self, x: int, y: int, w: int, h: int):
+        """裁切矩形变化时更新信息"""
+        self._info_label.setText(f"选区: ({x}, {y}) {w}×{h} px")
+
+    def _auto_crop_transparent(self):
+        """自动裁切透明边缘"""
+        if self._original_bgra is None:
+            return
+
+        alpha = self._original_bgra[:, :, 3]
+        non_transparent = np.where(alpha > 10)
+        if len(non_transparent[0]) == 0:
+            self._info_label.setText("⚠ 图片完全透明，无法裁切")
+            return
+
+        y_min, x_min = non_transparent[0].min(), non_transparent[1].min()
+        y_max, x_max = non_transparent[0].max(), non_transparent[1].max()
+
+        h, w = self._original_bgra.shape[:2]
+        cx = x_min
+        cy = y_min
+        cw = x_max - x_min + 1
+        ch = y_max - y_min + 1
+
+        # 直接设置裁切矩形
+        self._canvas._crop_rect = (cx, cy, cw, ch)
+        self._canvas._redraw()
+        self._info_label.setText(f"自动裁切: ({cx}, {cy}) {cw}×{ch} px")
+        logger.info(f"自动裁切透明边: x={cx}, y={cy}, w={cw}, h={ch}")
+
+    def _reset_crop(self):
+        """重置选区"""
+        self._canvas.reset()
+        h, w = self._original_bgra.shape[:2] if self._original_bgra is not None else (0, 0)
+        self._info_label.setText(f"原始尺寸: {w} × {h} px | 鼠标拖拽框选要保留的区域")
+
+    def _on_save(self):
+        """保存裁切结果"""
+        cropped = self._canvas.get_crop()
+        if cropped is None:
+            QMessageBox.warning(self, "裁切失败", "请先拖拽框选要保留的区域")
+            return
+
+        try:
+            ok, buf = cv2.imencode('.png', cropped)
+            if not ok:
+                QMessageBox.critical(self, "保存失败", "图片编码失败")
+                return
+
+            buf.tofile(self._filepath)
+            logger.info(f"裁切保存成功: {self._filepath}")
+            QMessageBox.information(self, "保存成功", f"模板 '{self._name}' 已裁切并保存")
+            self.accept()
+        except Exception as e:
+            logger.error(f"裁切保存失败: {e}")
+            QMessageBox.critical(self, "保存失败", f"保存失败: {e}")
 
 
 # ── 样式常量 ────────────────────────────────────────────────
@@ -406,6 +1016,13 @@ class TemplateDetailPanel(QFrame):
         edit_row = QHBoxLayout()
         edit_row.setSpacing(6)
 
+        self._btn_crop = QPushButton("✂ 裁切")
+        self._btn_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_crop.setFixedHeight(26)
+        self._btn_crop.setStyleSheet(_outline_button("#FF9500"))
+        self._btn_crop.clicked.connect(self._on_crop)
+        edit_row.addWidget(self._btn_crop)
+
         self._btn_rename = QPushButton("重命名")
         self._btn_rename.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_rename.setFixedHeight(26)
@@ -560,11 +1177,12 @@ class TemplateDetailPanel(QFrame):
         self._test_info.setWordWrap(True)
         root.addWidget(self._test_info)
 
+        # 可点击的测试预览
         self._test_scroll = QScrollArea()
         self._test_scroll.setWidgetResizable(True)
         self._test_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
         self._test_scroll.setMinimumHeight(120)
-        self._test_preview = QLabel()
+        self._test_preview = ClickableLabel()
         self._test_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._test_preview.setStyleSheet(f"""
             QLabel {{
@@ -572,7 +1190,11 @@ class TemplateDetailPanel(QFrame):
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
             }}
+            QLabel:hover {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
         """)
+        self._test_preview.clicked.connect(self._on_preview_click)
         self._test_scroll.setWidget(self._test_preview)
         root.addWidget(self._test_scroll, 1)
 
@@ -580,6 +1202,8 @@ class TemplateDetailPanel(QFrame):
         self._name = name
         self._filepath = filepath
         self._test_bgr = None
+        self._test_bgr_annotated = None
+        self._test_bgr_results = []
         self._btn_run_test.setEnabled(False)
         self._test_info.clear()
         self._test_preview.clear()
@@ -812,8 +1436,9 @@ class TemplateDetailPanel(QFrame):
             return
 
         # 逐个测试
-        all_results = []
-        summary_lines = [f"类别: {cat} | 共 {len(cat_templates)} 个模板"]
+        matched = []  # (tpl_name, count, min_conf, max_conf)
+        unmatched = []
+
         for tpl_name in cat_templates:
             threshold = self._detector.get_template_threshold(tpl_name)
             results = self._detector.detect_single_template(
@@ -821,26 +1446,84 @@ class TemplateDetailPanel(QFrame):
             )
             if results:
                 confs = [r.confidence for r in results]
-                summary_lines.append(
-                    f"  ✓ {tpl_name}: {len(results)}处, 置信度 {min(confs):.2f}~{max(confs):.2f}"
-                )
-                all_results.extend(results)
+                matched.append((tpl_name, len(results), min(confs), max(confs)))
             else:
-                summary_lines.append(f"  ✗ {tpl_name}: 未匹配")
+                unmatched.append(tpl_name)
+
+        # 按最高置信度降序排列
+        matched.sort(key=lambda x: x[3], reverse=True)
+
+        # 构建摘要（匹配到的在前，未匹配的在后）
+        summary_lines = [f"类别: {cat} | 共 {len(cat_templates)} 个模板 | 匹配 {len(matched)} | 未匹配 {len(unmatched)}"]
+        for tpl_name, count, min_conf, max_conf in matched:
+            summary_lines.append(
+                f"  ✓ {tpl_name}: {count}处, 置信度 {min_conf:.2f}~{max_conf:.2f}"
+            )
+        for tpl_name in unmatched:
+            summary_lines.append(f"  ✗ {tpl_name}: 未匹配")
+
+        # 收集所有匹配结果用于绘制
+        all_results = []
+        for tpl_name, _, _, _ in matched:
+            threshold = self._detector.get_template_threshold(tpl_name)
+            results = self._detector.detect_single_template(
+                self._test_bgr, tpl_name, threshold
+            )
+            all_results.extend(results)
 
         # 按类别分组 NMS 去重
         final_results = self._detector._nms_by_category(all_results, iou_threshold=0.3)
 
-        self._test_info.setText(
-            f"{len(cat_templates)} 个模板 | "
-            f"匹配到 {len(final_results)} 处（去重后）\n"
-            + "\n".join(summary_lines)
-        )
+        self._test_info.setText("\n".join(summary_lines))
 
-        annotated = self._detector.draw_results(self._test_bgr, final_results)
-        self._show_test_image(annotated)
+        # 带编号的标注图（同步显示在小预览和放大弹窗）
+        annotated = self._draw_results_with_numbers(self._test_bgr, final_results)
+        self._show_test_image(annotated, final_results)
 
-    def _show_test_image(self, bgr: np.ndarray):
+    def _draw_results_with_numbers(self, bgr: np.ndarray, results: list[DetectResult]) -> np.ndarray:
+        """在图片上画带编号的矩形框（同步用于小预览和放大弹窗）"""
+        output = bgr.copy()
+
+        cat_colors = {
+            "button": (0, 200, 255),
+            "status_icon": (0, 100, 255),
+            "crop": (0, 255, 100),
+            "ui_element": (255, 255, 0),
+            "land": (180, 180, 180),
+            "seed": (255, 50, 255),
+            "shop": (0, 200, 200),
+            "warehouse_seed": (130, 159, 255),
+            "unknown": (0, 0, 255),
+        }
+
+        sorted_results = sorted(results, key=lambda r: r.confidence, reverse=True)
+
+        for idx, res in enumerate(sorted_results):
+            num = idx + 1
+            color = cat_colors.get(res.category, (0, 0, 255))
+            x1, y1, x2, y2 = res.bbox
+
+            # 半透明填充
+            overlay = output.copy()
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+            cv2.addWeighted(overlay, 0.2, output, 0.8, 0, output)
+
+            # 边框
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 3)
+
+            # 编号圆形徽章（左上角）
+            cx, cy = x1 + 18, y1 + 18
+            radius = 14
+            cv2.circle(output, (cx, cy), radius, color, -1)
+            cv2.circle(output, (cx, cy), radius, (255, 255, 255), 2)
+            cv2.putText(output, str(num), (cx - 6, cy + 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+
+        return output
+
+    def _show_test_image(self, bgr: np.ndarray, results: list[DetectResult] | None = None):
+        self._test_bgr_annotated = bgr  # 保存标注后的图，用于点击放大
+        self._test_bgr_results = results or []  # 保存匹配结果
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         data = rgb.tobytes()
@@ -854,6 +1537,30 @@ class TemplateDetailPanel(QFrame):
             Qt.TransformationMode.SmoothTransformation)
         self._test_preview.setPixmap(scaled)
         self._test_preview.setMinimumSize(scaled.size())
+
+    def _on_preview_click(self):
+        """点击测试预览图，打开放大预览"""
+        if not hasattr(self, '_test_bgr_annotated') or self._test_bgr_annotated is None:
+            return
+        title = f"匹配结果预览 - {self._name}" if self._name else "匹配结果预览"
+        results = getattr(self, '_test_bgr_results', [])
+        dlg = ImagePreviewDialog(self._test_bgr_annotated, title, results, self)
+        dlg.show()
+
+    def _on_crop(self):
+        """打开裁切对话框"""
+        if not self._name or not self._filepath:
+            return
+        dlg = CropDialog(self._name, self._filepath, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # 裁切已保存，刷新预览
+            px = self._load_pixmap(self._filepath)
+            if px:
+                scaled = px.scaled(280, 96, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+                self._preview.setPixmap(scaled)
+                self._info_dims.setText(f"{px.width()} × {px.height()} px")
+            self.template_changed.emit()
 
     def _on_rename(self):
         if not self._name:
