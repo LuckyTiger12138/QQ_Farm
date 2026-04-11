@@ -518,7 +518,7 @@ class BotEngine(QObject):
 
         next_sec = result.get("next_check_seconds", 0)
         if next_sec > 0:
-            self.scheduler.set_farm_interval(next_sec)
+            self.scheduler.set_farm_interval(next_sec * 1000)  # 转为毫秒
 
         # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
         friend_cfg = self.config.features.friend

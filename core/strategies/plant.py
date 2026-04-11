@@ -679,8 +679,11 @@ class PlantStrategy(BaseStrategy):
             self._close_warehouse(rect)
             return {"has_seed": False, "quantity": 0, "position": None}
 
-        # 在种子页签中查找目标种子
-        for attempt in range(3):
+        # 在种子页签中查找目标种子（带滑动）
+        max_swipe_attempts = 5
+        swipe_count = 0
+
+        while swipe_count <= max_swipe_attempts:
             if self.stopped:
                 logger.info("检查仓库：收到停止信号，取消")
                 self._close_warehouse(rect)
@@ -690,10 +693,10 @@ class PlantStrategy(BaseStrategy):
                 self._close_warehouse(rect)
                 return {"has_seed": False, "quantity": 0, "position": None}
 
-            # 查找 seed_作物名 模板（仓库中使用更高阈值 0.95 避免误报）
-            base_threshold = self.cv_detector.get_template_threshold(f"seed_{crop_name}")
+            # 查找 ws_作物名 模板（使用配置的原始阈值）
+            base_threshold = self.cv_detector.get_template_threshold(f"ws_{crop_name}")
             seed_det = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=min(base_threshold * 1.2, 1.0))  # 仓库检测阈值提高 20%
+                cv_img, f"ws_{crop_name}", threshold=base_threshold)
 
             if seed_det:
                 conf = min(seed_det[0].confidence, 1.0)  # 限制最大值用于显示
@@ -705,30 +708,45 @@ class PlantStrategy(BaseStrategy):
                     "position": (seed_det[0].x, seed_det[0].y)
                 }
             else:
-                logger.info(f"仓库中未找到种子：{crop_name}")
-                # 每次查找间隔也检查停止
-                for _ in range(3):
-                    if self.stopped:
-                        self._close_warehouse(rect)
-                        return {"has_seed": False, "quantity": 0, "position": None}
-                    time.sleep(0.05)
+                # 未找到，尝试滑动列表（方向与商店相反：从下往上滑）
+                if swipe_count < max_swipe_attempts:
+                    logger.info(f"检查仓库：当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
+                    if self.action_executor:
+                        # 仓库滑动方向：从 Y=550 滑到 Y=350（从下往上）
+                        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 550
+                        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 350
+                        dx, dy = ex - sx, ey - sy
+                        logger.debug(f"检查仓库：执行滑动 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
+                        drag_result = self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6)
+                        if not drag_result:
+                            logger.warning("检查仓库：滑动失败！")
+                    else:
+                        logger.warning("检查仓库：action_executor 未初始化，无法滑动")
+                    time.sleep(0.8)
+                    swipe_count += 1
+                else:
+                    logger.warning(f"检查仓库：滑动 {max_swipe_attempts} 次后仍未找到 '{crop_name}'")
+                    self._close_warehouse(rect)
+                    return {"has_seed": False, "quantity": 0, "position": None}
 
         self._close_warehouse(rect)
         return {"has_seed": False, "quantity": 0, "position": None}
 
     def _close_warehouse(self, rect: tuple):
-        """关闭仓库页面"""
+        """关闭仓库页面：通过识别关闭按钮点击"""
         if self.stopped:
             return
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return
-        # 找关闭按钮或空白处
-        close_btn = self.find_any(dets, ["btn_close", "btn_shop_close"])
+        # 查找关闭按钮
+        close_btn = self.find_any(dets, ["btn_shop_close", "btn_rw_close", "btn_info_close", "btn_close"])
         if close_btn:
             self.click(close_btn.x, close_btn.y, "关闭仓库")
         else:
-            self.click_blank(rect)
+            logger.warning("关闭仓库：未找到关闭按钮")
         # 增加停止检查频率
         for _ in range(10):
             if self.stopped:

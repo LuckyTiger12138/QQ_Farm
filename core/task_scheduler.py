@@ -119,9 +119,9 @@ class TaskScheduler(QObject):
         logger.info("手动触发好友巡查")
         self.friend_check_triggered.emit()
 
-    def set_farm_interval(self, seconds: int):
+    def set_farm_interval(self, milliseconds: int):
         """动态调整农场检查间隔（毫秒）"""
-        ms = max(3000, seconds)  # 至少 3 秒
+        ms = max(3000, milliseconds)  # 至少 3 秒
         self._farm_timer.setInterval(ms)
         self._next_farm_check = time.time() + ms / 1000
         secs = ms // 1000
@@ -130,9 +130,9 @@ class TaskScheduler(QObject):
         else:
             logger.info(f"农场检查间隔调整为 {secs}秒")
 
-    def set_friend_interval(self, seconds: int):
+    def set_friend_interval(self, milliseconds: int):
         """动态调整好友巡查间隔（毫秒）"""
-        ms = max(3000, seconds)  # 至少 3 秒
+        ms = max(3000, milliseconds)  # 至少 3 秒
         self._friend_timer.setInterval(ms)
         self._next_friend_check = time.time() + ms / 1000
         secs = ms // 1000
