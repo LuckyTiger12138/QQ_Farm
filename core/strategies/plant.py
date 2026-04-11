@@ -7,22 +7,9 @@ from core.cv_detector import CVDetector, DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
 
-# 作物检测阈值配置（默认 0.8，特殊作物单独配置）
-CROP_THRESHOLDS = {
-    "蘑菇": 0.70,  # 降低 10%，更容易检测到
-    "迎春花": 0.70,  # 降低 10%，更容易检测到
-}
-
-
-def get_seed_threshold(crop_name: str) -> float:
-    """获取指定作物的种子检测阈值"""
-    return CROP_THRESHOLDS.get(crop_name, 0.8)
-
-
-def get_shop_threshold(crop_name: str) -> float:
-    """获取指定作物的商店种子检测阈值"""
-    return CROP_THRESHOLDS.get(crop_name, 0.6)
-
+# 注意：旧的硬编码阈值已废弃，现在统一从配置文件读取。
+# 如果需要为特定作物设置特殊阈值，请在 GUI 的“模板管理”中修改并保存。
+# CROP_THRESHOLDS = { ... } 
 
 class PlantStrategy(BaseStrategy):
     def __init__(self, cv_detector: CVDetector):
@@ -173,7 +160,7 @@ class PlantStrategy(BaseStrategy):
         Returns:
             DetectResult | None: 找到的种子检测结果，或 None
         """
-        seed_threshold = get_seed_threshold(crop_name)
+        seed_threshold = self.cv_detector.get_template_threshold(f"seed_{crop_name}")
         current_img = cv_img
 
         for attempt in range(max_attempts):
@@ -189,6 +176,8 @@ class PlantStrategy(BaseStrategy):
                 return seed_dets[0]
 
             # 未找到种子，检测翻页按钮
+            # 注意：必须确保 templates 目录下有名为 btn_seed_select_right.png 的模板图片
+            # 该图片应为种子选择面板右下角的翻页/滚动按钮截图
             page_btn = self.cv_detector.detect_single_template(
                 current_img, "btn_seed_select_right", threshold=0.85)
 
@@ -204,7 +193,7 @@ class PlantStrategy(BaseStrategy):
                     return None
             else:
                 # 翻页按钮消失 = 到达末页或面板已关闭
-                logger.info("播种流程：已到达种子列表末页，未找到目标种子")
+                logger.warning("播种流程：未找到种子且未检测到翻页按钮（请检查是否存在 btn_seed_select_right.png 模板），视为到达末页")
                 break
 
         return None
@@ -532,7 +521,7 @@ class PlantStrategy(BaseStrategy):
                 return actions_done
 
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name))
+                cv_img, f"seed_{crop_name}", threshold=self.cv_detector.get_template_threshold(f"seed_{crop_name}"))
 
             if seed_dets:
                 seed = seed_dets[0]
@@ -675,8 +664,9 @@ class PlantStrategy(BaseStrategy):
                 return {"has_seed": False, "quantity": 0, "position": None}
 
             # 查找 seed_作物名 模板（仓库中使用更高阈值 0.95 避免误报）
+            base_threshold = self.cv_detector.get_template_threshold(f"seed_{crop_name}")
             seed_det = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name) * 1.2)  # 仓库检测阈值提高 20%
+                cv_img, f"seed_{crop_name}", threshold=min(base_threshold * 1.2, 1.0))  # 仓库检测阈值提高 20%
 
             if seed_det:
                 conf = min(seed_det[0].confidence, 1.0)  # 限制最大值用于显示
@@ -746,7 +736,7 @@ class PlantStrategy(BaseStrategy):
         if cv_img2 is None:
             return
         seed_dets = self.cv_detector.detect_single_template(
-            cv_img2, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name) * 1.05)  # 购买后阈值提高 5%
+            cv_img2, f"seed_{crop_name}", threshold=min(self.cv_detector.get_template_threshold(f"seed_{crop_name}") * 1.05, 1.0))  # 购买后阈值提高 5%
         if seed_dets:
             self.click(seed_dets[0].x, seed_dets[0].y,
                        f"播种{crop_name}", ActionType.PLANT)
@@ -806,7 +796,7 @@ class PlantStrategy(BaseStrategy):
 
             logger.info("购买流程：商店已打开，查找种子")
             seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"shop_{crop_name}", threshold=get_shop_threshold(crop_name))
+                cv_img, f"shop_{crop_name}", threshold=self.cv_detector.get_template_threshold(f"shop_{crop_name}"))
 
             if seed_dets:
                 det = seed_dets[0]

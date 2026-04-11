@@ -199,6 +199,13 @@ class BotEngine(QObject):
         self.scheduler.set_friend_interval(friend_ms)
         logger.debug(f"调度器间隔已更新: 农场={config.schedule.farm_check_seconds}s, 好友={config.schedule.friend_check_seconds}s")
 
+        # ✅ 重新加载模板元数据（确保修改的阈值配置生效）
+        # 用户通过 GUI 修改阈值后，配置已更新到 self.config，
+        # 但 cv_detector 内部缓存的阈值字典需要刷新。
+        if hasattr(self.cv_detector, 'load_templates'):
+            self.cv_detector.load_templates()
+            logger.info("模板元数据（含阈值）已重新加载，新配置生效")
+
         # 注意：此处不再自动唤醒定时器，防止 Web 端轮询配置导致频繁触发。
         # 静默时段检查应在调度器触发任务时进行。
 

@@ -157,6 +157,8 @@ class WindowManager:
             ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work_area), 0)
             pos_x = work_area.left
             pos_y = max(work_area.top, work_area.bottom - height)
+            # ✅ 恢复使用 MoveWindow。
+            # 之前尝试改用 SetWindowPos 配合 NOACTIVATE，但在初始化阶段导致了窗口被强制激活到前台。
             ctypes.windll.user32.MoveWindow(hwnd, pos_x, pos_y, width, height, True)
             self._cached_window.left = pos_x
             self._cached_window.top = pos_y

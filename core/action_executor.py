@@ -78,14 +78,13 @@ class ActionExecutor:
         return self._run_mode == RunMode.BACKGROUND and self._hwnd is not None
 
     def relative_to_absolute(self, rel_x: int, rel_y: int) -> tuple[int, int]:
-        """将相对于窗口客户区的坐标转为屏幕绝对坐标
-        
-        rel_x, rel_y 是相对于客户区 (0, 0) 的坐标（来自模板匹配）
-        返回屏幕绝对坐标
+        """将相对于窗口左上角（整窗，含标题栏）的坐标转为屏幕绝对坐标
+
+        注意：PrintWindow 截图包含窗口边框和标题栏，
+        所以 rel_x, rel_y 的 (0,0) 对应的是窗口左上角，而非客户区左上角。
         """
-        # ✅ 使用客户区偏移进行转换
-        abs_x = self._window_left + self._client_offset_x + rel_x
-        abs_y = self._window_top + self._client_offset_y + rel_y
+        abs_x = self._window_left + rel_x
+        abs_y = self._window_top + rel_y
         return abs_x, abs_y
 
     def _random_offset(self) -> tuple[int, int]:
@@ -112,23 +111,30 @@ class ActionExecutor:
         return int(point.x), int(point.y)
 
     def _click_background(self, abs_x: int, abs_y: int) -> bool:
-        """后台消息点击：通过 SendMessageW 发送鼠标消息（参考 qq-farm-copilot）"""
+        """后台消息点击：通过 SendMessageW 发送鼠标消息（参考 qq-farm-copilot 实现）"""
         if not self._hwnd:
             logger.warning("后台点击失败: hwnd 为空")
             return False
-        client = self._screen_to_client(abs_x, abs_y)
-        if not client:
+            
+        # ✅ 使用 ScreenToClient API 转换坐标（参考 qq-farm-copilot）
+        point = ctypes.wintypes.POINT(int(abs_x), int(abs_y))
+        ok = user32.ScreenToClient(ctypes.wintypes.HWND(self._hwnd), ctypes.byref(point))
+        if not ok:
             logger.warning(f"后台点击失败: ScreenToClient 转换失败 ({abs_x}, {abs_y})")
             return False
-        cx, cy = client
+            
+        cx, cy = int(point.x), int(point.y)
         lparam = self._make_lparam(cx, cy)
         hwnd = ctypes.wintypes.HWND(self._hwnd)
-        # ✅ 参考 qq-farm-copilot 使用 SendMessageW（同步消息）
+        
         logger.debug(f"后台点击: hwnd={self._hwnd}, 屏幕=({abs_x},{abs_y}), 客户区=({cx},{cy})")
+        
+        # ✅ 使用 SendMessageW（同步消息，参考 qq-farm-copilot）
         user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
         user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
         time.sleep(0.03)
         user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            
         return True
 
     def _click_foreground(self, abs_x: int, abs_y: int) -> bool:
