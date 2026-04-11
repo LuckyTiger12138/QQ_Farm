@@ -400,27 +400,37 @@ class FriendStrategy(BaseStrategy):
         """基于已有检测结果执行偷菜（参考 qq-farm-copilot 确认机制）
 
         流程：
-        1. 检测偷菜按钮
+        1. 检测偷菜按钮（优先点击页面上方的一键摘取按钮）
         2. 点击按钮
         3. 循环检测确认按钮消失（确认偷菜成功）
         """
-        btn = self._find_any_name(dets, ["btn_steal"])
-        if not btn:
-            # icon 确认 + 固定坐标
-            if not any(d.name == "icon_steal_in_friend_detail" for d in dets):
-                return False
+        # ✅ 查找所有 btn_steal，优先点击 Y 坐标最小的（页面顶部的一键摘取按钮）
+        steal_buttons = [d for d in dets if d.name == "btn_steal"]
+        if steal_buttons:
+            # 按 Y 坐标排序，点击最上面的（一键摘取按钮在页面上方）
+            steal_buttons.sort(key=lambda d: (d.y, d.x))
+            btn = steal_buttons[0]
+            logger.info(f"偷菜流程：检测到 btn_steal ({btn.x}, {btn.y}, 置信度: {btn.confidence:.0%})，选择最上方的按钮")
+            self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
+            
+            # ✅ 确认机制：循环检测直到按钮消失
+            if rect:
+                return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+            return True
+        
+        # 没有 btn_steal，尝试 icon 确认 + 固定坐标
+        if any(d.name == "icon_steal_in_friend_detail" for d in dets):
             h, w = cv_img.shape[:2]
             fx, fy = _scale_pos(STEAL_BTN_POS, h, w)
             logger.info(f"偷菜流程：使用固定坐标 ({fx}, {fy})")
             self.click(fx, fy, "偷菜(坐标)", ActionType.STEAL)
-        else:
-            logger.info(f"偷菜流程：检测到 btn_steal ({btn.x}, {btn.y}, 置信度: {btn.confidence:.0%})")
-            self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
-        
-        # ✅ 确认机制：循环检测直到按钮消失（参考 qq-farm-copilot）
-        if rect:
-            return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
-        return True  # 如果没有 rect，直接返回 True（兼容旧逻辑）
+            
+            # ✅ 确认机制
+            if rect:
+                return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+            return True
+
+        return False
 
     def _confirm_action_disappear(self, btn_name: str, rect: tuple, timeout: float = 2.0) -> bool:
         """确认操作成功：循环检测直到按钮消失
@@ -483,7 +493,7 @@ class FriendStrategy(BaseStrategy):
                  enable_water: bool = True,
                  enable_bug: bool = True) -> list[str]:
         """基于已有检测结果执行帮忙
-        
+
         Args:
             cv_img: 截图
             dets: 检测结果
@@ -505,11 +515,16 @@ class FriendStrategy(BaseStrategy):
         for btn_name, desc, action_type in help_actions:
             if self.stopped:
                 break
-            btn = self._find_any_name(dets, [btn_name])
-            if btn:
+            # ✅ 查找所有匹配按钮，优先点击 Y 坐标最小的（页面上方的一键操作按钮）
+            matching_buttons = [d for d in dets if d.name == btn_name]
+            if matching_buttons:
+                # 按 Y 坐标排序，点击最上面的
+                matching_buttons.sort(key=lambda d: (d.y, d.x))
+                btn = matching_buttons[0]
+                logger.info(f"帮忙流程：检测到 {btn_name} ({btn.x}, {btn.y})，选择最上方的按钮")
                 self.click(btn.x, btn.y, desc, action_type)
                 actions_done.append(desc)
-                time.sleep(0.2)  # ✅ 缩短等待时间：0.3 -> 0.2
+                time.sleep(0.2)
 
         return actions_done
 
