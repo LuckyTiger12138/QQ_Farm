@@ -94,8 +94,8 @@ class FriendStrategy(BaseStrategy):
             logger.warning("好友流程: 无法进入好友列表")
             return actions
 
-        # 2. 进入第一个好友农场
-        if not self._enter_friend_detail(rect):
+        # 2. 进入第一个好友农场（传入开关参数，智能检测可操作目标）
+        if not self._enter_friend_detail(rect, enable_steal, enable_weed, enable_water, enable_bug):
             logger.info("好友流程: 未找到可访问的好友，结束")
             self._back_to_home(rect)
             return actions
@@ -227,13 +227,101 @@ class FriendStrategy(BaseStrategy):
             time.sleep(0.3)
         return False
 
-    def _enter_friend_detail(self, rect: tuple) -> bool:
-        """从好友列表进入好友农场（模板匹配优先）"""
+    def _collect_operable_friend_icons(self, cv_img, dets: list[DetectResult],
+                                        enable_steal: bool = True,
+                                        enable_weed: bool = True,
+                                        enable_water: bool = True,
+                                        enable_bug: bool = True) -> dict:
+        """在好友列表页收集所有可操作的目标（参考 qq-farm-copilot 实现）
+
+        在好友列表页就检测所有可操作的 icon，避免无效拜访。
+
+        Args:
+            cv_img: 当前截图
+            dets: 检测结果
+            enable_steal: 是否偷菜
+            enable_weed: 是否帮忙除草
+            enable_water: 是否帮忙浇水
+            enable_bug: 是否帮忙除虫
+
+        Returns:
+            dict: {
+                'steal': [可偷菜的好友列表],
+                'help': [可帮忙的好友列表],
+                'total': 总可操作目标数
+            }
+        """
+        h, w = cv_img.shape[:2]
+
+        # 定义好友列表页的 icon 检测区域（参考参考项目：x: 105-410, y: 260-800）
+        # 根据你的窗口尺寸调整
+        x_min = int(w * 0.18)   # ~105
+        x_max = int(w * 0.71)   # ~410
+        y_min = int(h * 0.25)   # ~260
+        y_max = int(h * 0.76)   # ~800
+
+        result = {
+            'steal': [],
+            'help_water': [],  # 浇水
+            'help_weed': [],   # 除草
+            'help_bug': [],    # 除虫
+        }
+
+        # 收集偷菜目标
+        if enable_steal:
+            for d in dets:
+                if d.name == "icon_steal_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                    result['steal'].append(d)
+
+        # 收集帮忙目标（浇水）
+        if enable_water:
+            for d in dets:
+                if d.name == "icon_water_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                    result['help_water'].append(d)
+
+        # 收集帮忙目标（除草）
+        if enable_weed:
+            for d in dets:
+                if d.name == "icon_weed_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                    result['help_weed'].append(d)
+
+        # 收集帮忙目标（除虫）
+        if enable_bug:
+            for d in dets:
+                if d.name == "icon_bug_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                    result['help_bug'].append(d)
+
+        total = len(result['steal']) + len(result['help_water']) + len(result['help_weed']) + len(result['help_bug'])
+        result['total'] = total
+
+        logger.debug(f"好友列表检测: 偷菜={len(result['steal'])} 浇水={len(result['help_water'])} "
+                     f"除草={len(result['help_weed'])} 除虫={len(result['help_bug'])} 总计={total}")
+
+        return result
+
+    def _enter_friend_detail(self, rect: tuple,
+                              enable_steal: bool = True,
+                              enable_weed: bool = True,
+                              enable_water: bool = True,
+                              enable_bug: bool = True) -> bool:
+        """从好友列表进入好友农场（智能检测优先）
+
+        参考 qq-farm-copilot 的实现：
+        1. 在好友列表页检测所有可操作目标
+        2. 只有检测到可操作目标时才点击拜访
+        3. 避免无效访问，提升效率
+        """
         for attempt in range(2):
             if self.stopped:
                 return False
 
-            cv_img, dets = self._quick_detect(rect, ["btn_visit_first", "btn_home"])
+            cv_img, dets = self._quick_detect(rect, [
+                "btn_visit_first", "btn_home",
+                "icon_steal_in_friend_detail",
+                "icon_water_in_friend_detail",
+                "icon_weed_in_friend_detail",
+                "icon_bug_in_friend_detail",
+            ])
             if cv_img is None:
                 time.sleep(0.3)
                 continue
@@ -243,28 +331,44 @@ class FriendStrategy(BaseStrategy):
                 logger.info("已在好友农场")
                 return True
 
-            # 模板匹配找访问按钮
-            btn = self._find_any_name(dets, ["btn_visit_first"])
-            if btn:
-                self.click(btn.x, btn.y, "访问好友")
-            else:
-                h, w = cv_img.shape[:2]
-                fx, fy = _scale_pos(VISIT_BTN_POS, h, w)
-                self.click(fx, fy, "访问好友(坐标兜底)")
+            # ✅ 智能检测：在好友列表页收集所有可操作目标
+            operable = self._collect_operable_friend_icons(
+                cv_img, dets,
+                enable_steal=enable_steal,
+                enable_weed=enable_weed,
+                enable_water=enable_water,
+                enable_bug=enable_bug
+            )
 
-            time.sleep(1.0)
+            if operable['total'] > 0:
+                # ✅ 有可操作目标，点击拜访
+                logger.info(f"好友流程：检测到 {operable['total']} 个可操作目标，开始拜访")
+                btn = self._find_any_name(dets, ["btn_visit_first"])
+                if btn:
+                    self.click(btn.x, btn.y, "访问好友")
+                else:
+                    h, w = cv_img.shape[:2]
+                    fx, fy = _scale_pos(VISIT_BTN_POS, h, w)
+                    self.click(fx, fy, "访问好友(坐标兜底)")
 
-            for _ in range(6):
-                if self.stopped:
-                    return False
-                cv_img, dets = self._quick_detect(rect, ["btn_home"])
-                if cv_img is None:
+                time.sleep(1.0)
+
+                # 等待进入好友农场
+                for _ in range(6):
+                    if self.stopped:
+                        return False
+                    cv_img, dets = self._quick_detect(rect, ["btn_home"])
+                    if cv_img is None:
+                        time.sleep(0.3)
+                        continue
+                    if any(d.name == "btn_home" for d in dets):
+                        logger.info("已进入好友农场")
+                        return True
                     time.sleep(0.3)
-                    continue
-                if any(d.name == "btn_home" for d in dets):
-                    logger.info("已进入好友农场")
-                    return True
-                time.sleep(0.3)
+            else:
+                # ❌ 无可操作目标，不点拜访，直接返回
+                logger.info("好友流程：列表页无可操作目标，跳过拜访")
+                return False
 
         return False
 

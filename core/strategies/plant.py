@@ -141,16 +141,89 @@ class PlantStrategy(BaseStrategy):
 
         return False
 
+    def _is_seed_panel_open(self, cv_img) -> bool:
+        """检测种子选择面板是否已打开（通过检测翻页按钮）
+
+        参考 qq-farm-copilot 的实现：使用 BTN_SEED_SELECT_POPUP_RIGHT 按钮
+        该按钮位于种子选择面板右下角，坐标约 (511, 608, 524, 636)
+
+        Returns:
+            bool: True 表示面板已打开且还有下一页，False 表示面板未打开或已到末页
+        """
+        # 检测种子选择面板的翻页按钮
+        page_btn = self.cv_detector.detect_single_template(
+            cv_img, "btn_seed_select_right", threshold=0.85)
+        return page_btn is not None
+
+    def _find_seed_with_pagination(self, cv_img, crop_name: str, rect: tuple,
+                                    max_attempts: int = 10) -> DetectResult | None:
+        """动态翻页查找种子
+
+        参考 qq-farm-copilot 的实现：
+        - 不固定翻页次数，而是检测翻页按钮是否存在
+        - 每次翻页后重新截屏检测
+        - 翻页按钮消失 = 到达末页
+
+        Args:
+            cv_img: 当前截图
+            crop_name: 作物名称
+            rect: 窗口矩形
+            max_attempts: 最大翻页次数（安全上限）
+
+        Returns:
+            DetectResult | None: 找到的种子检测结果，或 None
+        """
+        seed_threshold = get_seed_threshold(crop_name)
+        current_img = cv_img
+
+        for attempt in range(max_attempts):
+            if self.stopped:
+                return None
+
+            # 检测目标种子
+            seed_dets = self.cv_detector.detect_single_template(
+                current_img, f"seed_{crop_name}", threshold=seed_threshold)
+
+            if seed_dets:
+                logger.info(f"播种流程：找到种子 '{crop_name}' (第{attempt + 1}页, 置信度: {seed_dets[0].confidence:.0%})")
+                return seed_dets[0]
+
+            # 未找到种子，检测翻页按钮
+            page_btn = self.cv_detector.detect_single_template(
+                current_img, "btn_seed_select_right", threshold=0.85)
+
+            if page_btn:
+                # 还有下一页，点击翻页
+                logger.info(f"播种流程：当前页未找到种子，点击翻页按钮 ({attempt + 1}/{max_attempts})")
+                self.click(page_btn[0].x, page_btn[0].y, f"翻页查找种子")
+                time.sleep(0.3)  # 等待翻页动画
+
+                # 重新截屏
+                current_img, _, _ = self.capture(rect)
+                if current_img is None:
+                    return None
+            else:
+                # 翻页按钮消失 = 到达末页或面板已关闭
+                logger.info("播种流程：已到达种子列表末页，未找到目标种子")
+                break
+
+        return None
+
     def _swipe_seed_list(self, rect: tuple):
-        """滑动种子列表以加载更多种子（翻页）"""
+        """滑动种子列表以加载更多种子（翻页）- 已废弃，保留兼容
+
+        @deprecated 使用 _find_seed_with_pagination 替代
+        仅在模板 btn_seed_select_right 未采集时作为降级方案使用
+        """
         if not self.action_executor:
             return
-        
+
+        logger.warning("播种流程：使用固定坐标滑动（降级方案），建议采集 btn_seed_select_right 模板")
         # 参考 qq-farm-copilot 的滑动坐标：从 (270, 300) 滑动到 (270, 860)
         # 这是一个从上到下的滑动，用于加载下方的种子
         start_x, start_y = 270, 300
         dx, dy = 0, 560
-        
+
         logger.debug(f"播种流程：滑动种子列表 ({start_x}, {start_y}) -> dx={dx}, dy={dy}")
         self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
 
@@ -203,30 +276,9 @@ class PlantStrategy(BaseStrategy):
                 return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, skip_count + 1)
             return all_actions
 
-        # 查找种子
-        seed_det = None
-        for attempt in range(2):
-            if self.stopped:
-                return all_actions
-            cv_img, dets, _ = self.capture(rect)
-            if cv_img is None:
-                return all_actions
-            # 每次查找前检查停止和收获
-            if self.stopped:
-                return all_actions
-            harvest_btn = self.find_by_name(dets, "btn_harvest")
-            if harvest_btn:
-                logger.info("播种流程：检测到一键收获按钮，中断播种优先收获")
-                return all_actions
-            seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=get_seed_threshold(crop_name))
-            if seed_dets:
-                seed_det = seed_dets[0]
-                break
-            for _ in range(5):
-                if self.stopped:
-                    return all_actions
-                time.sleep(0.05)
+        # 查找种子（使用动态翻页）
+        cv_img, dets, _ = self.capture(rect)
+        seed_det = self._find_seed_with_pagination(cv_img, crop_name, rect, max_attempts=10)
 
         if not seed_det:
             # 还是没有种子，这块地也可能不是空地
@@ -346,37 +398,9 @@ class PlantStrategy(BaseStrategy):
                 return self._plant_remaining_lands(rect, lands[1:], crop_name, total_lands, 1)
             return all_actions
 
-        # 第四步：找到目标种子（使用统一的阈值函数）
-        seed_threshold = get_seed_threshold(crop_name)
-        logger.debug(f"播种流程：使用阈值 {seed_threshold} 检测种子 '{crop_name}'")
-
-        seed_det = None
-        max_swipe_attempts = 3  # 最多尝试翻页次数
-        swipe_count = 0
-
-        while not seed_det and swipe_count <= max_swipe_attempts:
-            if self.stopped:
-                return all_actions
-            
-            cv_img, dets, _ = self.capture(rect)
-            if cv_img is None:
-                return all_actions
-            
-            seed_dets = self.cv_detector.detect_single_template(
-                cv_img, f"seed_{crop_name}", threshold=seed_threshold)
-            
-            if seed_dets:
-                seed_det = seed_dets[0]
-                break
-            
-            # 未找到种子，尝试翻页（滑动种子列表）
-            if swipe_count < max_swipe_attempts:
-                logger.info(f"播种流程：当前页未找到种子 '{crop_name}'，尝试翻页 ({swipe_count + 1}/{max_swipe_attempts})")
-                self._swipe_seed_list(rect)
-                time.sleep(0.5)  # 等待滑动动画
-                swipe_count += 1
-            else:
-                break
+        # 第四步：找到目标种子（使用动态翻页）
+        logger.info(f"播种流程：开始查找种子 '{crop_name}'")
+        seed_det = self._find_seed_with_pagination(cv_img, crop_name, rect, max_attempts=10)
 
         if not seed_det:
             # 没找到种子，先关闭种子弹窗
