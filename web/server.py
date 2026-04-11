@@ -58,11 +58,65 @@ class WebServer:
 
     def stop(self):
         """停止 Web 服务"""
+        logger.info(f"WebServer.stop() 被调用，_running={self._running}")
+        logger.info(f"self._server: {self._server}")
+        logger.info(f"self._thread: {self._thread}")
+        
         if not self._running:
+            logger.warning("Web 服务未在运行，无需停止")
             return
+            
         self._running = False
-        # uvicorn 会在下次检查 _running 时退出
-        logger.info("Web 服务已停止")
+        logger.info("设置 _running = False")
+
+        # 通知 uvicorn 退出
+        if self._server:
+            logger.info("设置 self._server.should_exit = True")
+            self._server.should_exit = True
+            # 额外措施：关闭服务器的 socket
+            try:
+                if hasattr(self._server, 'servers') and self._server.servers:
+                    for srv in self._server.servers:
+                        srv.close()
+                    logger.info("已关闭 uvicorn 服务器 sockets")
+            except Exception as e:
+                logger.warning(f"关闭服务器 sockets 失败: {e}")
+        else:
+            logger.warning("self._server 为 None")
+
+        # 等待线程结束（最多等待 5 秒）
+        if self._thread and self._thread.is_alive():
+            logger.info("等待 Web 服务线程结束...")
+            self._thread.join(timeout=5.0)
+            # 如果线程仍未结束，强制终止
+            if self._thread.is_alive():
+                logger.warning("Web 服务线程未正常退出，强制终止")
+                import ctypes
+                try:
+                    # 强制终止线程（最后手段）
+                    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                        ctypes.c_long(self._thread.ident),
+                        ctypes.py_object(SystemExit)
+                    )
+                    if res == 0:
+                        logger.warning("强制终止失败：线程 ID 无效")
+                    elif res > 1:
+                        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                            ctypes.c_long(self._thread.ident), None)
+                        logger.warning("强制终止失败：多个异常")
+                    else:
+                        logger.info("已发送 SystemExit 到 Web 服务线程")
+                except Exception as e:
+                    logger.warning(f"强制终止 Web 服务线程失败: {e}")
+                # 再等待一下
+                time.sleep(1.0)
+        else:
+            logger.info("Web 服务线程未运行或已结束")
+            
+        # 重置状态
+        self._server = None
+        self._thread = None
+        logger.info("Web 服务已完全停止")
 
     def _run_server(self):
         """在线程中运行 uvicorn"""
@@ -70,15 +124,24 @@ class WebServer:
             from fastapi import FastAPI, Request
             from fastapi.responses import Response, HTMLResponse, JSONResponse
             import uvicorn
+            import asyncio
 
             app = FastAPI(title="QQ Farm Bot", docs_url=None, redoc_url=None)
+
+            # 添加中间件：检查服务是否仍在运行
+            @app.middleware("http")
+            async def check_running(request, call_next):
+                if not self._running:
+                    return HTMLResponse("<h1>Web 服务已停止</h1>", status_code=503)
+                response = await call_next(request)
+                return response
 
             # ── 页面 ──
             @app.get("/", response_class=HTMLResponse)
             async def index():
                 return HTMLResponse(_PAGE_HTML)
 
-            # ── API ──
+            # ── API 
             STAT_LABELS = {
                 "harvest": "收获", "plant": "播种", "water": "浇水",
                 "weed": "除草", "bug": "除虫", "sell": "出售",
@@ -381,7 +444,22 @@ class WebServer:
 
             config = uvicorn.Config(app, host=self.host, port=self.port, log_level="warning")
             self._server = uvicorn.Server(config)
-            self._server.run()
+            
+            # 在运行前检查是否已被停止
+            if not self._running:
+                logger.info("Web 服务在启动前已被停止")
+                return
+                
+            try:
+                self._server.run()
+            except KeyboardInterrupt:
+                logger.info("Web 服务收到中断信号")
+            except SystemExit:
+                logger.info("Web 服务收到退出信号")
+                
+            # run() 返回后，再次检查状态
+            if not self._running:
+                logger.info("Web 服务已退出运行循环")
         except Exception as e:
             logger.exception(f"Web 服务异常: {e}")
             self._running = False

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot/**)",
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot\\core\\engine\\bot/**)",
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot\\core\\engine\\task/**)"
+    ]
+  },
+  "$version": 3
+}

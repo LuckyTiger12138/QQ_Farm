@@ -332,8 +332,12 @@ class WebServerWidget(QFrame):
 
     def _on_toggle(self):
         """点击启动/停止按钮"""
+        from loguru import logger
         new_state = not self._is_running()
+        logger.info(f"WebServerWidget._on_toggle: new_state={new_state}, _is_running={self._is_running()}")
+        logger.info(f"准备发射 web_server_toggled 信号...")
         self.web_server_toggled.emit(new_state)
+        logger.info(f"web_server_toggled 信号已发射")
         self._update_ui(new_state)
 
     def _is_running(self) -> bool:
@@ -892,7 +896,14 @@ class SettingsPanel(QWidget):
 
         # ===== Web 服务卡片 =====
         self._web_widget = WebServerWidget()
-        self._web_widget.web_server_toggled.connect(self.web_server_toggled.emit)
+        # 连接信号，添加日志追踪
+        def _on_web_server_toggle(start: bool):
+            from loguru import logger
+            logger.info(f"SettingsPanel 收到 web_server_toggled 信号: start={start}")
+            self.web_server_toggled.emit(start)
+            logger.info(f"SettingsPanel 已转发 web_server_toggled 信号")
+            
+        self._web_widget.web_server_toggled.connect(_on_web_server_toggle)
         web_card = SettingCard("🌐", "Web 服务", "通过网页查看截图与控制 Bot", self._web_widget)
         layout.addWidget(web_card)
 

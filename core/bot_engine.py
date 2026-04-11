@@ -33,6 +33,7 @@ from core.action_executor import ActionExecutor
 from core.task_scheduler import TaskScheduler, BotState
 from core.scene_detector import Scene, identify_scene
 from core.silent_hours import is_silent_time, get_silent_remaining_seconds
+from core.task_executor import TaskExecutor, TaskItem
 from core.strategies import (
     PopupStrategy, HarvestStrategy, MaintainStrategy,
     PlantStrategy, ExpandStrategy, FriendStrategy, TaskStrategy,
@@ -191,11 +192,8 @@ class BotEngine(QObject):
         self.plant.auto_fertilize = self.config.features.auto_fertilize
         self.config_updated.emit(config)  # 通知 GUI 刷新
 
-        # 新增：配置更新后检查静默时段状态，若已结束则立即唤醒定时器
-        # 防止用户修改了截止时间，但定时器还在等待原来的时间
-        if not is_silent_time(self.config.silent_hours):
-            logger.info("静默时段配置已更新，当前已不在静默时段，立即唤醒巡查")
-            self.scheduler.set_farm_interval(1)  # 立即触发检查
+        # 注意：此处不再自动唤醒定时器，防止 Web 端轮询配置导致频繁触发。
+        # 静默时段检查应在调度器触发任务时进行。
 
     def _resolve_crop_name(self) -> str:
         """根据策略决定种植作物"""
@@ -782,12 +780,73 @@ class BotEngine(QObject):
         idle_rounds = 0
         max_idle = 3
 
+        # 初始化任务执行器
+        executor = TaskExecutor()
+
+        # 注册任务（按优先级）
+        # 注意：这里只注册一次，因为任务的 enabled_fn 等逻辑在内部会动态判断
+        
+        # P-1: 弹窗处理
+        executor.add_task(TaskItem(
+            name="Popup",
+            priority=-1,
+            enabled_fn=lambda: True,
+            check_fn=lambda ctx: ctx.get("scene") in (Scene.POPUP, Scene.INFO_PAGE, Scene.SHOP_PAGE),
+            run_fn=lambda ctx: self._task_popup(ctx)
+        ))
+
+        # P0: 收获
+        executor.add_task(TaskItem(
+            name="Harvest",
+            priority=0,
+            enabled_fn=lambda: self.config.features.auto_harvest,
+            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
+            run_fn=lambda ctx: self._task_harvest(ctx)
+        ))
+
+        # P1: 维护
+        executor.add_task(TaskItem(
+            name="Maintain",
+            priority=1,
+            enabled_fn=lambda: any([self.config.features.auto_weed, self.config.features.auto_water, self.config.features.auto_bug]),
+            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
+            run_fn=lambda ctx: self._task_maintain(ctx)
+        ))
+
+        # P2: 播种
+        executor.add_task(TaskItem(
+            name="Plant",
+            priority=2,
+            enabled_fn=lambda: self.config.features.auto_plant,
+            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
+            run_fn=lambda ctx: self._task_plant(ctx)
+        ))
+
+        # P3: 扩建
+        executor.add_task(TaskItem(
+            name="Expand",
+            priority=3,
+            enabled_fn=lambda: self.config.features.auto_upgrade,
+            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
+            run_fn=lambda ctx: self._task_expand(ctx)
+        ))
+
+        # P3.5: 任务/出售
+        executor.add_task(TaskItem(
+            name="Task",
+            priority=4,
+            enabled_fn=lambda: self.config.features.auto_task,
+            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
+            run_fn=lambda ctx: self._task_task(ctx)
+        ))
+
+        # 主循环
         for round_num in range(1, 51):
             if self.popup.stopped:
                 logger.info("收到停止/暂停信号，中断当前操作")
                 break
 
-            # 每轮检测窗口是否存在，窗口关闭时尝试自动重启
+            # 窗口管理逻辑保持不变...
             window = self.window_manager.refresh_window_info(
                 self.config.window_title_keyword,
                 auto_launch=False,
@@ -828,185 +887,27 @@ class BotEngine(QObject):
                 result["message"] = "截屏失败"
                 break
 
+            # 识别场景
             scene = identify_scene(detections, self.cv_detector, cv_image)
             det_summary = ", ".join(f"{d.name}({d.confidence:.0%})" for d in detections[:6])
-            logger.info(f"[轮{round_num}] 场景={scene.value} | {det_summary}")
+            logger.debug(f"[轮{round_num}] 场景={scene.value} | {det_summary}")
 
-            action_desc = None
+            # 构建上下文
+            context = {
+                "detections": detections,
+                "scene": scene,
+                "rect": rect,
+                "features": features,
+                "engine": self
+            }
 
-            # ---- P-1 异常处理 ----
+            # 特殊处理：异地登录 (优先级最高，打断循环)
             if scene == Scene.REMOTE_LOGIN:
-                logger.warning("检测到异地登录，关闭游戏并等待 3 分钟后重启...")
-                self.log_message.emit("⚠ 检测到异地登录，正在关闭游戏，等待 3 分钟后重启...")
-                # 设置窗口监控冷却时间，防止抢先重启
-                self.scheduler.set_remote_login_cooldown(180)
-                try:
-                    import ctypes
-                    if self.window_manager._cached_window:
-                        hwnd = self.window_manager._cached_window.hwnd
-                        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-                        time.sleep(1)
-                except Exception as e:
-                    logger.error(f"关闭游戏失败: {e}")
-                self.window_manager._cached_window = None
-                # 等待 3 分钟再重启，确保游戏完全退出且异地登录状态清除
-                for i in range(180, 0, -10):
-                    if self.popup.stopped:
-                        logger.info("收到停止信号，取消异地登录重启")
-                        result["message"] = "已停止"
-                        break
-                    if i % 60 == 0:
-                        self.log_message.emit(f"等待重启中... 剩余 {i // 60} 分钟")
-                    time.sleep(10)
-                else:
-                    self.log_message.emit("等待结束，正在重启游戏...")
-                    window = self.window_manager.find_window(
-                        self.config.window_title_keyword,
-                        auto_launch=True,
-                        shortcut_path=self.config.planting.game_shortcut_path
-                    )
-                    if not window:
-                        logger.error("异地登录重启游戏失败")
-                        self.log_message.emit("❌ 异地登录重启失败，请手动处理")
-                        result["message"] = "异地登录重启失败"
-                        break
-                    w, h = self.config.planting.window_width, self.config.planting.window_height
-                    if w > 0 and h > 0:
-                        time.sleep(1)
-                        self.window_manager.resize_window(w, h)
-                        time.sleep(0.5)
-                        window = self.window_manager._cached_window
-                    if window:
-                        rect = (window.left, window.top, window.width, window.height)
-                        self.action_executor.update_window_rect(rect)
-                        self.action_executor.update_window_handle(
-                            window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
-                        )
-                        self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
-                        # 清除冷却时间，恢复窗口监控
-                        self.scheduler._remote_login_cooldown_until = 0.0
-                        idle_rounds = 0
-                        continue
-            elif scene == Scene.LEVEL_UP:
-                action_desc = self.popup.handle_popup(detections)
-                self.config.planting.player_level += 1
-                self.config.save()
-                new_level = self.config.planting.player_level
-                self.log_message.emit(f"升级! Lv.{new_level - 1} → Lv.{new_level}")
-                self.log_message.emit(f"当前种植: {self._resolve_crop_name()}")
-            elif scene == Scene.POPUP:
-                action_desc = self.popup.handle_popup(detections)
-            elif scene == Scene.INFO_PAGE:
-                if self.popup.stopped:
-                    logger.info("收到停止/暂停信号，中断当前操作")
-                    break
-                # 优先使用 btn_close，其次 btn_info_close，再使用 btn_rw_close
-                info_close = self.popup.find_any(detections, ["btn_close", "btn_info_close", "btn_rw_close"])
-                if info_close:
-                    self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
-                    action_desc = "关闭个人信息页面"
-                else:
-                    # 找不到关闭按钮，可能是模板匹配问题，等待下一轮检测
-                    logger.debug("个人信息页面：未找到关闭按钮，等待下轮检测")
-                    action_desc = "等待关闭个人信息页面"
-            elif scene == Scene.BUY_CONFIRM:
-                action_desc = self.popup.handle_popup(detections)
-            elif scene == Scene.SHOP_PAGE:
-                self.popup.close_shop(rect)
-                action_desc = "关闭商店"
-            elif scene == Scene.MALL_PAGE:
-                mall_back = self.popup.find_by_name(detections, "btn_shangcehng_fanhui")
-                if mall_back:
-                    self.popup.click(mall_back.x, mall_back.y, "关闭商城")
-                else:
-                    self.popup.click_blank(rect)
-                action_desc = "关闭商城"
-            elif scene == Scene.PLOT_MENU:
-                action_desc = self.popup.handle_popup(detections)
+                self._handle_remote_login(context)
+                continue
 
-            # ---- 农场主页操作 ----
-            elif scene == Scene.FARM_OVERVIEW:
-                logger.debug(f"农场主页操作：auto_harvest={features.get('auto_harvest', True)}, _planted={self._planted}")
-                # P0 收益：一键收获
-                if not action_desc and features.get("auto_harvest", True):
-                    action_desc = self.harvest.try_harvest(detections)
-                    # 收获后重置播种和施肥状态，可以重新检测空地
-                    if action_desc:
-                        self._planted = False
-                        self._fertilized = False
-                        self._planted_idle_rounds = 0
-                    elif self._planted:
-                        # 已播种但未检测到收获按钮，累计空闲轮数
-                        self._planted_idle_rounds += 1
-                        # 连续 6 轮（约 3 分钟）未检测到收获，重置播种状态
-                        if self._planted_idle_rounds >= 6:
-                            logger.info(f"已播种但连续 {self._planted_idle_rounds} 轮未检测到收获，重置播种状态")
-                            self._planted = False
-                            self._fertilized = False
-                            self._planted_idle_rounds = 0
-
-                # P1 维护：除草/除虫/浇水
-                if not action_desc:
-                    action_desc = self.maintain.try_maintain(detections, features)
-
-                # P2 生产：播种（plant_all 内部会自动跳过已播种的地块）
-                logger.debug(f"播种检查：action_desc={action_desc}, auto_plant={features.get('auto_plant', True)}, _planted={self._planted}")
-                if not action_desc and features.get("auto_plant", True):
-                    crop_name = self._resolve_crop_name()
-                    logger.info(f"开始播种：{crop_name}, auto_fertilize={features.get('auto_fertilize', False)}")
-                    # 如果开启了自动施肥，传入 auto_fertilize=True，播种完成后自动施肥
-                    pa = self.plant.plant_all(rect, crop_name,
-                                              auto_fertilize=features.get("auto_fertilize", False))
-                    if pa:
-                        result["actions_done"].extend(pa)
-                        action_desc = pa[-1]
-                        self._planted = True  # 标记已播种
-                        self._fertilized = True  # 如果施肥了也标记为已施肥
-                    else:
-                        logger.info("播种流程未执行任何操作（可能没有空地）")
-
-                # P3 资源：扩建
-                if not action_desc and features.get("auto_upgrade", True):
-                    action_desc = self.expand.try_expand(rect, detections)
-
-                # P3.5 任务：领取奖励 / 售卖果实
-                if not action_desc and features.get("auto_task", True):
-                    ta = self.task.try_task(rect, detections)
-                    if ta:
-                        result["actions_done"].extend(ta)
-                        action_desc = ta[-1]
-
-                # P4 社交：好友求助
-                if not action_desc and features.get("auto_help", True):
-                    fa = self.friend.try_friend_help(rect, detections)
-                    if fa:
-                        result["actions_done"].extend(fa)
-                        action_desc = fa[-1]
-
-            # ---- 好友家园 ----
-            elif scene == Scene.FRIEND_FARM:
-                # 农场巡查中误入好友农场，直接回家
-                logger.debug("误入好友农场，直接回家")
-                home_btn = self.friend.find_by_name(detections, "btn_home")
-                if home_btn:
-                    self.friend.click(home_btn.x, home_btn.y, "回家")
-                    action_desc = "回家"
-
-            elif scene == Scene.SEED_SELECT:
-                crop_name = self._resolve_crop_name()
-                seed = self.popup.find_by_name(detections, f"seed_{crop_name}")
-                if seed:
-                    self.popup.click(seed.x, seed.y, f"播种{crop_name}", ActionType.PLANT)
-                    self._record_stat(ActionType.PLANT)
-                    action_desc = f"播种{crop_name}"
-
-            elif scene == Scene.UNKNOWN:
-                self.popup.click_blank(rect)
-                action_desc = "点击空白处"
-
-            # ---- 结果处理 ----
-            if action_desc:
-                result["actions_done"].append(action_desc)
+            # 执行任务调度
+            if executor.execute(context):
                 idle_rounds = 0
             else:
                 idle_rounds += 1
@@ -1031,6 +932,129 @@ class BotEngine(QObject):
         result["success"] = True
         self.screen_capture.cleanup_old_screenshots(0)
         return result
+
+    def _handle_remote_login(self, context: dict):
+        """处理异地登录（高优先级打断逻辑）"""
+        logger.warning("检测到异地登录，关闭游戏并等待 3 分钟后重启...")
+        self.log_message.emit("⚠ 检测到异地登录，正在关闭游戏，等待 3 分钟后重启...")
+        self.scheduler.set_remote_login_cooldown(180)
+        try:
+            import ctypes
+            if self.window_manager._cached_window:
+                hwnd = self.window_manager._cached_window.hwnd
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+                time.sleep(1)
+        except Exception as e:
+            logger.error(f"关闭游戏失败: {e}")
+        self.window_manager._cached_window = None
+        
+        for i in range(180, 0, -10):
+            if self.popup.stopped:
+                logger.info("收到停止信号，取消异地登录重启")
+                break
+            if i % 60 == 0:
+                self.log_message.emit(f"等待重启中... 剩余 {i // 60} 分钟")
+            time.sleep(10)
+            
+        self.log_message.emit("等待结束，正在重启游戏...")
+        window = self.window_manager.find_window(
+            self.config.window_title_keyword,
+            auto_launch=True,
+            shortcut_path=self.config.planting.game_shortcut_path
+        )
+        if not window:
+            logger.error("异地登录重启游戏失败")
+            self.log_message.emit("❌ 异地登录重启失败，请手动处理")
+            return
+            
+        self.window_manager.resize_window(
+            self.config.planting.window_width,
+            self.config.planting.window_height
+        )
+        time.sleep(0.5)
+        window = self.window_manager._cached_window
+        if window:
+            rect = (window.left, window.top, window.width, window.height)
+            self.action_executor.update_window_rect(rect)
+            self.action_executor.update_window_handle(
+                window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
+            )
+            self.log_message.emit(f"✅ 游戏已重启，窗口: {window.title}")
+            self.scheduler._remote_login_cooldown_until = 0.0
+
+    # --- 任务执行器回调方法 ---
+
+    def _task_popup(self, context: dict) -> bool:
+        """处理弹窗"""
+        scene = context.get("scene")
+        detections = context.get("detections", [])
+        rect = context.get("rect")
+        
+        if scene == Scene.POPUP:
+            return self.popup.handle_popup(detections) is not None
+        elif scene == Scene.INFO_PAGE:
+            info_close = self.popup.find_any(detections, ["btn_close", "btn_info_close", "btn_rw_close"])
+            if info_close:
+                self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
+                return True
+        elif scene in (Scene.SHOP_PAGE, Scene.BUY_CONFIRM, Scene.PLOT_MENU, Scene.LEVEL_UP):
+            return self.popup.handle_popup(detections) is not None
+        elif scene == Scene.MALL_PAGE:
+            mall_back = self.popup.find_by_name(detections, "btn_shangcehng_fanhui")
+            if mall_back:
+                self.popup.click(mall_back.x, mall_back.y, "关闭商城")
+                return True
+            self.popup.click_blank(rect)
+            return True
+        return False
+
+    def _task_harvest(self, context: dict) -> bool:
+        """收获任务"""
+        detections = context.get("detections", [])
+        desc = self.harvest.try_harvest(detections)
+        if desc:
+            self._planted = False
+            self._fertilized = False
+            self._planted_idle_rounds = 0
+            return True
+        elif self._planted:
+            self._planted_idle_rounds += 1
+            if self._planted_idle_rounds >= 6:
+                logger.info("已播种但连续 6 轮未检测到收获，重置状态")
+                self._planted = False
+                self._fertilized = False
+                self._planted_idle_rounds = 0
+        return False
+
+    def _task_maintain(self, context: dict) -> bool:
+        """维护任务（除草/除虫/浇水）"""
+        detections = context.get("detections", [])
+        features = context.get("features", {})
+        return self.maintain.try_maintain(detections, features) is not None
+
+    def _task_plant(self, context: dict) -> bool:
+        """播种任务"""
+        rect = context.get("rect")
+        crop_name = self._resolve_crop_name()
+        pa = self.plant.plant_all(rect, crop_name, auto_fertilize=self.config.features.auto_fertilize)
+        if pa:
+            self._planted = True
+            self._fertilized = True
+            return True
+        return False
+
+    def _task_expand(self, context: dict) -> bool:
+        """扩建任务"""
+        rect = context.get("rect")
+        detections = context.get("detections", [])
+        return self.expand.try_expand(rect, detections) is not None
+
+    def _task_task(self, context: dict) -> bool:
+        """任务/出售任务"""
+        rect = context.get("rect")
+        detections = context.get("detections", [])
+        ta = self.task.try_task(rect, detections)
+        return ta is not None and len(ta) > 0
 
     def check_friends(self) -> dict:
         result = {"success": True, "actions_done": [], "next_check_seconds": 1800}

@@ -269,11 +269,27 @@ class MainWindow(QMainWindow):
 
     def _on_web_server_toggled(self, start: bool):
         """Web 服务启动/停止"""
-        import main as _main
+        from loguru import logger
+        logger.info(f"MainWindow._on_web_server_toggled: start={start}")
+        logger.info(f"self.web_server: {getattr(self, 'web_server', None) is not None}")
+
         if start:
+            logger.info("调用 _start_web_server")
+            import main as _main
             _main._start_web_server(self.config, self)
         else:
-            _main._stop_web_server()
+            logger.info("调用 web_server.stop()")
+            # 直接使用 window 对象上存储的 web_server 实例，避免模块导入问题
+            # 注意：不能使用 import main，因为当 main.py 作为 __main__ 运行时，
+            # import main 会创建一个新的模块实例，无法访问 _global_web_server
+            web = getattr(self, 'web_server', None)
+            if web:
+                logger.info(f"找到 web_server 实例: {id(web)}")
+                web.stop()
+                self.web_server = None
+                logger.info("web_server.stop() 已调用")
+            else:
+                logger.warning("self.web_server 为 None，无法停止 Web 服务")
 
     def showEvent(self, event):
         super().showEvent(event)

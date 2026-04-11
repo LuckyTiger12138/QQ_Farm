@@ -141,6 +141,19 @@ class PlantStrategy(BaseStrategy):
 
         return False
 
+    def _swipe_seed_list(self, rect: tuple):
+        """滑动种子列表以加载更多种子（翻页）"""
+        if not self.action_executor:
+            return
+        
+        # 参考 qq-farm-copilot 的滑动坐标：从 (270, 300) 滑动到 (270, 860)
+        # 这是一个从上到下的滑动，用于加载下方的种子
+        start_x, start_y = 270, 300
+        dx, dy = 0, 560
+        
+        logger.debug(f"播种流程：滑动种子列表 ({start_x}, {start_y}) -> dx={dx}, dy={dy}")
+        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
                                 total_lands: int = 0, skip_count: int = 0) -> list[str]:
         """播种剩余的空地（跳过第一块已验证不是空地的地块）"""
@@ -338,21 +351,32 @@ class PlantStrategy(BaseStrategy):
         logger.debug(f"播种流程：使用阈值 {seed_threshold} 检测种子 '{crop_name}'")
 
         seed_det = None
-        for attempt in range(2):
+        max_swipe_attempts = 3  # 最多尝试翻页次数
+        swipe_count = 0
+
+        while not seed_det and swipe_count <= max_swipe_attempts:
             if self.stopped:
                 return all_actions
+            
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 return all_actions
+            
             seed_dets = self.cv_detector.detect_single_template(
                 cv_img, f"seed_{crop_name}", threshold=seed_threshold)
+            
             if seed_dets:
                 seed_det = seed_dets[0]
                 break
-            for _ in range(5):
-                if self.stopped:
-                    return all_actions
-                time.sleep(0.05)
+            
+            # 未找到种子，尝试翻页（滑动种子列表）
+            if swipe_count < max_swipe_attempts:
+                logger.info(f"播种流程：当前页未找到种子 '{crop_name}'，尝试翻页 ({swipe_count + 1}/{max_swipe_attempts})")
+                self._swipe_seed_list(rect)
+                time.sleep(0.5)  # 等待滑动动画
+                swipe_count += 1
+            else:
+                break
 
         if not seed_det:
             # 没找到种子，先关闭种子弹窗

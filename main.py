@@ -131,8 +131,8 @@ def _start_web_server(config: AppConfig, window: MainWindow):
         import time
         time.sleep(0.5)
 
-    if not config.web.enabled:
-        return
+    # 注意：这里不再检查 config.web.enabled，因为 GUI 按钮可能手动启动服务
+    # 如果配置中未启用，仍然允许通过 GUI 按钮启动
 
     try:
         from web.server import WebServer
@@ -201,7 +201,15 @@ def _start_web_server(config: AppConfig, window: MainWindow):
         web.pause_bot = window.engine.pause
         web.resume_bot = window.engine.resume
 
+        # 将 web 实例保存到 window 对象和全局变量
+        window.web_server = web
         _global_web_server = web
+        
+        logger.info(f"window.web_server 已设置为 web 实例: {window.web_server is not None}")
+        logger.info(f"_global_web_server 已设置为 web 实例: {_global_web_server is not None}")
+        logger.info(f"id(window.web_server): {id(window.web_server)}")
+        logger.info(f"id(_global_web_server): {id(_global_web_server)}")
+        
         web.start()
 
         logger.info(f"Web 服务已启动: http://{config.web.host}:{config.web.port}")
@@ -212,9 +220,27 @@ def _start_web_server(config: AppConfig, window: MainWindow):
 def _stop_web_server():
     """停止 Web 服务"""
     global _global_web_server
+    from loguru import logger
+    
+    logger.info(f"_stop_web_server 被调用")
+    logger.info(f"_global_web_server 存在: {_global_web_server is not None}")
+    logger.info(f"id(_global_web_server): {id(_global_web_server) if _global_web_server else 'None'}")
+    
     if _global_web_server:
+        logger.info(f"调用 _global_web_server.stop()")
+        logger.info(f"_global_web_server._running: {_global_web_server._running}")
+        logger.info(f"_global_web_server._server: {_global_web_server._server}")
+        logger.info(f"_global_web_server._thread: {_global_web_server._thread}")
+        
         _global_web_server.stop()
+        
+        logger.info("_global_web_server.stop() 返回")
+        logger.info(f"停止后 _global_web_server._running: {_global_web_server._running}")
+        
         _global_web_server = None
+        logger.info("_global_web_server 已设置为 None")
+    else:
+        logger.warning("_global_web_server 为 None，无法停止 Web 服务")
 
 
 if __name__ == "__main__":
