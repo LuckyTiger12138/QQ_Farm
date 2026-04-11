@@ -779,6 +779,12 @@ class BotEngine(QObject):
 
         idle_rounds = 0
         max_idle = 3
+        
+        # ✅ 添加状态变化检测：避免重复相同检测
+        prev_scene = None
+        prev_detection_keys = set()
+        consecutive_same_state = 0  # 连续相同状态轮数
+        max_consecutive_same = 2  # 最多允许连续 2 轮相同状态
 
         # 初始化任务执行器
         executor = TaskExecutor()
@@ -891,6 +897,29 @@ class BotEngine(QObject):
             scene = identify_scene(detections, self.cv_detector, cv_image)
             det_summary = ", ".join(f"{d.name}({d.confidence:.0%})" for d in detections[:6])
             logger.debug(f"[轮{round_num}] 场景={scene.value} | {det_summary}")
+            
+            # ✅ 状态变化检测：避免重复相同检测
+            # 构建当前状态的指纹（场景 + 关键按钮集合）
+            key_detections = frozenset(d.name for d in detections if d.confidence > 0.7)
+            current_state = (scene, key_detections)
+            
+            if prev_scene == scene and prev_detection_keys == key_detections:
+                consecutive_same_state += 1
+                if consecutive_same_state >= max_consecutive_same:
+                    # 连续相同状态，跳过本轮调度
+                    logger.debug(f"[轮{round_num}] 连续 {consecutive_same_state} 轮状态相同，跳过调度")
+                    idle_rounds += 1
+                    if idle_rounds >= max_idle:
+                        logger.info(f"连续 {max_idle} 轮无操作且状态未变化，提前退出")
+                        break
+                    # 延长 sleep 时间
+                    time.sleep(1.0)
+                    continue
+            else:
+                # 状态发生变化，重置计数
+                consecutive_same_state = 0
+                prev_scene = scene
+                prev_detection_keys = key_detections
 
             # 构建上下文
             context = {
@@ -911,12 +940,19 @@ class BotEngine(QObject):
                 idle_rounds = 0
             else:
                 idle_rounds += 1
-                if idle_rounds == 1:
-                    self.popup.click_blank(rect)
-                elif idle_rounds >= max_idle:
+                # ✅ 优化：移除 idle_rounds==1 时的无效 click_blank
+                # 原因：在 farm_overview 场景下，如果没有弹窗，click_blank 纯属多余
+                # 只有在检测到弹窗场景时才应该 click_blank
+                if idle_rounds >= max_idle:
                     break
 
-            time.sleep(0.3)
+            # ✅ 优化：根据空闲轮数动态调整 sleep 时间
+            if idle_rounds == 0:
+                time.sleep(0.3)  # 有操作时快速响应
+            elif idle_rounds == 1:
+                time.sleep(0.5)  # 首次空闲，稍等
+            else:
+                time.sleep(1.0)  # 连续空闲，延长间隔，避免重复检测
 
         # 设置下次检查间隔：始终使用用户配置的间隔
         interval = self.config.schedule.farm_check_seconds
