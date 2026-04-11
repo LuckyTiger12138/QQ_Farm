@@ -192,6 +192,13 @@ class BotEngine(QObject):
         self.plant.auto_fertilize = self.config.features.auto_fertilize
         self.config_updated.emit(config)  # 通知 GUI 刷新
 
+        # ✅ 更新调度器定时器间隔（修改配置后自动刷新）
+        farm_ms = config.schedule.farm_check_seconds * 1000
+        friend_ms = config.schedule.friend_check_seconds * 1000
+        self.scheduler.set_farm_interval(farm_ms)
+        self.scheduler.set_friend_interval(friend_ms)
+        logger.debug(f"调度器间隔已更新: 农场={config.schedule.farm_check_seconds}s, 好友={config.schedule.friend_check_seconds}s")
+
         # 注意：此处不再自动唤醒定时器，防止 Web 端轮询配置导致频繁触发。
         # 静默时段检查应在调度器触发任务时进行。
 

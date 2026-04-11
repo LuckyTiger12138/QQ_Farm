@@ -120,14 +120,26 @@ class TaskScheduler(QObject):
         self.friend_check_triggered.emit()
 
     def set_farm_interval(self, seconds: int):
-        """动态调整农场检查间隔（秒）"""
-        ms = max(3000, seconds * 1000)
+        """动态调整农场检查间隔（毫秒）"""
+        ms = max(3000, seconds)  # 至少 3 秒
         self._farm_timer.setInterval(ms)
-        self._next_farm_check = time.time() + seconds
-        if seconds >= 60:
-            logger.info(f"农场检查间隔调整为 {seconds // 60}分{seconds % 60}秒")
+        self._next_farm_check = time.time() + ms / 1000
+        secs = ms // 1000
+        if secs >= 60:
+            logger.info(f"农场检查间隔调整为 {secs // 60}分{secs % 60}秒")
         else:
-            logger.info(f"农场检查间隔调整为 {seconds}秒")
+            logger.info(f"农场检查间隔调整为 {secs}秒")
+
+    def set_friend_interval(self, seconds: int):
+        """动态调整好友巡查间隔（毫秒）"""
+        ms = max(3000, seconds)  # 至少 3 秒
+        self._friend_timer.setInterval(ms)
+        self._next_friend_check = time.time() + ms / 1000
+        secs = ms // 1000
+        if secs >= 60:
+            logger.info(f"好友巡查间隔调整为 {secs // 60}分{secs % 60}秒")
+        else:
+            logger.info(f"好友巡查间隔调整为 {secs}秒")
 
     def _on_farm_timer(self):
         if self._state not in (BotState.RUNNING,):
