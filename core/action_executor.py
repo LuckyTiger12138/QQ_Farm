@@ -112,7 +112,7 @@ class ActionExecutor:
         return int(point.x), int(point.y)
 
     def _click_background(self, abs_x: int, abs_y: int) -> bool:
-        """后台消息点击：通过 PostMessageW 发送鼠标消息"""
+        """后台消息点击：通过 SendMessageW 发送鼠标消息（同步，不抢焦点）"""
         if not self._hwnd:
             return False
         client = self._screen_to_client(abs_x, abs_y)
@@ -121,10 +121,11 @@ class ActionExecutor:
         cx, cy = client
         lparam = self._make_lparam(cx, cy)
         hwnd = ctypes.wintypes.HWND(self._hwnd)
-        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        # ✅ 使用 SendMessageW（同步）而非 PostMessageW（异步），避免窗口被激活到前台
+        user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
         time.sleep(0.03)
-        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
         return True
 
     def _click_foreground(self, abs_x: int, abs_y: int) -> bool:
@@ -157,7 +158,7 @@ class ActionExecutor:
 
     def _drag_background(self, sx: int, sy: int,
                          ex: int, ey: int, steps: int = 10) -> bool:
-        """后台模式拖拽：发送 MOUSEMOVE 序列"""
+        """后台模式拖拽：发送 MOUSEMOVE 序列（使用 SendMessageW 避免抢焦点）"""
         if not self._hwnd:
             return False
         hwnd = ctypes.wintypes.HWND(self._hwnd)
@@ -169,8 +170,8 @@ class ActionExecutor:
 
         # 按下
         lparam = self._make_lparam(*start)
-        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
         time.sleep(0.02)
 
         # 移动
@@ -179,12 +180,12 @@ class ActionExecutor:
             cx = int(start[0] + (end[0] - start[0]) * t)
             cy = int(start[1] + (end[1] - start[1]) * t)
             lparam = self._make_lparam(cx, cy)
-            user32.PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+            user32.SendMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
             time.sleep(0.02)
 
         # 释放
         lparam = self._make_lparam(*end)
-        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
         return True
 
     def drag_multi_points(self, start_x: int, start_y: int,
@@ -257,15 +258,16 @@ class ActionExecutor:
 
         # 按下
         lparam = self._make_lparam(*start_client)
-        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        # ✅ 使用 SendMessageW（同步）而非 PostMessageW（异步），避免窗口被激活到前台
+        user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
         time.sleep(0.05)
 
         # 依次拖到每个目标点
         for px, py_ in points:
             if check_stopped and check_stopped():
                 lparam = self._make_lparam(*start_client)
-                user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+                user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
                 return False
             end_client = self._screen_to_client(px, py_)
             if not end_client:
@@ -273,13 +275,13 @@ class ActionExecutor:
             for i in range(1, steps_per_point + 1):
                 if check_stopped and check_stopped():
                     lparam = self._make_lparam(*end_client)
-                    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+                    user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
                     return False
                 t = i / steps_per_point
                 cx = int(start_client[0] + (end_client[0] - start_client[0]) * t)
                 cy = int(start_client[1] + (end_client[1] - start_client[1]) * t)
                 lparam = self._make_lparam(cx, cy)
-                user32.PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+                user32.SendMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
                 time.sleep(0.01)
             # 更新起点为当前点，下次从此处开始插值
             start_client = end_client
@@ -287,7 +289,7 @@ class ActionExecutor:
         # 释放
         if start_client:
             lparam = self._make_lparam(*start_client)
-            user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
         return True
 
     def click(self, x: int, y: int) -> bool:
