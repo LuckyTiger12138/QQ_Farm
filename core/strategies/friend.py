@@ -60,6 +60,13 @@ def _scale_pos(pos: tuple, img_h: int, img_w: int) -> tuple[int, int]:
 
 class FriendStrategy(BaseStrategy):
 
+    def __init__(self, cv_detector):
+        super().__init__(cv_detector)
+        # 防卡死机制：记录上次切换的好友 icon 坐标
+        self._last_switched_icon_pos = None
+        self._consecutive_same_pos_count = 0  # 连续点击同一位置次数
+        self._max_consecutive_same = 3  # 最大允许连续点击同一位置
+
     # ── 主入口 ──────────────────────────────────────────────────
 
     def run_friend_round(self, rect: tuple,
@@ -103,6 +110,9 @@ class FriendStrategy(BaseStrategy):
         # 3. 遍历好友
         steal_count = 0
         help_count = 0
+        consecutive_no_action = 0  # ✅ 连续无操作计数器
+        max_consecutive_no_action = 5  # ✅ 最大连续无操作次数
+        
         for i in range(MAX_FRIENDS_PER_ROUND):
             if self.stopped:
                 break
@@ -112,18 +122,30 @@ class FriendStrategy(BaseStrategy):
             if cv_img is None:
                 break
 
+            has_action_this_round = False
+            
             # 偷菜（检查次数限制）
             if enable_steal:
                 if max_steal == 0 or steal_count < max_steal:
                     if self._do_steal(cv_img, dets):
                         steal_count += 1
-                else:
-                    logger.debug(f"偷菜次数已达上限 {max_steal}，跳过")
+                        has_action_this_round = True
 
             # 帮忙（根据独立开关）
             if enable_help:
                 helped = self._do_help(cv_img, dets, enable_weed, enable_water, enable_bug)
-                help_count += len(helped)
+                if helped:
+                    help_count += len(helped)
+                    has_action_this_round = True
+
+            # ✅ 如果本轮有操作，重置连续无操作计数
+            if has_action_this_round:
+                consecutive_no_action = 0
+            else:
+                consecutive_no_action += 1
+                if consecutive_no_action >= max_consecutive_no_action:
+                    logger.info(f"连续 {max_consecutive_no_action} 个好友无操作，结束巡查")
+                    break
 
             # 切换下一位好友（含滑动）
             if not self._goto_next_friend(cv_img, dets, rect,
@@ -379,7 +401,7 @@ class FriendStrategy(BaseStrategy):
         btn = self._find_any_name(dets, ["btn_steal"])
         if btn:
             self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
-            time.sleep(0.3)
+            time.sleep(0.2)  # ✅ 缩短等待时间：0.3 -> 0.2
             return True
 
         # icon 确认 + 固定坐标
@@ -387,7 +409,7 @@ class FriendStrategy(BaseStrategy):
             h, w = cv_img.shape[:2]
             fx, fy = _scale_pos(STEAL_BTN_POS, h, w)
             self.click(fx, fy, "偷菜(坐标)", ActionType.STEAL)
-            time.sleep(0.3)
+            time.sleep(0.2)
             return True
 
         return False
@@ -425,7 +447,7 @@ class FriendStrategy(BaseStrategy):
             if btn:
                 self.click(btn.x, btn.y, desc, action_type)
                 actions_done.append(desc)
-                time.sleep(0.3)
+                time.sleep(0.2)  # ✅ 缩短等待时间：0.3 -> 0.2
 
         return actions_done
 
@@ -438,8 +460,11 @@ class FriendStrategy(BaseStrategy):
                           enable_water: bool = False,
                           enable_bug: bool = False) -> bool:
         """切换到下一位可操作的好友，无结果时滑动翻页
-        
-        根据启用的操作筛选对应的底部好友 icon，避免误点不可操作的好友。
+
+        改进版：
+        - 使用候选队列，避免重复点击同一位置
+        - 添加防卡死机制，连续 3 次同一位置则退出
+        - 缩短等待时间，提升流畅度
         """
         if self.stopped:
             return False
@@ -460,12 +485,23 @@ class FriendStrategy(BaseStrategy):
             return False
 
         # 第一次尝试：当前截图的检测结果
-        candidate = self._find_friend_icon(cv_img, dets, icon_names)
-        if candidate:
+        candidates = self._find_friend_icon(cv_img, dets, icon_names)
+        if candidates:
+            # 点击第一个候选
+            candidate = candidates[0]
             logger.info(f"切换好友: 点击 {candidate.name} ({candidate.x}, {candidate.y})")
+            
+            # 防卡死检查
+            if self._check_consecutive_click(candidate.x, candidate.y):
+                logger.warning(f"检测到连续点击同一位置 ({candidate.x}, {candidate.y}) {self._consecutive_same_pos_count}/{self._max_consecutive_same}，停止切换")
+                return False
+            
             self.click(candidate.x, candidate.y, "切换好友")
-            time.sleep(0.8)
-            return True
+            self._update_click_history(candidate.x, candidate.y)
+            time.sleep(0.5)  # ✅ 缩短等待时间：0.8 -> 0.5
+            
+            # ✅ 验证切换是否成功
+            return self._verify_friend_switch(rect)
 
         # 滑动翻页重试
         for swipe_attempt in range(2):
@@ -473,30 +509,75 @@ class FriendStrategy(BaseStrategy):
                 return False
             logger.debug(f"滑动好友列表 (第{swipe_attempt+1}次)")
             self._swipe_friend_list(rect)
-            time.sleep(0.5)
+            time.sleep(0.3)  # ✅ 缩短等待时间：0.5 -> 0.3
 
             cv_img2, dets2 = self._quick_detect(rect, icon_names + ["btn_home"])
             if cv_img2 is None:
                 continue
-            candidate = self._find_friend_icon(cv_img2, dets2, icon_names)
-            if candidate:
+            candidates = self._find_friend_icon(cv_img2, dets2, icon_names)
+            if candidates:
+                candidate = candidates[0]
                 logger.info(f"滑动后切换好友: 点击 {candidate.name} ({candidate.x}, {candidate.y})")
+                
+                # 防卡死检查
+                if self._check_consecutive_click(candidate.x, candidate.y):
+                    logger.warning(f"滑动后仍检测到同一位置，停止切换")
+                    return False
+                
                 self.click(candidate.x, candidate.y, "切换好友")
-                time.sleep(0.8)
-                return True
+                self._update_click_history(candidate.x, candidate.y)
+                time.sleep(0.5)
+                return self._verify_friend_switch(rect)
 
         logger.info("未找到更多可操作好友")
         return False
 
+    def _check_consecutive_click(self, x: int, y: int) -> bool:
+        """检查是否连续点击同一位置"""
+        if self._last_switched_icon_pos is None:
+            return False
+        
+        dist = ((x - self._last_switched_icon_pos[0]) ** 2 + 
+                (y - self._last_switched_icon_pos[1]) ** 2) ** 0.5
+        
+        if dist < 30:  # 30 像素内认为是同一位置
+            self._consecutive_same_pos_count += 1
+            return self._consecutive_same_pos_count >= self._max_consecutive_same
+        else:
+            self._consecutive_same_pos_count = 0
+            return False
+
+    def _update_click_history(self, x: int, y: int):
+        """更新点击历史记录"""
+        self._last_switched_icon_pos = (x, y)
+
+    def _verify_friend_switch(self, rect: tuple) -> bool:
+        """验证是否成功切换到下一个好友"""
+        cv_img, dets = self._quick_detect(rect, ["btn_home"])
+        if cv_img is None:
+            return False
+        
+        # 只要还在好友农场（有 btn_home），就认为切换成功
+        if any(d.name == "btn_home" for d in dets):
+            return True
+        
+        # 如果不在好友农场，可能意外退出了
+        logger.warning("切换好友后未在好友农场，可能切换失败")
+        return False
+
     def _find_friend_icon(self, cv_img, dets: list[DetectResult],
-                          icon_names: list[str]) -> DetectResult | None:
-        """在底部好友列表区域找可操作的 icon"""
+                          icon_names: list[str]) -> list[DetectResult]:
+        """在底部好友列表区域找可操作的 icon，返回按 X 坐标排序的候选列表
+
+        Returns:
+            list[DetectResult]: 候选 icon 列表，按 X 坐标从左到右排序
+        """
         h, w = cv_img.shape[:2]
         x_min = int(w * 0.12)
         x_max = int(w * 0.93)
-        # 扩大 Y 范围：75% ~ 95%，涵盖 Y=940+ 的 icon
-        y_min = int(h * 0.75)   # ~790
-        y_max = int(h * 0.95)   # ~1001，覆盖 Y=940-945
+        # 精确 Y 范围：85% ~ 92%，实际 icon 集中在 Y=940-945
+        y_min = int(h * 0.89)   # ~940
+        y_max = int(h * 0.92)   # ~970
 
         name_set = set(icon_names)
         # 日志：列出所有匹配 icon 的位置（不管是否在区域内）
@@ -508,12 +589,20 @@ class FriendStrategy(BaseStrategy):
         candidates = []
         for d in dets:
             if d.name in name_set and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                # 去重：过滤掉与上次切换位置过于接近的 icon（避免重复点击）
+                if self._last_switched_icon_pos:
+                    dist = ((d.x - self._last_switched_icon_pos[0]) ** 2 + 
+                            (d.y - self._last_switched_icon_pos[1]) ** 2) ** 0.5
+                    if dist < 30:  # 30 像素内认为是同一位置
+                        continue
                 candidates.append(d)
 
+        # 按 X 坐标从左到右排序
         if candidates:
-            candidates.sort(key=lambda d: d.x)
-            return candidates[0]
-        return None
+            candidates.sort(key=lambda d: (d.x, d.y))
+            logger.debug(f"候选icon队列: {[f'{d.name}({d.x},{d.y})' for d in candidates]}")
+
+        return candidates
 
     def _swipe_friend_list(self, rect: tuple):
         """滑动底部好友列表（向左滑动查看更多好友）"""
