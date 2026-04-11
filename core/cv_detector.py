@@ -42,6 +42,7 @@ TEMPLATE_CATEGORIES = {
     "seed": "seed",
     "shop": "shop",
     "friend": "ui_element",  # 好友列表页标识
+    "ws": "warehouse_seed",  # 仓库种子（用于仓库界面检测）
 }
 
 
@@ -57,6 +58,7 @@ class CVDetector:
         "land": 0.7,
         "seed": 0.8,
         "shop": 0.8,
+        "warehouse_seed": 0.8,  # 新增：仓库种子
         "unknown": 0.8,
     }
     # 内置默认值（用于"恢复默认"）
@@ -68,6 +70,7 @@ class CVDetector:
         "land": 0.7,
         "seed": 0.8,
         "shop": 0.8,
+        "warehouse_seed": 0.8,  # 新增：仓库种子
         "unknown": 0.8,
     }
 

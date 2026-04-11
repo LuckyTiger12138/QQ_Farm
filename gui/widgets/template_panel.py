@@ -30,6 +30,7 @@ _CAT_COLORS: dict[str, str] = {
     "land": "#8E8E93",
     "seed": "#FF2D55",
     "shop": "#5856D6",
+    "warehouse_seed": "#FF9F0A",  # 仓库种子颜色（橙色）
     "unknown": "#AEAEB2",
 }
 
@@ -41,6 +42,7 @@ _CAT_LABELS: dict[str, str] = {
     "land": "土地",
     "seed": "种子",
     "shop": "商店",
+    "warehouse_seed": "仓库种子",
     "unknown": "其他",
 }
 
@@ -53,6 +55,7 @@ _PREFIX_LABELS: dict[str, str] = {
     "land": "土地 (land_)",
     "seed": "种子 (seed_)",
     "shop": "商店 (shop_)",
+    "ws": "仓库种子 (ws_)",  # 新增：仓库种子
 }
 
 
@@ -1151,7 +1154,7 @@ class CaptureWorker(QThread):
 
 
 class ScreenshotSelector(QWidget):
-    """截图显示 + 鼠标多边形框选（支持不规则形状 + alpha蒙版）"""
+    """截图显示 + 鼠标框选（支持矩形和多边形 + alpha蒙版）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1159,8 +1162,19 @@ class ScreenshotSelector(QWidget):
         self._scale = 1.0
         self._ox = 0
         self._oy = 0
+        
+        # 绘图模式："rect" (矩形) 或 "polygon" (多边形)
+        self._mode = "rect" 
+        
+        # 矩形相关
+        self._rect_start: tuple[float, float] | None = None
+        self._rect_end: tuple[float, float] | None = None
+        self._dragging: bool = False
+
+        # 多边形相关
         self._points: list[tuple[float, float]] = []  # 多边形顶点（显示坐标）
         self._mouse_pos: tuple[float, float] | None = None  # 当前鼠标位置
+
         self._bgr: np.ndarray | None = None
         self._pil = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -1170,10 +1184,35 @@ class ScreenshotSelector(QWidget):
     def set_image(self, pil_image, bgr: np.ndarray):
         self._pil = pil_image
         self._bgr = bgr
+        # Reset states
         self._points = []
         self._mouse_pos = None
+        self._rect_start = None
+        self._rect_end = None
+        self._dragging = False
         self._build()
         self.update()
+
+    def toggle_mode(self):
+        """切换 矩形/多边形 模式"""
+        if self._mode == "rect":
+            self._mode = "polygon"
+            # 切换时清除当前选区，避免混淆
+            self._rect_start = None
+            self._rect_end = None
+        else:
+            self._mode = "rect"
+            self._points = []
+            self._mouse_pos = None
+        self.update()
+        return self._mode
+
+    def _is_selected(self) -> bool:
+        """是否有有效的选区"""
+        if self._mode == "rect":
+            return self._rect_start is not None and self._rect_end is not None
+        else:
+            return len(self._points) >= 3
 
     def _build(self):
         if self._pil is None:
@@ -1203,29 +1242,49 @@ class ScreenshotSelector(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._pixmap:
             p.drawPixmap(self._ox, self._oy, self._pixmap)
-            if len(self._points) >= 2:
-                pts = [QPoint(int(x), int(y)) for x, y in self._points]
-                # 绘制多边形边
-                p.setPen(QPen(QColor(0, 200, 80), 2, Qt.PenStyle.SolidLine))
-                p.setBrush(QBrush(QColor(0, 200, 80, 35)))
-                for i in range(len(pts) - 1):
-                    p.drawLine(pts[i], pts[i + 1])
-                # 绘制顶点
-                p.setBrush(QBrush(QColor(0, 255, 0)))
-                for pt in pts:
-                    p.drawEllipse(pt, 4, 4)
-                # 绘制预览线（从最后一个点到鼠标位置）
-                if self._mouse_pos and not self._is_closed():
-                    mx, my = int(self._mouse_pos[0]), int(self._mouse_pos[1])
-                    p.drawLine(pts[-1], QPoint(mx, my))
-                    p.drawEllipse(QPoint(mx, my), 3, 3)
-            elif len(self._points) == 1:
-                px, py = int(self._points[0][0]), int(self._points[0][1])
-                p.setBrush(QBrush(QColor(0, 255, 0)))
-                p.drawEllipse(QPoint(px, py), 4, 4)
-                # 提示文字
+            
+            # 绘制逻辑：矩形 或 多边形
+            if self._mode == "rect":
+                # 绘制矩形框
+                pen = QPen(QColor(0, 200, 80), 2, Qt.PenStyle.SolidLine)
+                brush = QBrush(QColor(0, 200, 80, 35))
+                p.setPen(pen)
+                p.setBrush(brush)
+                
+                if self._rect_start and self._rect_end:
+                    x1, y1 = int(self._rect_start[0]), int(self._rect_start[1])
+                    x2, y2 = int(self._rect_end[0]), int(self._rect_end[1])
+                    p.drawRect(x1, y1, x2 - x1, y2 - y1)
+                elif self._rect_start and self._mouse_pos:
+                    # 拖拽中
+                    x1, y1 = int(self._rect_start[0]), int(self._rect_start[1])
+                    x2, y2 = int(self._mouse_pos[0]), int(self._mouse_pos[1])
+                    p.drawRect(x1, y1, x2 - x1, y2 - y1)
+            else:
+                # 绘制多边形（原逻辑）
+                if len(self._points) >= 2:
+                    pts = [QPoint(int(x), int(y)) for x, y in self._points]
+                    p.setPen(QPen(QColor(0, 200, 80), 2, Qt.PenStyle.SolidLine))
+                    p.setBrush(QBrush(QColor(0, 200, 80, 35)))
+                    for i in range(len(pts) - 1):
+                        p.drawLine(pts[i], pts[i + 1])
+                    p.setBrush(QBrush(QColor(0, 255, 0)))
+                    for pt in pts:
+                        p.drawEllipse(pt, 4, 4)
+                    if self._mouse_pos and not self._is_closed():
+                        mx, my = int(self._mouse_pos[0]), int(self._mouse_pos[1])
+                        p.drawLine(pts[-1], QPoint(mx, my))
+                        p.drawEllipse(QPoint(mx, my), 3, 3)
+                elif len(self._points) == 1:
+                    px, py = int(self._points[0][0]), int(self._points[0][1])
+                    p.setBrush(QBrush(QColor(0, 255, 0)))
+                    p.drawEllipse(QPoint(px, py), 4, 4)
+            
+            # 提示文字
+            if not self._is_selected():
                 p.setPen(QColor(0, 200, 80))
-                p.drawText(self._ox + 10, self._oy + 20, "左键点击添加顶点，Enter完成，右键撤销")
+                text = "拖拽绘制矩形" if self._mode == "rect" else "点击绘制多边形，Enter完成"
+                p.drawText(self._ox + 10, self._oy + 20, text)
         else:
             p.setPen(QColor(Colors.TEXT_DIM))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
@@ -1239,39 +1298,69 @@ class ScreenshotSelector(QWidget):
     def mousePressEvent(self, e):
         if not self._pixmap:
             return
+            
         if e.button() == Qt.MouseButton.LeftButton:
             # 双击完成多边形
-            if e.type() == e.Type.MouseButtonDblClick:
+            if e.type() == e.Type.MouseButtonDblClick and self._mode == "polygon":
                 if self._is_closed():
                     self._mouse_pos = None
                     self.update()
                 return
+                
             pos = (e.position().x(), e.position().y())
-            self._points.append(pos)
-            self._mouse_pos = None
+            if self._mode == "rect":
+                # 矩形模式：记录起点
+                self._rect_start = pos
+                self._rect_end = pos
+                self._dragging = True
+                self._points = [] # 清除多边形
+            else:
+                # 多边形模式：添加点
+                self._points.append(pos)
+                self._mouse_pos = None
+                self._rect_start = None
+                self._rect_end = None
+            
             self.update()
+            
         elif e.button() == Qt.MouseButton.RightButton:
-            # 右键撤销最后一个点
-            if self._points:
+            # 右键撤销（仅多边形模式）
+            if self._mode == "polygon" and self._points:
                 self._points.pop()
                 self.update()
 
     def mouseMoveEvent(self, e):
-        if self._pixmap and len(self._points) > 0 and not self._is_closed():
-            self._mouse_pos = (e.position().x(), e.position().y())
-            self.update()
+        pos = (e.position().x(), e.position().y())
+        if self._pixmap:
+            if self._mode == "rect" and self._dragging:
+                self._rect_end = pos
+                self.update()
+            elif self._mode == "polygon" and len(self._points) > 0 and not self._is_closed():
+                self._mouse_pos = pos
+                self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._mode == "rect":
+            self._dragging = False
+            if self._rect_start:
+                # 确保有宽高
+                self._rect_end = (e.position().x(), e.position().y())
+                self.update()
 
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            # Enter 键完成多边形
-            if self._is_closed():
+            # Enter 键完成多边形 (仅在多边形模式下有效)
+            if self._mode == "polygon" and self._is_closed():
                 self._mouse_pos = None
                 self.update()
             e.accept()
         elif e.key() == Qt.Key.Key_Escape:
-            # Esc 清除所有点
+            # Esc 清除选区 (支持两种模式)
             self._points = []
             self._mouse_pos = None
+            self._rect_start = None
+            self._rect_end = None
+            self._dragging = False
             self.update()
             e.accept()
         else:
@@ -1287,38 +1376,76 @@ class ScreenshotSelector(QWidget):
         return ox, oy
 
     def get_crop(self) -> tuple | None:
-        """获取多边形区域裁剪（带alpha通道）"""
-        if not self._is_closed() or self._bgr is None or not self._pixmap:
+        """获取选区裁剪（支持矩形和多边形，带alpha通道）"""
+        if not self._is_selected() or self._bgr is None or not self._pixmap:
             return None
 
-        # 转换为原图坐标
-        original_points = [self._display_to_original(x, y) for x, y in self._points]
-        pts = np.array(original_points, dtype=np.int32)
+        # 矩形模式
+        if self._mode == "rect":
+            if not self._rect_start or not self._rect_end:
+                return None
+            
+            # 获取原图坐标
+            p1 = self._display_to_original(*self._rect_start)
+            p2 = self._display_to_original(*self._rect_end)
+            
+            x1, y1 = p1
+            x2, y2 = p2
+            
+            # 规范化坐标
+            x = min(x1, x2)
+            y = min(y1, y2)
+            w = abs(x1 - x2)
+            h = abs(y1 - y2)
+            
+            if w < 5 or h < 5:
+                return None
+            
+            cropped = self._bgr[y:y+h, x:x+w].copy()
+            
+            # 矩形蒙版全白
+            mask = np.ones((h, w), dtype=np.uint8) * 255
+            bgra = cv2.cvtColor(cropped, cv2.COLOR_BGR2BGRA)
+            bgra[:, :, 3] = mask
+            return (bgra, w, h)
 
-        # 计算边界框
-        x, y, w, h = cv2.boundingRect(pts)
-        if w < 5 or h < 5:
-            return None
+        # 多边形模式
+        else:
+            if len(self._points) < 3:
+                return None
 
-        # 裁剪区域
-        cropped = self._bgr[y:y+h, x:x+w].copy()
+            # 转换为原图坐标
+            original_points = [self._display_to_original(x, y) for x, y in self._points]
+            pts = np.array(original_points, dtype=np.int32)
 
-        # 创建蒙版
-        mask = np.zeros((h, w), dtype=np.uint8)
-        pts_offset = pts - [x, y]
-        cv2.fillPoly(mask, [pts_offset], 255)
+            # 计算边界框
+            x, y, w, h = cv2.boundingRect(pts)
+            if w < 5 or h < 5:
+                return None
 
-        # 合并为 BGRA 四通道图像
-        bgra = cv2.cvtColor(cropped, cv2.COLOR_BGR2BGRA)
-        bgra[:, :, 3] = mask
+            # 裁剪区域
+            cropped = self._bgr[y:y+h, x:x+w].copy()
 
-        return (bgra, w, h)
+            # 创建蒙版
+            mask = np.zeros((h, w), dtype=np.uint8)
+            pts_offset = pts - [x, y]
+            cv2.fillPoly(mask, [pts_offset], 255)
+
+            # 合并为 BGRA 四通道图像
+            bgra = cv2.cvtColor(cropped, cv2.COLOR_BGR2BGRA)
+            bgra[:, :, 3] = mask
+
+            return (bgra, w, h)
 
     def clear(self):
         self._pixmap = self._bgr = self._pil = None
         self._img_data = None
         self._points = []
         self._mouse_pos = None
+        # 清除矩形选区状态
+        self._rect_start = None
+        self._rect_end = None
+        self._dragging = False
         self.update()
 
 
@@ -1616,11 +1743,11 @@ class TemplatePanel(QWidget):
         btn_retake.clicked.connect(self._on_capture)
         tbl.addWidget(btn_retake)
 
-        self._btn_finish = QPushButton("完成多边形")
-        self._btn_finish.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_finish.setStyleSheet(_icon_button(Colors.PRIMARY, Colors.PRIMARY_HOVER))
-        self._btn_finish.clicked.connect(self._on_finish_polygon)
-        tbl.addWidget(self._btn_finish)
+        self._btn_toggle = QPushButton("模式: 矩形")
+        self._btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_toggle.setStyleSheet(_icon_button("#AF52DE", "#9838C8"))
+        self._btn_toggle.clicked.connect(self._on_toggle_mode)
+        tbl.addWidget(self._btn_toggle)
 
         self._btn_save = QPushButton("保存选区")
         self._btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1636,9 +1763,11 @@ class TemplatePanel(QWidget):
 
         tbl.addStretch()
 
-        self._ct_hint = QLabel("鼠标拖拽框选要采集的区域")
+        self._ct_hint = QLabel("鼠标拖拽绘制矩形")
         self._ct_hint.setStyleSheet(f"color:{Colors.TEXT_DIM};font-size:12px;")
         tbl.addWidget(self._ct_hint)
+
+        # ... (rest of layout code)
 
         lay.addWidget(tb)
 
@@ -2108,14 +2237,15 @@ class TemplatePanel(QWidget):
                 buttons=QMessageBox.StandardButton.Ok)
             box.exec()
 
-    def _on_finish_polygon(self):
-        """完成多边形绘制"""
-        if self._selector._is_closed():
-            self._selector._mouse_pos = None
-            self._selector.update()
-            self._ct_hint.setText("多边形已完成，点击「保存选区」保存")
+    def _on_toggle_mode(self):
+        """切换矩形/多边形模式"""
+        mode = self._selector.toggle_mode()
+        if mode == "rect":
+            self._btn_toggle.setText("模式: 矩形")
+            self._ct_hint.setText("鼠标拖拽绘制矩形")
         else:
-            self._ct_hint.setText("至少需要 3 个顶点才能完成多边形")
+            self._btn_toggle.setText("模式: 多边形")
+            self._ct_hint.setText("鼠标点击绘制多边形，双击或Enter完成")
 
     def _show_collector(self):
         self._splitter.hide()
