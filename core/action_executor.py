@@ -13,6 +13,7 @@ from models.farm_state import Action, OperationResult
 WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
+WM_MOUSEWHEEL = 0x020A
 MK_LBUTTON = 0x0001
 
 user32 = ctypes.windll.user32
@@ -167,21 +168,25 @@ class ActionExecutor:
 
     def _drag_background(self, sx: int, sy: int,
                          ex: int, ey: int, steps: int = 10) -> bool:
-        """后台模式拖拽：发送 MOUSEMOVE 序列（使用 SendMessageW 避免抢焦点）"""
+        """后台模式拖拽：发送 MOUSEMOVE 序列（使用 PostMessageW 避免抢焦点）"""
         if not self._hwnd:
+            logger.warning("后台拖拽失败：窗口句柄为空")
             return False
         hwnd = ctypes.wintypes.HWND(self._hwnd)
 
         start = self._screen_to_client(sx, sy)
         end = self._screen_to_client(ex, ey)
         if not start or not end:
+            logger.warning(f"后台拖拽失败：坐标转换失败 start={start}, end={end}")
             return False
+
+        logger.debug(f"后台拖拽：屏幕 ({sx},{sy})->({ex},{ey}), 客户区 {start}->{end}")
 
         # 按下
         lparam = self._make_lparam(*start)
-        user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-        user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-        time.sleep(0.02)
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.05)
 
         # 移动
         for i in range(1, steps + 1):
@@ -189,12 +194,12 @@ class ActionExecutor:
             cx = int(start[0] + (end[0] - start[0]) * t)
             cy = int(start[1] + (end[1] - start[1]) * t)
             lparam = self._make_lparam(cx, cy)
-            user32.SendMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
-            time.sleep(0.02)
+            user32.PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+            time.sleep(0.03)
 
         # 释放
         lparam = self._make_lparam(*end)
-        user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
         return True
 
     def drag_multi_points(self, start_x: int, start_y: int,

@@ -26,6 +26,9 @@ class PlantStrategy(BaseStrategy):
         self.auto_fertilize = False  # 是否自动施肥
         self._purchase_count = 0  # 本轮播种购买次数
         self._max_purchase_per_round = 1  # 每轮最多购买次数
+        
+        # 翻页按钮位置校验：记录第一次检测到的真实翻页按钮坐标，用于后续防伪
+        self._last_page_btn_pos = None
 
     def _check_and_close_info_page(self, rect: tuple, exclude: list[str] = None) -> bool:
         """检测并关闭干扰页面（个人信息/任务/宠物/图鉴/仓库），返回是否成功关闭
@@ -145,9 +148,10 @@ class PlantStrategy(BaseStrategy):
         Returns:
             bool: True 表示面板已打开且还有下一页，False 表示面板未打开或已到末页
         """
-        # 检测种子选择面板的翻页按钮
+        # 修复：使用配置的阈值，禁止硬编码
+        page_threshold = self.cv_detector.get_template_threshold("btn_seed_select_right")
         page_btn = self.cv_detector.detect_single_template(
-            cv_img, "btn_seed_select_right", threshold=0.85)
+            cv_img, "btn_seed_select_right", threshold=page_threshold)
         return page_btn is not None
 
     def _find_seed_with_pagination(self, cv_img, crop_name: str, rect: tuple,
@@ -184,15 +188,28 @@ class PlantStrategy(BaseStrategy):
                 return seed_dets[0]
 
             # 未找到种子，检测翻页按钮
-            # 注意：必须确保 templates 目录下有名为 btn_seed_select_right.png 的模板图片
-            # 该图片应为种子选择面板右下角的翻页/滚动按钮截图
-            page_btn = self.cv_detector.detect_single_template(
-                current_img, "btn_seed_select_right", threshold=0.85)
+            # 修复：必须使用配置的阈值，而不是硬编码的 0.85
+            page_threshold = self.cv_detector.get_template_threshold("btn_seed_select_right")
+            page_btns = self.cv_detector.detect_single_template(
+                current_img, "btn_seed_select_right", threshold=page_threshold)
 
-            if page_btn:
+            # 过滤：翻页按钮必须在屏幕右侧（防止误识别左侧列表图标）
+            # 参考项目坐标 X=511，窗口宽 581，占比约 88%。这里我们放宽到 60%
+            h_img, w_img = current_img.shape[:2]
+            min_x = int(w_img * 0.6)
+            
+            valid_btns = []
+            if page_btns:
+                valid_btns = [btn for btn in page_btns if btn.x >= min_x]
+                # 如果有多个，选置信度最高的
+                if valid_btns:
+                    page_btn = max(valid_btns, key=lambda b: b.confidence)
+                    logger.debug(f"检测到翻页按钮 ({page_btn.x}, {page_btn.y}) 在有效区域 (>{min_x})")
+            
+            if valid_btns:
                 # 还有下一页，点击翻页
                 logger.info(f"播种流程：当前页未找到种子，点击翻页按钮 ({attempt + 1}/{max_attempts})")
-                self.click(page_btn[0].x, page_btn[0].y, f"翻页查找种子")
+                self.click(page_btn.x, page_btn.y, f"翻页查找种子")
                 time.sleep(0.3)  # 等待翻页动画
 
                 # 重新截屏
@@ -216,13 +233,15 @@ class PlantStrategy(BaseStrategy):
             return
 
         logger.warning("播种流程：使用固定坐标滑动（降级方案），建议采集 btn_seed_select_right 模板")
-        # 参考 qq-farm-copilot 的滑动坐标：从 (270, 300) 滑动到 (270, 860)
-        # 这是一个从上到下的滑动，用于加载下方的种子
-        start_x, start_y = 270, 300
-        dx, dy = 0, 560
+        # 在窗口可见范围内滑动（缩短距离，避免超出窗口）
+        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 350
+        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 550
+        dx, dy = ex - sx, ey - sy
 
-        logger.debug(f"播种流程：滑动种子列表 ({start_x}, {start_y}) -> dx={dx}, dy={dy}")
-        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+        logger.debug(f"播种流程：滑动种子列表 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
+        self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6)
 
     def _plant_remaining_lands(self, rect: tuple, lands: list, crop_name: str,
                                 total_lands: int = 0, skip_count: int = 0) -> list[str]:
@@ -429,7 +448,7 @@ class PlantStrategy(BaseStrategy):
                         time.sleep(0.05)
                 else:
                     logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买 (第{self._purchase_count + 1}次)")
-                    buy_result = self._buy_seeds(rect, crop_name)
+                    buy_result = self._buy_seeds(rect, crop_name, skip_warehouse_check=True)
                     if buy_result:
                         self._purchase_count += 1  # 增加购买计数
                         all_actions.append(buy_result)
@@ -750,24 +769,28 @@ class PlantStrategy(BaseStrategy):
                        f"播种{crop_name}", ActionType.PLANT)
             actions_done.append(f"播种{crop_name}")
 
-    def _buy_seeds(self, rect: tuple, crop_name: str) -> str | None:
+    def _buy_seeds(self, rect: tuple, crop_name: str, skip_warehouse_check: bool = False) -> str | None:
         """购买种子流程：打开商店 → OCR/模板匹配找种子 → 点击 → 确认购买
 
-        安全策略：
-        - 购买前验证仓库中种子数量
-        - 如果仓库已有足够种子，跳过购买
-        
+        Args:
+            rect: 窗口矩形
+            crop_name: 作物名称
+            skip_warehouse_check: 是否跳过仓库检查（默认False）。
+                如果调用方（如 plant_all）已经检查过仓库，可设为 True 避免重复检查。
+
         优先使用 OCR 识别（如果可用），否则回退到模板匹配
         """
-        logger.info("购买流程：打开商店")
         if self.stopped:
             return None
 
-        # 安全策略：购买前再次检查仓库，确认是否真的需要购买
-        warehouse_result = self.check_warehouse_seeds(rect, crop_name)
-        if warehouse_result["has_seed"]:
-            logger.info(f"购买流程：仓库已有 '{crop_name}' 种子，跳过购买")
-            return None
+        # 安全策略：购买前检查仓库（除非调用方已检查过）
+        if not skip_warehouse_check:
+            warehouse_result = self.check_warehouse_seeds(rect, crop_name)
+            if warehouse_result["has_seed"]:
+                logger.info(f"购买流程：仓库已有 '{crop_name}' 种子，跳过购买")
+                return None
+
+        logger.info("购买流程：打开商店")
 
         # 打开商店前先检测并关闭个人信息页面
         self._check_and_close_info_page(rect)
@@ -868,9 +891,19 @@ class PlantStrategy(BaseStrategy):
                 if swipe_count < max_swipe_attempts:
                     logger.info(f"购买流程：OCR 当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
                     if self.action_executor:
-                        start_x, start_y = 270, 300
-                        dx, dy = 0, 560
-                        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+                        # 在窗口可见范围内滑动（缩短距离，避免超出窗口）
+                        # 从 Y=350 滑到 Y=550，距离 200 像素
+                        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 350
+                        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 550
+                        dx, dy = ex - sx, ey - sy
+                        logger.debug(f"购买流程：执行滑动 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
+                        drag_result = self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6)
+                        if not drag_result:
+                            logger.warning("购买流程：滑动失败！")
+                    else:
+                        logger.warning("购买流程：action_executor 未初始化，无法滑动")
                     time.sleep(0.8)
                     swipe_count += 1
                 else:
@@ -928,9 +961,18 @@ class PlantStrategy(BaseStrategy):
                 if swipe_count < max_swipe_attempts:
                     logger.info(f"购买流程：模板匹配当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
                     if self.action_executor:
-                        start_x, start_y = 270, 300
-                        dx, dy = 0, 560
-                        self.action_executor.drag(start_x, start_y, dx, dy, duration=0.4, steps=8)
+                        # 在窗口可见范围内滑动（缩短距离，避免超出窗口）
+                        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 350
+                        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+                        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 550
+                        dx, dy = ex - sx, ey - sy
+                        logger.debug(f"购买流程：执行滑动 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
+                        drag_result = self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6)
+                        if not drag_result:
+                            logger.warning("购买流程：滑动失败！")
+                    else:
+                        logger.warning("购买流程：action_executor 未初始化，无法滑动")
                     time.sleep(0.8)
                     swipe_count += 1
                 else:

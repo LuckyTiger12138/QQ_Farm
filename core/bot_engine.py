@@ -490,6 +490,11 @@ class BotEngine(QObject):
         self._worker.start()
 
     def _on_friend_check(self):
+        # 检查是否开启了好友巡查功能
+        friend_cfg = self.config.features.friend
+        if not (friend_cfg.enable_steal or friend_cfg.enable_weed or friend_cfg.enable_water or friend_cfg.enable_bug):
+            return  # 功能未开启，直接返回，不打日志
+
         if self._is_busy:
             logger.debug("上一轮操作尚未完成，跳过好友巡查")
             return
