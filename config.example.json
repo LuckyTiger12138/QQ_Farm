@@ -1,0 +1,65 @@
+{
+  "window_title_keyword": "QQ经典农场",
+  "window_select_rule": "auto",
+  "features": {
+    "auto_harvest": true,
+    "auto_plant": true,
+    "auto_buy_seed": true,
+    "auto_weed": true,
+    "auto_water": true,
+    "auto_bug": true,
+    "auto_fertilize": true,
+    "auto_sell": false,
+    "auto_bad": false,
+    "auto_task": false,
+    "auto_upgrade": false,
+    "friend": {
+      "enable_steal": true,
+      "enable_weed": true,
+      "enable_water": false,
+      "enable_bug": false,
+      "max_steal_per_round": 0
+    }
+  },
+  "safety": {
+    "random_delay_min": 0.1,
+    "random_delay_max": 0.3,
+    "click_offset_range": 5,
+    "max_actions_per_round": 20,
+    "run_mode": "background",
+    "window_position": "bottom_left"
+  },
+  "screenshot": {
+    "quality": 80,
+    "save_history": true,
+    "max_history_count": 50
+  },
+  "schedule": {
+    "farm_check_seconds": 56,
+    "friend_check_seconds": 119,
+    "task_check_minutes": 60
+  },
+  "planting": {
+    "strategy": "preferred",
+    "preferred_crop": "椰子",
+    "player_level": 69,
+    "window_width": 581,
+    "window_height": 1054
+  },
+  "sell": {
+    "mode": "batch_all",
+    "sell_crops": []
+  },
+  "silent_hours": {
+    "enabled": false,
+    "start_hour": 3,
+    "start_minute": 0,
+    "end_hour": 6,
+    "end_minute": 0
+  },
+  "web": {
+    "enabled": false,
+    "host": "0.0.0.0",
+    "port": 8080
+  }
+}
