@@ -129,9 +129,6 @@ class InstanceItem(QFrame):
                 background-color: rgba(0, 122, 255, 10);
                 color: {Colors.PRIMARY};
             }}
-            QMenu::item:disabled {{
-                color: {Colors.TEXT_DIM};
-            }}
             QMenu::separator {{
                 height: 1px;
                 background: {Colors.BORDER};
@@ -148,7 +145,6 @@ class InstanceItem(QFrame):
         menu.addSeparator()
         
         delete_act = menu.addAction('删除')
-        delete_act.setStyleSheet(f"color: {Colors.DANGER};")
         delete_act.triggered.connect(lambda: self.delete_requested.emit(self._instance_id))
         
         menu.exec(pos)
