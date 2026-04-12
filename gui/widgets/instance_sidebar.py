@@ -46,13 +46,13 @@ class InstanceRow(QFrame):
         self._init_ui()
 
     def _init_ui(self):
-        self.setFixedHeight(40)
+        self.setFixedHeight(44)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(8)
 
         # 状态指示灯（鼠标穿透）
         self._indicator = QLabel()
@@ -66,28 +66,24 @@ class InstanceRow(QFrame):
         info_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         info_layout = QVBoxLayout(info_widget)
         info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(0)
+        info_layout.setSpacing(1)
 
         self._name_label = QLabel(self._name_display())
         self._name_label.setStyleSheet(f"""
-            QLabel {{
-                color: {Colors.TEXT};
-                font-size: 12px;
-                font-weight: 600;
-                background: transparent;
-                border: none;
-            }}
+            color: {Colors.TEXT};
+            font-size: 13px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
         """)
         info_layout.addWidget(self._name_label)
 
         self._state_label = QLabel(self._state_text())
         self._state_label.setStyleSheet(f"""
-            QLabel {{
-                color: {Colors.TEXT_SECONDARY};
-                font-size: 10px;
-                background: transparent;
-                border: none;
-            }}
+            color: {Colors.TEXT_SECONDARY};
+            font-size: 11px;
+            background: transparent;
+            border: none;
         """)
         info_layout.addWidget(self._state_label)
 
@@ -95,8 +91,8 @@ class InstanceRow(QFrame):
 
         # 启动/停止按钮
         self._btn = QPushButton()
-        self._btn.setFixedHeight(24)
-        self._btn.setFixedWidth(48)
+        self._btn.setFixedHeight(26)
+        self._btn.setFixedWidth(52)
         self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.clicked.connect(self._on_btn_clicked)
         layout.addWidget(self._btn)
@@ -112,20 +108,18 @@ class InstanceRow(QFrame):
             'error': Colors.DANGER,
         }.get(self._state, Colors.TEXT_DIM)
         self._indicator.setStyleSheet(f"""
-            QLabel {{
-                background-color: {color};
-                border-radius: 4px;
-            }}
+            background-color: {color};
+            border-radius: 4px;
         """)
 
     def _update_row_style(self):
         bg = Colors.SIDEBAR_ITEM_SELECTED_BG if self._selected else 'transparent'
         self.setStyleSheet(f"""
-            QFrame {{
+            InstanceRow {{
                 background: {bg};
                 border-radius: 6px;
             }}
-            QFrame:hover {{
+            InstanceRow:hover {{
                 background: {Colors.SIDEBAR_ITEM_HOVER};
             }}
         """)
@@ -188,42 +182,10 @@ class InstanceRow(QFrame):
                 }}
             """)
 
-    def _update_style(self):
-        if self._selected:
-            self.setStyleSheet(f"""
-                InstanceRow {{
-                    background: {Colors.SIDEBAR_ITEM_SELECTED_BG};
-                    border-radius: 6px;
-                }}
-            """)
-        else:
-            self.setStyleSheet(f"""
-                InstanceRow {{
-                    background: transparent;
-                    border-radius: 6px;
-                }}
-                InstanceRow:hover {{
-                    background: {Colors.SIDEBAR_ITEM_HOVER};
-                }}
-            """)
-
-    def _on_btn_clicked(self):
-        if self._state == 'running':
-            self.stop_requested.emit(self._instance_id)
-        else:
-            self.start_requested.emit(self._instance_id)
-
-    def mousePressEvent(self, event):
-        # 点击行本身触发选择（不是按钮）
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.selected.emit(self._instance_id)
-        super().mousePressEvent(event)
-
     def set_state(self, state: str):
         self._state = state
         self._state_label.setText(self._state_text())
-
-        # 更新指示灯颜色
+        
         indicator_color = {
             'running': Colors.SUCCESS,
             'paused': Colors.WARNING,
@@ -231,17 +193,16 @@ class InstanceRow(QFrame):
             'error': Colors.DANGER,
         }.get(self._state, Colors.TEXT_DIM)
         self._indicator.setStyleSheet(f"""
-            QLabel {{
-                background-color: {indicator_color};
-                border-radius: 4px;
-            }}
+            background-color: {indicator_color};
+            border-radius: 4px;
         """)
 
         self._update_btn()
+        self._update_row_style()
 
     def set_selected(self, selected: bool):
         self._selected = selected
-        self._update_style()
+        self._update_row_style()
 
     def set_name(self, name: str):
         self._name_display_text = name
@@ -443,13 +404,11 @@ class InstanceSidebar(QWidget):
 
     def _on_row_selected(self, instance_id: str):
         """行被点击，触发实例切换"""
-        print(f"[InstanceSidebar] _on_row_selected: {instance_id}")  # 调试
         self._active_instance_id = instance_id
         # 更新所有行的选中状态
         for iid, row in self._rows.items():
             row.set_selected(iid == instance_id)
         # 发送信号给 MainWindow
-        print(f"[InstanceSidebar] 发送 instance_selected 信号: {instance_id}")  # 调试
         self.instance_selected.emit(instance_id)
 
     def set_active_instance(self, instance_id: str) -> None:
