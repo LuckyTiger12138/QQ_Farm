@@ -10,6 +10,15 @@ class RunMode(str, Enum):
     BACKGROUND = "background"
 
 
+class WindowPosition(str, Enum):
+    """窗口在屏幕中的位置位置枚举"""
+    TOP_LEFT = "top_left"        # 左上角
+    TOP_RIGHT = "top_right"      # 右上角
+    BOTTOM_LEFT = "bottom_left"  # 左下角（默认）
+    BOTTOM_RIGHT = "bottom_right" # 右下角
+    CENTER = "center"            # 居中
+
+
 class PlantMode(str, Enum):
     PREFERRED = "preferred"          # 用户手动指定作物
     BEST_EXP_RATE = "best_exp_rate"  # 当前等级下单位时间经验最高
@@ -54,6 +63,7 @@ class SafetyConfig(BaseModel):
     click_offset_range: int = 5
     max_actions_per_round: int = 20
     run_mode: RunMode = RunMode.BACKGROUND
+    window_position: WindowPosition = WindowPosition.BOTTOM_LEFT  # 窗口位置
 
 
 class ScreenshotConfig(BaseModel):
@@ -93,6 +103,7 @@ class PlantingConfig(BaseModel):
 
 class AppConfig(BaseModel):
     window_title_keyword: str = "QQ经典农场"
+    window_select_rule: str = "auto"  # 'auto' 或 'index:N'
     features: FeaturesConfig = Field(default_factory=FeaturesConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     screenshot: ScreenshotConfig = Field(default_factory=ScreenshotConfig)

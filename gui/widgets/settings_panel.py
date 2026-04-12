@@ -1,5 +1,7 @@
 """设置面板 — 现代卡片式布局，实时生效"""
 import os
+import ctypes
+import pygetwindow as gw
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QCheckBox, QComboBox,
@@ -9,7 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QTime
 from PyQt6.QtCore import pyqtSignal, Qt
 
-from models.config import AppConfig, PlantMode, RunMode, SellMode
+from models.config import AppConfig, PlantMode, RunMode, SellMode, WindowPosition
 from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
 from gui.styles import Colors
 
@@ -801,6 +803,28 @@ class SettingsPanel(QWidget):
         self._window_keyword = QLineEdit()
         self._window_keyword.setPlaceholderText("QQ农场")
 
+        # 窗口选择下拉框
+        self._window_select = QComboBox()
+        self._window_select.setFixedWidth(280)
+        self._window_select_refresh = QPushButton('刷新')
+        self._window_select_refresh.setObjectName('windowSelectRefreshButton')
+        self._window_select_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._window_select_refresh.setFixedWidth(64)
+        self._window_select_refresh.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid {Colors.BORDER};
+                color: {Colors.TEXT};
+                border-radius: 6px;
+                font-size: 12px;
+                padding: 4px 8px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(0, 122, 255, 10);
+                border-color: {Colors.PRIMARY};
+            }}
+        """)
+
         self._game_shortcut = QLineEdit()
         self._game_shortcut.setPlaceholderText("选择 QQ 农场小程序快捷方式...")
         self._btn_browse = QPushButton("浏览...")
@@ -823,6 +847,16 @@ class SettingsPanel(QWidget):
         shortcut_row = QHBoxLayout()
         shortcut_row.addWidget(self._game_shortcut)
         shortcut_row.addWidget(self._btn_browse)
+
+        # 窗口选择行
+        window_select_row = QHBoxLayout()
+        window_select_row.addWidget(self._window_select)
+        window_select_row.addWidget(self._window_select_refresh)
+        window_select_row.addStretch()
+
+        self._window_select_tip = QLabel('自动模式按平台匹配；手动模式指定窗口索引（不保存句柄）。')
+        self._window_select_tip.setWordWrap(True)
+        self._window_select_tip.setStyleSheet(f'color: {Colors.TEXT_SECONDARY}; font-size: 11px; background: transparent;')
 
         self._farm_interval = QSpinBox()
         self._farm_interval.setRange(1, 99999)
@@ -876,6 +910,8 @@ class SettingsPanel(QWidget):
         interval_row.addStretch()
 
         misc_layout.addWidget(self._make_row("🔍", "窗口关键词", self._window_keyword))
+        misc_layout.addWidget(self._make_row("🎯", "选择窗口", window_select_row))
+        misc_layout.addWidget(self._make_row("", "", self._window_select_tip))
 
         self._run_mode_combo = QComboBox()
         self._run_mode_combo.addItem("前台模式（需要窗口置顶）", RunMode.FOREGROUND.value)
@@ -883,6 +919,17 @@ class SettingsPanel(QWidget):
         self._run_mode_combo.setFixedWidth(200)
 
         misc_layout.addWidget(self._make_row("🖥️", "运行模式", self._run_mode_combo))
+
+        # 窗口位置选择
+        self._window_position_combo = QComboBox()
+        self._window_position_combo.addItem("🔽 左下角", WindowPosition.BOTTOM_LEFT.value)
+        self._window_position_combo.addItem("🔼 左上角", WindowPosition.TOP_LEFT.value)
+        self._window_position_combo.addItem("🔽 右下角", WindowPosition.BOTTOM_RIGHT.value)
+        self._window_position_combo.addItem("🔼 右上角", WindowPosition.TOP_RIGHT.value)
+        self._window_position_combo.addItem("⊙ 居中", WindowPosition.CENTER.value)
+        self._window_position_combo.setFixedWidth(150)
+
+        misc_layout.addWidget(self._make_row("📍", "窗口位置", self._window_position_combo))
         misc_layout.addWidget(self._make_row("📁", "游戏路径", shortcut_row))
         misc_layout.addWidget(self._make_row("⏰", "检查间隔", interval_row))
 
@@ -966,6 +1013,7 @@ class SettingsPanel(QWidget):
         self._window_keyword.editingFinished.connect(self._auto_save)
         self._game_shortcut.editingFinished.connect(self._auto_save)
         self._run_mode_combo.currentIndexChanged.connect(self._auto_save)
+        self._window_position_combo.currentIndexChanged.connect(self._auto_save)
         self._farm_interval.valueChanged.connect(self._auto_save)
         self._friend_interval.valueChanged.connect(self._auto_save)
         for cb in self._toggle_grid._checkboxes.values():
@@ -976,51 +1024,60 @@ class SettingsPanel(QWidget):
         self._friend_widget.connect_changed(self._auto_save)
         self._silent_widget.connect_changed(self._auto_save)
         self._web_widget.connect_changed(self._auto_save)
+        # 窗口选择信号
+        self._window_select.currentIndexChanged.connect(self._auto_save)
+        self._window_select_refresh.clicked.connect(self._refresh_window_select)
 
     def _auto_save(self):
         if self._loading:
             return
-        c = self.config
-        c.planting.player_level = self._player_level.value()
-        c.planting.strategy = PlantMode(self._strategy_combo.currentData())
-        idx = self._crop_combo.currentIndex()
-        if 0 <= idx < len(self._crop_names):
-            c.planting.preferred_crop = self._crop_names[idx]
-        c.window_title_keyword = self._window_keyword.text().strip()
-        c.safety.run_mode = RunMode(self._run_mode_combo.currentData())
-        c.planting.game_shortcut_path = self._game_shortcut.text().strip()
-        c.schedule.farm_check_seconds = self._farm_interval.value()
-        c.schedule.friend_check_seconds = self._friend_interval.value()
-        c.features.auto_harvest = self._toggle_grid.get_checkbox("收获").isChecked()
-        c.features.auto_plant = self._toggle_grid.get_checkbox("播种").isChecked()
-        c.features.auto_fertilize = self._toggle_grid.get_checkbox("施肥").isChecked()
-        c.features.auto_buy_seed = self._toggle_grid.get_checkbox("买种").isChecked()
-        c.features.auto_water = self._toggle_grid.get_checkbox("浇水").isChecked()
-        c.features.auto_weed = self._toggle_grid.get_checkbox("除草").isChecked()
-        c.features.auto_bug = self._toggle_grid.get_checkbox("除虫").isChecked()
-        c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
-        c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
-        c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
-        # 好友操作新配置
-        c.features.friend.enable_steal = self._friend_widget.get_enable_steal()
-        c.features.friend.enable_weed = self._friend_widget.get_enable_weed()
-        c.features.friend.enable_water = self._friend_widget.get_enable_water()
-        c.features.friend.enable_bug = self._friend_widget.get_enable_bug()
-        c.features.friend.max_steal_per_round = self._friend_widget.get_max_steal()
-        # 出售策略
-        c.sell.mode = self._sell_widget.get_mode()
-        c.sell.sell_crops = self._sell_widget.get_sell_crops()
-        # 静默时段
-        c.silent_hours.enabled = self._silent_widget.get_enabled()
-        c.silent_hours.start_hour = self._silent_widget.get_start_hour()
-        c.silent_hours.start_minute = self._silent_widget.get_start_minute()
-        c.silent_hours.end_hour = self._silent_widget.get_end_hour()
-        c.silent_hours.end_minute = self._silent_widget.get_end_minute()
-        # Web 服务（地址/端口）
-        c.web.host = self._web_widget.get_host()
-        c.web.port = self._web_widget.get_port()
-        c.save()
-        self.config_changed.emit(c)
+        try:
+            self._loading = True  # 防止递归
+            c = self.config
+            c.planting.player_level = self._player_level.value()
+            c.planting.strategy = PlantMode(self._strategy_combo.currentData())
+            idx = self._crop_combo.currentIndex()
+            if 0 <= idx < len(self._crop_names):
+                c.planting.preferred_crop = self._crop_names[idx]
+            c.window_title_keyword = self._window_keyword.text().strip()
+            c.window_select_rule = str(self._window_select.currentData() or 'auto')
+            c.safety.run_mode = RunMode(self._run_mode_combo.currentData())
+            c.safety.window_position = WindowPosition(self._window_position_combo.currentData())
+            c.planting.game_shortcut_path = self._game_shortcut.text().strip()
+            c.schedule.farm_check_seconds = self._farm_interval.value()
+            c.schedule.friend_check_seconds = self._friend_interval.value()
+            c.features.auto_harvest = self._toggle_grid.get_checkbox("收获").isChecked()
+            c.features.auto_plant = self._toggle_grid.get_checkbox("播种").isChecked()
+            c.features.auto_fertilize = self._toggle_grid.get_checkbox("施肥").isChecked()
+            c.features.auto_buy_seed = self._toggle_grid.get_checkbox("买种").isChecked()
+            c.features.auto_water = self._toggle_grid.get_checkbox("浇水").isChecked()
+            c.features.auto_weed = self._toggle_grid.get_checkbox("除草").isChecked()
+            c.features.auto_bug = self._toggle_grid.get_checkbox("除虫").isChecked()
+            c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
+            c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
+            c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
+            # 好友操作新配置
+            c.features.friend.enable_steal = self._friend_widget.get_enable_steal()
+            c.features.friend.enable_weed = self._friend_widget.get_enable_weed()
+            c.features.friend.enable_water = self._friend_widget.get_enable_water()
+            c.features.friend.enable_bug = self._friend_widget.get_enable_bug()
+            c.features.friend.max_steal_per_round = self._friend_widget.get_max_steal()
+            # 出售策略
+            c.sell.mode = self._sell_widget.get_mode()
+            c.sell.sell_crops = self._sell_widget.get_sell_crops()
+            # 静默时段
+            c.silent_hours.enabled = self._silent_widget.get_enabled()
+            c.silent_hours.start_hour = self._silent_widget.get_start_hour()
+            c.silent_hours.start_minute = self._silent_widget.get_start_minute()
+            c.silent_hours.end_hour = self._silent_widget.get_end_hour()
+            c.silent_hours.end_minute = self._silent_widget.get_end_minute()
+            # Web 服务（地址/端口）
+            c.web.host = self._web_widget.get_host()
+            c.web.port = self._web_widget.get_port()
+            c.save()
+            self.config_changed.emit(c)
+        finally:
+            self._loading = False
 
     def _on_level_changed(self, level: int):
         self._loading = True
@@ -1066,8 +1123,23 @@ class SettingsPanel(QWidget):
                 self._crop_names.index(c.planting.preferred_crop))
         self._on_level_changed(c.planting.player_level)
         self._window_keyword.setText(c.window_title_keyword)
+        # 加载窗口选择
+        self._refresh_window_select(c.window_select_rule)
+        
+        # 加载运行模式（阻止信号防止递归）
+        self._run_mode_combo.blockSignals(True)
         run_mode_idx = 0 if c.safety.run_mode == RunMode.FOREGROUND else 1
         self._run_mode_combo.setCurrentIndex(run_mode_idx)
+        self._run_mode_combo.blockSignals(False)
+        
+        # 加载窗口位置（阻止信号防止递归）
+        self._window_position_combo.blockSignals(True)
+        current_pos = c.safety.window_position.value
+        idx = self._window_position_combo.findData(current_pos)
+        if idx >= 0:
+            self._window_position_combo.setCurrentIndex(idx)
+        self._window_position_combo.blockSignals(False)
+        
         self._game_shortcut.setText(c.planting.game_shortcut_path)
         self._farm_interval.setValue(c.schedule.farm_check_seconds)
         self._friend_interval.setValue(c.schedule.friend_check_seconds)
@@ -1098,3 +1170,155 @@ class SettingsPanel(QWidget):
         self._web_widget.set_enabled_state(c.web.enabled)
         self._web_widget.set_host(c.web.host)
         self._web_widget.set_port(c.web.port)
+
+    # ── 窗口选择相关方法 ─────────────────────────────────────
+
+    def _refresh_window_select(self, preferred_rule: str | None = None):
+        """刷新窗口候选列表"""
+        keyword = self._window_keyword.text().strip() or 'QQ农场'
+        windows = self._list_windows(keyword)
+
+        # 阻止信号触发
+        self._window_select.blockSignals(True)
+        self._window_select.clear()
+
+        # 第一项永远是"自动"
+        self._window_select.addItem('自动（按平台优先）', 'auto')
+
+        # 添加所有匹配的窗口
+        for idx, info in enumerate(windows):
+            label = self._format_window_option(idx, info)
+            self._window_select.addItem(label, f'index:{idx}')
+
+        # 恢复之前选中的规则
+        self._set_window_select_rule(preferred_rule or self.config.window_select_rule)
+        self._window_select.blockSignals(False)
+
+        # 彻底禁用下拉列表 tooltip
+        self._disable_combo_tooltip(self._window_select)
+
+    @staticmethod
+    def _disable_combo_tooltip(combo: QComboBox) -> None:
+        """完全禁用 QComboBox 下拉框的系统原生 tooltip"""
+        combo.setToolTip('')
+        combo.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
+        view = combo.view()
+        if view:
+            view.viewport().setToolTip('')
+            view.viewport().setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
+            view.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
+
+    def _set_window_select_rule(self, select_rule: str):
+        """按规则值设置下拉当前项，找不到则回退自动"""
+        target = str(select_rule or 'auto').strip().lower() or 'auto'
+        found_index = 0  # 默认选中"自动"
+        for i in range(self._window_select.count()):
+            if str(self._window_select.itemData(i) or '').strip().lower() == target:
+                found_index = i
+                break
+        self._window_select.setCurrentIndex(found_index)
+
+    @staticmethod
+    def _format_window_option(index: int, info: dict) -> str:
+        """格式化窗口下拉显示文案"""
+        title = str(info.get('title', '')).replace('\n', ' ').strip()
+        if len(title) > 20:
+            title = f'{title[:20]}...'
+        process_name = str(info.get('process_name', '') or '').strip().lower()
+        if process_name == 'qq.exe' or process_name.startswith('qq'):
+            platform = 'QQ'
+        elif process_name.startswith('wechat') or 'weixin' in process_name:
+            platform = '微信'
+        else:
+            # 通过标题推断
+            title_lower = str(info.get('title', '')).lower()
+            if 'qq' in title_lower:
+                platform = 'QQ'
+            elif 'wechat' in title_lower or '微信' in title_lower:
+                platform = '微信'
+            else:
+                platform = '未知'
+        hwnd_hex = f"0x{int(info.get('hwnd', 0)):X}"
+        return (
+            f'#{index + 1} [{platform}] {title} | '
+            f'{int(info.get("width", 0))}x{int(info.get("height", 0))} | '
+            f'({int(info.get("left", 0))},{int(info.get("top", 0))}) {hwnd_hex}'
+        )
+
+    @staticmethod
+    def _list_windows(title_keyword: str) -> list[dict]:
+        """按关键词列出候选窗口"""
+        try:
+            all_windows = gw.getAllWindows()
+            matched: list[dict] = []
+            seen_hwnd: set[int] = set()
+
+            for win in all_windows:
+                title = str(getattr(win, 'title', '') or '')
+                if not title.strip():
+                    continue
+
+                # 关键词匹配
+                keyword = title_keyword.lower()
+                title_lower = title.lower()
+                if keyword not in title_lower:
+                    # 回退：包含"农场"且不是"助手"
+                    if '农场' not in title_lower or '助手' in title_lower:
+                        continue
+
+                hwnd = int(getattr(win, '_hWnd', 0) or 0)
+                if hwnd <= 0 or hwnd in seen_hwnd:
+                    continue
+
+                width = int(getattr(win, 'width', 0) or 0)
+                height = int(getattr(win, 'height', 0) or 0)
+                left = int(getattr(win, 'left', 0) or 0)
+                top = int(getattr(win, 'top', 0) or 0)
+
+                # 严格过滤：过小、在屏幕外的窗口都不要
+                if width < 300 or height < 300:
+                    continue
+                if left < -5000 or top < -5000:
+                    continue
+
+                # 获取进程名
+                process_name = ''
+                try:
+                    pid = ctypes.c_ulong()
+                    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value:
+                        try:
+                            import psutil
+                            proc = psutil.Process(pid.value)
+                            process_name = proc.name()
+                        except ImportError:
+                            # psutil 未安装时通过标题推断
+                            if 'qq' in title_lower:
+                                process_name = 'QQ.exe'
+                            elif 'wechat' in title_lower or '微信' in title:
+                                process_name = 'WeChat.exe'
+                except Exception:
+                    pass
+
+                # 额外过滤：开发者工具/VSCode 相关窗口
+                if 'megumiss' in title_lower or 'devtools' in title_lower or 'chrome-devtools' in title_lower:
+                    continue
+
+                matched.append({
+                    'hwnd': hwnd,
+                    'title': title,
+                    'left': left,
+                    'top': top,
+                    'width': width,
+                    'height': height,
+                    'process_name': process_name,
+                })
+                seen_hwnd.add(hwnd)
+
+            # 按位置排序，保证顺序稳定
+            matched.sort(key=lambda item: (int(item['left']), int(item['top']), int(item['hwnd'])))
+            return matched
+        except Exception as e:
+            from loguru import logger
+            logger.error(f'列出窗口失败: {e}')
+            return []

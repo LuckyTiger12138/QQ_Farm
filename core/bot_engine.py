@@ -14,6 +14,7 @@
   P3  资源:     expand    — 扩建土地 + 领取任务
   P4  社交:     friend    — 好友巡查/帮忙/偷菜/同意好友
 """
+import os
 import sys
 import time
 import cv2
@@ -108,9 +109,13 @@ class BotEngine(QObject):
     _request_farm_check = pyqtSignal()
     config_updated = pyqtSignal(object)  # 配置更新信号，通知 GUI 刷新
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, instance_id: str = 'default'):
         super().__init__()
         self.config = config
+        self.instance_id = instance_id  # 实例 ID，用于日志和截图分离
+        
+        # 老板键状态
+        self._game_hidden = False  # 游戏窗口是否已隐藏
 
         # [1] 窗口控制层
         self.window_manager = WindowManager()
@@ -219,6 +224,78 @@ class BotEngine(QObject):
                 return best[0]
         return planting.preferred_crop
 
+    def _setup_instance_dirs(self):
+        """初始化实例独立的目录（日志和截图）"""
+        if self.instance_id == 'default':
+            return  # 默认实例使用现有目录
+
+        # 创建实例独立的截图目录
+        screenshots_dir = f"screenshots/{self.instance_id}"
+        os.makedirs(screenshots_dir, exist_ok=True)
+
+        # 更新 screen_capture 的保存目录
+        if hasattr(self.screen_capture, '_save_dir'):
+            self.screen_capture._save_dir = screenshots_dir
+
+        logger.info(f"实例 {self.instance_id} 目录已初始化: screenshots/{self.instance_id}/")
+
+    def toggle_game_window(self) -> dict:
+        """老板键：切换游戏窗口显示/隐藏（异步执行，不阻塞 GUI）
+        
+        隐藏方式：将窗口移出屏幕（坐标设为负值）
+        - 屏幕上看不见窗口
+        - Bot 可以继续截图（窗口技术上仍然可见）
+        - 任务栏仍然显示图标（Windows 限制）
+        
+        Returns:
+            dict: {success: bool, message: str, hidden: bool}
+        """
+        import threading
+        
+        result = {"success": False, "message": "", "hidden": self._game_hidden}
+        
+        def _do_toggle():
+            """在后台线程执行窗口切换"""
+            try:
+                if self._game_hidden:
+                    # 恢复窗口
+                    success = self.window_manager.show_game_window()
+                    self._game_hidden = False
+                    if success:
+                        msg = "✓ 游戏窗口已恢复（老板键）"
+                        logger.info(msg)
+                    else:
+                        msg = "✗ 游戏窗口恢复失败"
+                        logger.warning(msg)
+                else:
+                    # 隐藏窗口（传入配置的关键词，支持自动查找）
+                    keyword = self.config.window_title_keyword or "QQ 农场"
+                    success = self.window_manager.hide_game_window(keyword, auto_find=True)
+                    self._game_hidden = True
+                    if success:
+                        msg = "🔒 游戏窗口已完美隐藏（老板键）- 任务栏图标已隐藏 + Bot 继续工作"
+                        logger.info(msg)
+                    else:
+                        msg = "✗ 游戏窗口隐藏失败（请先打开游戏）"
+                        logger.warning(msg)
+                
+                result["success"] = success
+                result["message"] = msg
+                result["hidden"] = self._game_hidden
+                
+                # 发送日志消息到 GUI（必须在主线程）
+                self.log_message.emit(msg)
+            except Exception as e:
+                logger.error(f"老板键操作异常: {e}")
+                result["message"] = f"✗ 操作异常: {e}"
+                self.log_message.emit(result["message"])
+        
+        # 启动后台线程执行，不阻塞 GUI 主线程
+        thread = threading.Thread(target=_do_toggle, daemon=True)
+        thread.start()
+        
+        return result
+
     def _clear_screen(self, rect: tuple):
         """点击窗口顶部天空区域，关闭残留弹窗/菜单/土地信息
 
@@ -243,13 +320,21 @@ class BotEngine(QObject):
         self._planted = False
         self._fertilized = False
 
+        # 初始化实例独立的目录（日志和截图）
+        self._setup_instance_dirs()
+
         self.cv_detector.load_templates()
         tpl_count = sum(len(v) for v in self.cv_detector._templates.values())
         if tpl_count == 0:
             self.log_message.emit("未找到模板图片，请先运行模板采集工具")
             return False
 
-        window = self.window_manager.find_window(self.config.window_title_keyword, auto_launch=True, shortcut_path=self.config.planting.game_shortcut_path)
+        window = self.window_manager.find_window(
+            self.config.window_title_keyword, 
+            auto_launch=True, 
+            shortcut_path=self.config.planting.game_shortcut_path,
+            select_rule=self.config.window_select_rule
+        )
         if not window:
             self.log_message.emit("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场")
             return False
@@ -258,7 +343,8 @@ class BotEngine(QObject):
         if w > 0 and h > 0:
             # 等待游戏自适应完成
             time.sleep(2)
-            self.window_manager.resize_window(w, h)
+            window_position = self.config.safety.window_position
+            self.window_manager.resize_window(w, h, window_position)
             time.sleep(0.5)
             # 使用缓存的窗口信息，不重新搜索
             window = self.window_manager._cached_window
@@ -572,7 +658,8 @@ class BotEngine(QObject):
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
             auto_launch=False,
-            shortcut_path=""
+            shortcut_path="",
+            select_rule=self.config.window_select_rule
         )
         return window is not None
 
@@ -583,7 +670,8 @@ class BotEngine(QObject):
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
             auto_launch=True,
-            shortcut_path=self.config.planting.game_shortcut_path
+            shortcut_path=self.config.planting.game_shortcut_path,
+            select_rule=self.config.window_select_rule
         )
         if not window:
             logger.error("窗口监控：自动重启游戏失败")
@@ -593,7 +681,8 @@ class BotEngine(QObject):
         w, h = self.config.planting.window_width, self.config.planting.window_height
         if w > 0 and h > 0:
             time.sleep(1)
-            self.window_manager.resize_window(w, h)
+            window_position = self.config.safety.window_position
+            self.window_manager.resize_window(w, h, window_position)
             time.sleep(0.5)
             window = self.window_manager._cached_window
         if window:
@@ -650,23 +739,27 @@ class BotEngine(QObject):
             window = self.window_manager.refresh_window_info(
                 self.config.window_title_keyword,
                 auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path
+                shortcut_path=self.config.planting.game_shortcut_path,
             )
         else:
             window = self.window_manager.find_window(
                 self.config.window_title_keyword,
                 auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path
+                shortcut_path=self.config.planting.game_shortcut_path,
+                select_rule=self.config.window_select_rule
             )
         if not window:
             window = self.window_manager.refresh_window_info(
                 self.config.window_title_keyword,
                 auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path
+                shortcut_path=self.config.planting.game_shortcut_path,
             )
         else:
             # 刷新缓存窗口的最新位置
-            self.window_manager.find_window(self.config.window_title_keyword)
+            self.window_manager.find_window(
+                self.config.window_title_keyword,
+                select_rule=self.config.window_select_rule
+            )
             window = self.window_manager._cached_window
 
         if not window:
@@ -883,7 +976,8 @@ class BotEngine(QObject):
                 window = self.window_manager.find_window(
                     self.config.window_title_keyword,
                     auto_launch=True,
-                    shortcut_path=self.config.planting.game_shortcut_path
+                    shortcut_path=self.config.planting.game_shortcut_path,
+                    select_rule=self.config.window_select_rule
                 )
                 if not window:
                     logger.error("自动重启游戏失败")
@@ -893,7 +987,8 @@ class BotEngine(QObject):
                 # 重启成功，更新窗口信息和 action_executor
                 self.window_manager.resize_window(
                     self.config.planting.window_width,
-                    self.config.planting.window_height
+                    self.config.planting.window_height,
+                    self.config.safety.window_position
                 )
                 time.sleep(0.5)
                 window = self.window_manager._cached_window
@@ -1015,7 +1110,8 @@ class BotEngine(QObject):
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
             auto_launch=True,
-            shortcut_path=self.config.planting.game_shortcut_path
+            shortcut_path=self.config.planting.game_shortcut_path,
+            select_rule=self.config.window_select_rule
         )
         if not window:
             logger.error("异地登录重启游戏失败")
@@ -1024,7 +1120,8 @@ class BotEngine(QObject):
             
         self.window_manager.resize_window(
             self.config.planting.window_width,
-            self.config.planting.window_height
+            self.config.planting.window_height,
+            self.config.safety.window_position
         )
         time.sleep(0.5)
         window = self.window_manager._cached_window

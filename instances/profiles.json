@@ -1,0 +1,13 @@
+{
+  "active_instance_id": "2",
+  "instances": [
+    {
+      "id": "default",
+      "name": "default"
+    },
+    {
+      "id": "2",
+      "name": "2"
+    }
+  ]
+}
