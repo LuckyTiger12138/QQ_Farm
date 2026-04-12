@@ -28,6 +28,19 @@ class WindowManager:
         self._cached_window: WindowInfo | None = None
         self._pinned_hwnd: int | None = None  # 锁定的窗口句柄，防止多实例串台
 
+    def launch_game(self, shortcut_path: str) -> bool:
+        """通过快捷方式启动游戏"""
+        if not shortcut_path or not os.path.exists(shortcut_path):
+            logger.warning(f"快捷方式路径无效：{shortcut_path}")
+            return False
+        try:
+            os.startfile(shortcut_path)
+            logger.info(f"已启动游戏快捷方式：{shortcut_path}")
+            return True
+        except Exception as e:
+            logger.error(f"启动游戏失败：{e}")
+            return False
+
     def _verify_and_pin_window(self, hwnd: int, title_keyword: str) -> WindowInfo | None:
         """验证已锁定的句柄是否依然有效"""
         try:
