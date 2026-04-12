@@ -532,9 +532,10 @@ class MainWindow(QMainWindow):
 
     def _get_or_create_engine(self, session: InstanceSession) -> BotEngine:
         """获取或创建实例的 BotEngine"""
-        if session.instance_id not in self._engines:
-            engine = BotEngine(session.config, instance_id=session.instance_id)
-            self._engines[session.instance_id] = engine
+        instance_id = session.instance_id
+        if instance_id not in self._engines:
+            engine = BotEngine(session.config, instance_id=instance_id)
+            self._engines[instance_id] = engine
             # 连接信号（截图信号使用 instance_id 过滤，只显示当前选中实例）
             engine.log_message.connect(self._log_panel.append_log)
             engine.screenshot_updated.connect(lambda img, iid=instance_id: self._on_screenshot_updated(iid, img))
@@ -542,7 +543,7 @@ class MainWindow(QMainWindow):
             engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
             engine.stats_updated.connect(self._status_panel.update_stats)
             engine.config_updated.connect(self._on_config_updated)
-        return self._engines[session.instance_id]
+        return self._engines[instance_id]
 
     def _on_create_instance(self):
         """新增实例"""
