@@ -1,7 +1,8 @@
 """实例侧边栏 — 参考 qq-farm-copilot 设计
 
-默认只显示实例列表，点击"管理"展开操作面板。
-简洁干净，突出实例切换功能。
+默认只显示实例列表，右键菜单进行操作。
+- 空白处右键：新增
+- 实例右键：克隆、重命名、删除
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QLabel,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QHBoxLayout,
@@ -22,9 +24,12 @@ from gui.styles import Colors
 
 
 class InstanceItem(QFrame):
-    """单个实例项：状态指示灯 + 名称（可点击切换）"""
+    """单个实例项：状态指示灯 + 名称（可点击切换，右键菜单）"""
 
-    selected = pyqtSignal(str)  # instance_id
+    selected = pyqtSignal(str)
+    clone_requested = pyqtSignal(str)
+    rename_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, instance_id: str, name: str, state: str = 'idle', parent=None):
         super().__init__(parent)
@@ -40,7 +45,7 @@ class InstanceItem(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(8)
 
         # 状态指示灯
@@ -98,10 +103,55 @@ class InstanceItem(QFrame):
         """)
 
     def mousePressEvent(self, event):
-        """点击触发选择"""
+        """左键选择，右键菜单"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.selected.emit(self._instance_id)
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event.globalPosition().toPoint())
         super().mousePressEvent(event)
+
+    def _show_context_menu(self, pos):
+        """显示实例右键菜单"""
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 12px;
+                border-radius: 4px;
+                font-size: 13px;
+            }}
+            QMenu::item:hover {{
+                background-color: rgba(0, 122, 255, 10);
+                color: {Colors.PRIMARY};
+            }}
+            QMenu::item:disabled {{
+                color: {Colors.TEXT_DIM};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {Colors.BORDER};
+                margin: 4px 8px;
+            }}
+        """)
+        
+        clone_act = menu.addAction('克隆')
+        clone_act.triggered.connect(lambda: self.clone_requested.emit(self._instance_id))
+        
+        rename_act = menu.addAction('重命名')
+        rename_act.triggered.connect(lambda: self.rename_requested.emit(self._instance_id))
+        
+        menu.addSeparator()
+        
+        delete_act = menu.addAction('删除')
+        delete_act.setStyleSheet(f"color: {Colors.DANGER};")
+        delete_act.triggered.connect(lambda: self.delete_requested.emit(self._instance_id))
+        
+        menu.exec(pos)
 
     def _name_display(self) -> str:
         name = str(self._name_display_text if hasattr(self, '_name_display_text') else self._instance_id)
@@ -121,7 +171,7 @@ class InstanceItem(QFrame):
 
 
 class InstanceSidebar(QWidget):
-    """实例侧边栏：默认显示实例列表，点击"管理"展开操作按钮"""
+    """实例侧边栏：右键菜单操作"""
 
     instance_selected = pyqtSignal(str)
     instance_start_requested = pyqtSignal(str)
@@ -137,7 +187,6 @@ class InstanceSidebar(QWidget):
         super().__init__(parent)
         self._rows: dict[str, InstanceItem] = {}
         self._active_instance_id: str = ''
-        self._management_mode = False  # 是否处于管理模式
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -153,38 +202,6 @@ class InstanceSidebar(QWidget):
                 font-weight: 700;
                 font-size: 14px;
                 padding: 12px 10px 8px 10px;
-            }}
-            QPushButton#manageBtn {{
-                background: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                color: {Colors.TEXT_SECONDARY};
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton#manageBtn:hover {{
-                background: rgba(0, 122, 255, 10);
-                color: {Colors.PRIMARY};
-                border-color: {Colors.PRIMARY};
-            }}
-            QPushButton#manageBtn:checked {{
-                background: {Colors.PRIMARY};
-                color: white;
-                border-color: {Colors.PRIMARY};
-            }}
-            QPushButton#actionBtn {{
-                background: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                color: {Colors.TEXT};
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 13px;
-            }}
-            QPushButton#actionBtn:hover {{
-                background: rgba(0, 122, 255, 10);
-                border-color: {Colors.PRIMARY};
-                color: {Colors.PRIMARY};
             }}
             QPushButton#startAllBtn {{
                 background: {Colors.SUCCESS};
@@ -220,28 +237,18 @@ class InstanceSidebar(QWidget):
         root.setContentsMargins(8, 12, 8, 8)
         root.setSpacing(8)
 
-        # 标题行：实例标题 + 管理按钮
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
-        
+        # 标题
         self._title = QLabel('实例')
         self._title.setObjectName('instanceTitle')
-        title_row.addWidget(self._title)
-        
-        self._btn_manage = QPushButton('管理')
-        self._btn_manage.setObjectName('manageBtn')
-        self._btn_manage.setCheckable(True)
-        self._btn_manage.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_manage.clicked.connect(self._toggle_management)
-        title_row.addWidget(self._btn_manage)
-        
-        root.addLayout(title_row)
+        root.addWidget(self._title)
 
         # 实例列表
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._scroll.customContextMenuRequested.connect(self._show_global_menu)
 
         self._list_container = QWidget()
         self._list_layout = QVBoxLayout(self._list_container)
@@ -251,40 +258,6 @@ class InstanceSidebar(QWidget):
 
         self._scroll.setWidget(self._list_container)
         root.addWidget(self._scroll, 1)
-
-        # 管理面板（默认隐藏）
-        self._manage_panel = QFrame()
-        self._manage_panel.setObjectName('managePanel')
-        self._manage_panel.setStyleSheet(f"""
-            QFrame#managePanel {{
-                background: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-            }}
-        """)
-        manage_layout = QVBoxLayout(self._manage_panel)
-        manage_layout.setContentsMargins(6, 8, 6, 8)
-        manage_layout.setSpacing(6)
-
-        # 管理操作按钮
-        self._btn_create = QPushButton('新增')
-        self._btn_delete = QPushButton('删除')
-        self._btn_clone = QPushButton('克隆')
-        self._btn_rename = QPushButton('重命名')
-
-        for btn in (self._btn_create, self._btn_delete, self._btn_clone, self._btn_rename):
-            btn.setObjectName('actionBtn')
-            btn.setFixedHeight(32)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            manage_layout.addWidget(btn)
-
-        self._btn_create.clicked.connect(self.create_requested.emit)
-        self._btn_delete.clicked.connect(self._emit_delete)
-        self._btn_clone.clicked.connect(self._emit_clone)
-        self._btn_rename.clicked.connect(self._emit_rename)
-
-        self._manage_panel.setVisible(False)
-        root.addWidget(self._manage_panel)
 
         # 全部启动/全部停止按钮
         batch_row = QHBoxLayout()
@@ -304,22 +277,31 @@ class InstanceSidebar(QWidget):
         batch_row.addWidget(self._btn_stop_all)
         root.addLayout(batch_row)
 
-    def _toggle_management(self):
-        """切换管理模式"""
-        self._management_mode = self._btn_manage.isChecked()
-        self._manage_panel.setVisible(self._management_mode)
-
-    def _emit_delete(self) -> None:
-        if self._active_instance_id:
-            self.delete_requested.emit(self._active_instance_id)
-
-    def _emit_clone(self) -> None:
-        if self._active_instance_id:
-            self.clone_requested.emit(self._active_instance_id)
-
-    def _emit_rename(self) -> None:
-        if self._active_instance_id:
-            self.rename_requested.emit(self._active_instance_id)
+    def _show_global_menu(self, pos):
+        """空白处右键菜单"""
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.CARD_BG};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 12px;
+                border-radius: 4px;
+                font-size: 13px;
+            }}
+            QMenu::item:hover {{
+                background-color: rgba(0, 122, 255, 10);
+                color: {Colors.PRIMARY};
+            }}
+        """)
+        
+        add_act = menu.addAction('新增')
+        add_act.triggered.connect(self.create_requested.emit)
+        
+        menu.exec(self._scroll.mapToGlobal(pos))
 
     def set_instances(self, instances: list[dict[str, Any]]) -> None:
         """刷新实例列表"""
@@ -335,6 +317,9 @@ class InstanceSidebar(QWidget):
                 state = str(item.get('state') or 'idle')
                 row = InstanceItem(iid, name, state)
                 row.selected.connect(self._on_row_selected)
+                row.clone_requested.connect(self.clone_requested.emit)
+                row.rename_requested.connect(self.rename_requested.emit)
+                row.delete_requested.connect(self.delete_requested.emit)
                 self._rows[iid] = row
                 self._list_layout.insertWidget(self._list_layout.count() - 1, row)
 
