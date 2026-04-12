@@ -117,22 +117,23 @@ class InstanceItem(QFrame):
             QMenu {{
                 background-color: {Colors.CARD_BG};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 4px;
+                border-radius: 10px;
+                padding: 6px;
             }}
             QMenu::item {{
-                padding: 6px 24px 6px 12px;
-                border-radius: 4px;
+                padding: 8px 28px 8px 16px;
+                border-radius: 6px;
                 font-size: 13px;
+                margin: 2px 0px;
             }}
             QMenu::item:hover {{
-                background-color: rgba(0, 122, 255, 10);
+                background-color: rgba(0, 122, 255, 12);
                 color: {Colors.PRIMARY};
             }}
             QMenu::separator {{
                 height: 1px;
                 background: {Colors.BORDER};
-                margin: 4px 8px;
+                margin: 6px 10px;
             }}
         """)
         
@@ -280,16 +281,17 @@ class InstanceSidebar(QWidget):
             QMenu {{
                 background-color: {Colors.CARD_BG};
                 border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 4px;
+                border-radius: 10px;
+                padding: 6px;
             }}
             QMenu::item {{
-                padding: 6px 24px 6px 12px;
-                border-radius: 4px;
+                padding: 8px 28px 8px 16px;
+                border-radius: 6px;
                 font-size: 13px;
+                margin: 2px 0px;
             }}
             QMenu::item:hover {{
-                background-color: rgba(0, 122, 255, 10);
+                background-color: rgba(0, 122, 255, 12);
                 color: {Colors.PRIMARY};
             }}
         """)

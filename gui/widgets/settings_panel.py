@@ -131,8 +131,8 @@ class SilentHoursWidget(QFrame):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         # 启用开关
         self._cb_enabled = QCheckBox("启用静默时段")
@@ -141,12 +141,12 @@ class SilentHoursWidget(QFrame):
                 color: {Colors.TEXT};
                 font-size: 13px;
                 font-weight: 600;
-                spacing: 6px;
+                spacing: 8px;
             }}
             QCheckBox::indicator {{
                 width: 18px; height: 18px;
                 border: 1.5px solid rgba(0, 0, 0, 30);
-                border-radius: 4px;
+                border-radius: 5px;
                 background: {Colors.INPUT_BG};
             }}
             QCheckBox::indicator:checked {{
@@ -159,45 +159,93 @@ class SilentHoursWidget(QFrame):
 
         # 时间行
         time_row = QHBoxLayout()
-        time_row.setSpacing(8)
+        time_row.setSpacing(10)
 
         start_label = QLabel("开始")
-        start_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        start_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none;")
         time_row.addWidget(start_label)
 
         from PyQt6.QtCore import QTime
         self._start_time = QTimeEdit()
         self._start_time.setDisplayFormat("HH:mm")
         self._start_time.setTime(QTime(2, 0))
-        self._start_time.setFixedWidth(90)
+        self._start_time.setFixedWidth(95)
         self._start_time.setStyleSheet(f"""
             QTimeEdit {{
                 background-color: {Colors.INPUT_BG};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
-                padding: 5px 10px;
+                padding: 6px 10px;
                 color: {Colors.TEXT};
-                min-height: 22px;
+                min-height: 28px;
+            }}
+            QTimeEdit:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QTimeEdit::up-button, QTimeEdit::down-button {{
+                subcontrol-position: right;
+                width: 18px;
+                height: 13px;
+                border: none;
+                background: transparent;
+            }}
+            QTimeEdit::up-button:hover, QTimeEdit::down-button:hover {{
+                background: rgba(0, 122, 255, 15);
+                border-radius: 4px;
+            }}
+            QTimeEdit::up-arrow {{
+                image: url(gui/icons/arrow_up.svg);
+                width: 8px;
+                height: 6px;
+            }}
+            QTimeEdit::down-arrow {{
+                image: url(gui/icons/arrow_down.svg);
+                width: 8px;
+                height: 6px;
             }}
         """)
         time_row.addWidget(self._start_time)
 
         end_label = QLabel("结束")
-        end_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
+        end_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none;")
         time_row.addWidget(end_label)
 
         self._end_time = QTimeEdit()
         self._end_time.setDisplayFormat("HH:mm")
         self._end_time.setTime(QTime(6, 0))
-        self._end_time.setFixedWidth(90)
+        self._end_time.setFixedWidth(95)
         self._end_time.setStyleSheet(f"""
             QTimeEdit {{
                 background-color: {Colors.INPUT_BG};
                 border: 1px solid {Colors.BORDER};
                 border-radius: 8px;
-                padding: 5px 10px;
+                padding: 6px 10px;
                 color: {Colors.TEXT};
-                min-height: 22px;
+                min-height: 28px;
+            }}
+            QTimeEdit:focus {{
+                border-color: {Colors.BORDER_FOCUS};
+            }}
+            QTimeEdit::up-button, QTimeEdit::down-button {{
+                subcontrol-position: right;
+                width: 18px;
+                height: 13px;
+                border: none;
+                background: transparent;
+            }}
+            QTimeEdit::up-button:hover, QTimeEdit::down-button:hover {{
+                background: rgba(0, 122, 255, 15);
+                border-radius: 4px;
+            }}
+            QTimeEdit::up-arrow {{
+                image: url(gui/icons/arrow_up.svg);
+                width: 8px;
+                height: 6px;
+            }}
+            QTimeEdit::down-arrow {{
+                image: url(gui/icons/arrow_down.svg);
+                width: 8px;
+                height: 6px;
             }}
         """)
         time_row.addWidget(self._end_time)
