@@ -210,6 +210,44 @@ QToolTip {{
     padding: 6px 10px;
     font-size: 12px;
 }}
+
+QComboBox QAbstractItemView {{
+    background-color: {Colors.CARD_BG};
+    color: {Colors.TEXT};
+    selection-background-color: rgba(0, 122, 255, 12);
+    selection-color: {Colors.TEXT};
+    border: none;
+    outline: none;
+    padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item {{
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin: 2px;
+    background-color: {Colors.CARD_BG};
+    color: {Colors.TEXT};
+}}
+
+QComboBox QAbstractItemView::item:selected {{
+    background-color: rgba(0, 122, 255, 12);
+    color: {Colors.TEXT};
+}}
+
+QComboBox QAbstractItemView::item:hover {{
+    background-color: rgba(0, 122, 255, 8);
+}}
+
+/* 修复下拉提示框黑色背景问题 */
+QToolTip {{
+    background-color: {Colors.CARD_BG};
+    color: {Colors.TEXT};
+    border: 1px solid {Colors.BORDER};
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+}}
 """
 
 

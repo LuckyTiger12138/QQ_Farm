@@ -13,6 +13,7 @@ from models.config import AppConfig
 from gui.main_window import MainWindow
 from utils.logger import setup_logger
 from loguru import logger
+from core.instance_manager import InstanceManager
 
 
 _global_web_server = None  # 全局 Web 服务实例
@@ -34,8 +35,20 @@ def main():
 
     # 切换工作目录到打包资源目录，确保 templates/ 相对路径正确
     os.chdir(_internal)
-    config_path = os.path.join(app_dir, "config.json")
-    config = AppConfig.load(config_path)
+
+    # 初始化实例管理器
+    instance_manager = InstanceManager()
+    instance_manager.load()
+    active_session = instance_manager.get_active()
+    
+    # 如果没有活动实例，使用默认配置路径（向后兼容）
+    if active_session:
+        config = active_session.config
+        logger.info(f"加载实例配置: {active_session.instance_id} ({active_session.name})")
+    else:
+        config_path = os.path.join(app_dir, "config.json")
+        config = AppConfig.load(config_path)
+        logger.info("使用默认配置")
 
     # 启动GUI — 禁用系统暗色主题检测，强制使用 Fusion 浅色
     QApplication.setDesktopSettingsAware(False)
@@ -101,14 +114,15 @@ def main():
     """
     app.setStyleSheet(app.styleSheet() + _dialog_css)
 
-    window = MainWindow(config)
+    window = MainWindow(config, instance_manager=instance_manager)
     window.show()
 
     # 注册全局热键 (F9 暂停/恢复, F10 停止)
     window.register_hotkeys()
 
-    # 启动 Web 服务（如果配置启用）
-    _start_web_server(config, window)
+    # Web 服务默认不启动，需用户手动启动
+    if config.web.enabled:
+        logger.info("Web 服务配置已启用，但需手动启动（GUI 设置面板或 /web start 命令）")
 
     ret = app.exec()
 

@@ -62,12 +62,15 @@ class ActionExecutor:
         try:
             # 获取客户区位置 (0, 0)
             point = ctypes.wintypes.POINT(0, 0)
+            # 使用超时机制，避免窗口在屏幕外时函数挂起
             ok = user32.ClientToScreen(ctypes.wintypes.HWND(self._hwnd), ctypes.byref(point))
             if ok:
                 # 客户区相对于窗口左上角的偏移
                 self._client_offset_x = point.x - self._window_left
                 self._client_offset_y = point.y - self._window_top
                 logger.debug(f"客户区偏移: ({self._client_offset_x}, {self._client_offset_y})")
+            else:
+                logger.warning("获取客户区偏移失败（ClientToScreen 返回 False）")
         except Exception as e:
             logger.warning(f"获取客户区偏移失败: {e}")
 
