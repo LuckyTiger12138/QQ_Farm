@@ -685,7 +685,7 @@ class SettingsPanel(QWidget):
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         self.config = config
-        self._loading = True
+        self._loading = 0  # 引用计数，支持嵌套保护
         self._init_ui()
         self._load_config()
         self._connect_auto_save()
@@ -1029,10 +1029,15 @@ class SettingsPanel(QWidget):
         self._window_select_refresh.clicked.connect(self._refresh_window_select)
 
     def _auto_save(self):
-        if self._loading:
+        import traceback
+        from loguru import logger
+        if self._loading > 0:
+            logger.debug(f"💾 _auto_save 被阻止: _loading={self._loading}")
             return
+        logger.info(f"💾 _auto_save 执行: config_id={id(self.config)}, auto_harvest={self._toggle_grid.get_checkbox('收获').isChecked()}")
+        logger.debug(f"调用栈:\n{''.join(traceback.format_stack()[-6:-1])}")
         try:
-            self._loading = True  # 防止递归
+            self._loading += 1  # 引用计数
             c = self.config
             c.planting.player_level = self._player_level.value()
             c.planting.strategy = PlantMode(self._strategy_combo.currentData())
@@ -1077,10 +1082,10 @@ class SettingsPanel(QWidget):
             c.save()
             self.config_changed.emit(c)
         finally:
-            self._loading = False
+            self._loading -= 1
 
     def _on_level_changed(self, level: int):
-        self._loading = True
+        self._loading += 1  # 引用计数，保护嵌套调用
         current_crop = (self._crop_names[self._crop_combo.currentIndex()]
                         if self._crop_combo.currentIndex() >= 0 else "")
         self._crop_combo.clear()
@@ -1092,7 +1097,7 @@ class SettingsPanel(QWidget):
                 self._crop_combo.addItem(f"[锁] {name} (需Lv{req_level})")
         if current_crop in self._crop_names:
             self._crop_combo.setCurrentIndex(self._crop_names.index(current_crop))
-        self._loading = False
+        self._loading -= 1
 
     def _on_strategy_changed(self, index: int):
         is_manual = self._strategy_combo.itemData(index) == PlantMode.PREFERRED.value
@@ -1143,6 +1148,9 @@ class SettingsPanel(QWidget):
         self._game_shortcut.setText(c.planting.game_shortcut_path)
         self._farm_interval.setValue(c.schedule.farm_check_seconds)
         self._friend_interval.setValue(c.schedule.friend_check_seconds)
+        # 功能开关
+        from loguru import logger
+        logger.info(f"📋 _load_config: 加载功能开关 | auto_harvest={c.features.auto_harvest}, auto_plant={c.features.auto_plant}")
         self._toggle_grid.get_checkbox("收获").setChecked(c.features.auto_harvest)
         self._toggle_grid.get_checkbox("播种").setChecked(c.features.auto_plant)
         self._toggle_grid.get_checkbox("施肥").setChecked(c.features.auto_fertilize)

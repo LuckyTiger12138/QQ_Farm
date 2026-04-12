@@ -191,6 +191,7 @@ class BotEngine(QObject):
         return cv_image, detections, None
 
     def update_config(self, config: AppConfig):
+        logger.info(f"⚙️ BotEngine[{self.instance_id}].update_config: config_id={id(config)} | auto_harvest={config.features.auto_harvest}")
         self.config = config
         self.task.sell_config = config.sell
         self.plant.auto_buy_seed = config.features.auto_buy_seed

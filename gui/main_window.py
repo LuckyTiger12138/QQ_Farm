@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
             self._status_panel.update_stats(self.engine.scheduler.get_stats())
 
     def _on_config_changed(self, config: AppConfig):
+        """设置面板配置变更时，只更新当前显示的实例"""
         self.config = config
         self.engine.update_config(config)
 
@@ -316,9 +317,9 @@ class MainWindow(QMainWindow):
         """引擎配置更新时同步 GUI（如 Web 端修改配置）"""
         self.config = config
         self._settings_panel.config = config
-        self._settings_panel._loading = True
+        self._settings_panel._loading += 1
         self._settings_panel._load_config()
-        self._settings_panel._loading = False
+        self._settings_panel._loading -= 1
 
     def _on_web_server_toggled(self, start: bool):
         """Web 服务启动/停止"""
@@ -496,10 +497,12 @@ class MainWindow(QMainWindow):
         self._refresh_instance_sidebar()
 
         # 更新 UI 面板
+        logger.info(f"🔄 切换到实例 {instance_id}: session.config_id={id(session.config)}")
         self._settings_panel.config = session.config
-        self._settings_panel._loading = True
+        logger.info(f"📋 settings_panel.config_id={id(self._settings_panel.config)}")
+        self._settings_panel._loading += 1
         self._settings_panel._load_config()
-        self._settings_panel._loading = False
+        self._settings_panel._loading -= 1
 
         # 更新模板面板
         self._template_panel._detector = new_engine.cv_detector
@@ -656,9 +659,9 @@ class MainWindow(QMainWindow):
         engine = self._get_or_create_engine(session)
         # 启动前同步更新设置面板的配置引用，确保后续保存写入该实例的配置文件
         self._settings_panel.config = session.config
-        self._settings_panel._loading = True
+        self._settings_panel._loading += 1
         self._settings_panel._load_config()
-        self._settings_panel._loading = False
+        self._settings_panel._loading -= 1
         if engine.start():
             self._instance_sidebar.update_instance_state(instance_id, 'running')
             logger.info(f"实例 {session.name} 已启动")

@@ -128,5 +128,7 @@ class AppConfig(BaseModel):
 
     def save(self, path: str | None = None):
         p = path or self._config_path or "config.json"
+        from loguru import logger
+        logger.info(f"🔒 AppConfig.save: id={id(self)} → {p} | features.auto_harvest={self.features.auto_harvest}")
         with open(p, "w", encoding="utf-8") as f:
             json.dump(self.model_dump(), f, ensure_ascii=False, indent=2)
