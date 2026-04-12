@@ -130,5 +130,7 @@ class AppConfig(BaseModel):
         p = path or self._config_path or "config.json"
         from loguru import logger
         logger.info(f"🔒 AppConfig.save: id={id(self)} → {p} | features.auto_harvest={self.features.auto_harvest}")
+        # 排除 machine-specific 配置（不同电脑路径不同）
+        data = self.model_dump(exclude={"planting": {"game_shortcut_path"}})
         with open(p, "w", encoding="utf-8") as f:
-            json.dump(self.model_dump(), f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
