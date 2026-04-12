@@ -89,16 +89,16 @@ QCheckBox::indicator:checked {{
     image: url(gui/icons/check.svg);
 }}
 
-QLineEdit, QSpinBox, QComboBox {{
+QLineEdit, QSpinBox, QTimeEdit, QComboBox {{
     background-color: {Colors.INPUT_BG};
     border: 1px solid {Colors.BORDER};
     border-radius: 8px;
     padding: 6px 10px;
     color: {Colors.TEXT};
     selection-background-color: {Colors.SELECTION_BG};
-    min-height: 22px;
+    min-height: 24px;
 }}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
+QLineEdit:focus, QSpinBox:focus, QTimeEdit:focus, QComboBox:focus {{
     border-color: {Colors.BORDER_FOCUS};
 }}
 
