@@ -64,6 +64,7 @@ class SafetyConfig(BaseModel):
     max_actions_per_round: int = 20
     run_mode: RunMode = RunMode.BACKGROUND
     window_position: WindowPosition = WindowPosition.BOTTOM_LEFT  # 窗口位置
+    auto_remote_login: bool = False  # 掉线重登（默认关闭，多实例下不建议开启）
 
 
 class ScreenshotConfig(BaseModel):

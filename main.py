@@ -7,13 +7,50 @@ import threading
 # 确保项目根目录在 Python 路径中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QWidget, QComboBox
+from PyQt6.QtCore import QObject, QEvent
 
 from models.config import AppConfig
 from gui.main_window import MainWindow
 from utils.logger import setup_logger
 from loguru import logger
 from core.instance_manager import InstanceManager
+
+
+class _NoWheelInputFilter(QObject):
+    """全局事件过滤器：阻止鼠标滚轮在 SpinBox/ComboBox 上意外修改数值"""
+
+    @staticmethod
+    def _spin_ancestor(widget: QWidget | None) -> QAbstractSpinBox | None:
+        current = widget
+        while current is not None:
+            if isinstance(current, QAbstractSpinBox):
+                return current
+            current = current.parentWidget()
+        return None
+
+    @staticmethod
+    def _combo_ancestor(widget: QWidget | None) -> QComboBox | None:
+        current = widget
+        while current is not None:
+            if isinstance(current, QComboBox):
+                return current
+            current = current.parentWidget()
+        return None
+
+    def eventFilter(self, watched, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        widget = watched if isinstance(watched, QWidget) else None
+        if widget is None:
+            return False
+        if self._spin_ancestor(widget) is not None:
+            event.ignore()
+            return True
+        if self._combo_ancestor(widget) is not None:
+            event.ignore()
+            return True
+        return False
 
 
 _global_web_server = None  # 全局 Web 服务实例
@@ -113,6 +150,10 @@ def main():
         }}
     """
     app.setStyleSheet(app.styleSheet() + _dialog_css)
+
+    # 安装全局滚轮过滤器，防止鼠标滚轮意外修改 SpinBox 数值
+    wheel_filter = _NoWheelInputFilter()
+    app.installEventFilter(wheel_filter)
 
     window = MainWindow(config, instance_manager=instance_manager)
     window.show()

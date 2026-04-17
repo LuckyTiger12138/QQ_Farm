@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.instance_manager = instance_manager
+        self._first_show = True
         self.engine = BotEngine(config)
         
         # 多实例支持：instance_id -> BotEngine
@@ -102,6 +103,9 @@ class MainWindow(QMainWindow):
 
         # 页面 2: 模板管理页
         self._template_panel = TemplatePanel(self.engine.cv_detector)
+        # 设置回调：实时读取当前活跃实例的窗口关键字和选择规则
+        self._template_panel._get_window_keyword = self._get_active_window_keyword
+        self._template_panel._get_window_select_rule = self._get_active_window_select_rule
         self._stack.addWidget(self._template_panel)
 
         # 页面 3: 日志页
@@ -132,6 +136,25 @@ class MainWindow(QMainWindow):
             self._refresh_instance_sidebar()
 
         root.addLayout(body, 1)
+
+        # ── 底部开源横幅 ──
+        banner = QLabel(
+            "本软件免费开源  |  如果你花钱购买的，请立即退款！  "
+            "GitHub: github.com/luckytiger12138/qq-farm  "
+            "Gitee: gitee.com/luckytiger12138/qq-farm"
+        )
+        banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        banner.setFixedHeight(28)
+        banner.setStyleSheet(f"""
+            QLabel {{
+                background-color: rgba(0, 122, 255, 12);
+                color: {Colors.PRIMARY};
+                font-size: 12px;
+                border-top: 1px solid rgba(0, 122, 255, 30);
+                padding: 0 12px;
+            }}
+        """)
+        root.addWidget(banner)
 
     def _build_status_page(self) -> QWidget:
         """构建状态页：截图预览 + 统计面板 + 控制按钮"""
@@ -347,6 +370,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self._first_show:
+            self._first_show = False
+            QTimer.singleShot(300, self._show_opensource_notice)
 
     def closeEvent(self, event):
         self.unregister_hotkeys()
@@ -409,6 +435,25 @@ class MainWindow(QMainWindow):
         else:
             self.setWindowTitle("QQ Farm Vision Bot - 多实例版 | F11老板键")
 
+    def _show_opensource_notice(self):
+        """启动时提醒用户本软件免费开源"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("免费开源声明")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(
+            "<h3 style='color:#007AFF;'>本软件完全免费开源！</h3>"
+            "<p style='font-size:14px;'>如果你花钱购买的，请立即退款！</p>"
+            "<p style='font-size:13px;'>"
+            "官方仓库（免费下载）：<br>"
+            "<b>GitHub</b>: github.com/luckytiger12138/qq-farm<br>"
+            "<b>Gitee</b>: gitee.com/luckytiger12138/qq-farm"
+            "</p>"
+            "<hr style='border:1px solid #ddd;'>"
+            "<p style='font-size:12px; color:#888;'>任何倒卖行为均违反开源协议，请勿上当受骗。</p>"
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
     # ── 多实例切换 ──────────────────────────────────────────
 
     def _refresh_instance_sidebar(self):
@@ -437,6 +482,30 @@ class MainWindow(QMainWindow):
             })
         self._instance_sidebar.set_instances(instances)
         self._instance_sidebar.set_active_instance(self._current_instance_id)
+
+    def _get_active_window_keyword(self) -> str:
+        """实时获取当前活跃实例配置的窗口关键字"""
+        try:
+            if self.instance_manager:
+                session = self.instance_manager.get_session(self._current_instance_id)
+                if session and session.config:
+                    kw = session.config.window_title_keyword or "QQ经典农场"
+                    logger.debug(f"[MainWindow] 当前实例 '{self._current_instance_id}' 窗口关键字: '{kw}'")
+                    return kw
+        except Exception as e:
+            logger.warning(f"[MainWindow] 获取窗口关键字失败: {e}")
+        return self.config.window_title_keyword or "QQ经典农场"
+
+    def _get_active_window_select_rule(self) -> str:
+        """实时获取当前活跃实例配置的窗口选择规则"""
+        try:
+            if self.instance_manager:
+                session = self.instance_manager.get_session(self._current_instance_id)
+                if session and session.config:
+                    return session.config.window_select_rule or "auto"
+        except Exception as e:
+            logger.warning(f"[MainWindow] 获取窗口选择规则失败: {e}")
+        return self.config.window_select_rule or "auto"
 
     def _on_instance_selected(self, instance_id: str):
         """用户点击实例，切换到该实例（仅切换 UI，不停止其他实例）"""
@@ -506,6 +575,7 @@ class MainWindow(QMainWindow):
 
         # 更新模板面板
         self._template_panel._detector = new_engine.cv_detector
+        self._template_panel._window_keyword = session.config.window_title_keyword or "QQ经典农场"
         self._template_panel._load_templates()
 
         # 更新实例侧边栏高亮

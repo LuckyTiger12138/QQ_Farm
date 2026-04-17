@@ -374,6 +374,13 @@ class PlantStrategy(BaseStrategy):
 
         all_actions = []
 
+        # 第零步：缩小视野（模拟双指缩放），提高空地识别准确度
+        logger.info(f"[播种] plant_all 开始，准备缩小视野，rect={rect}")
+        zoom_ok = self.pinch_zoom_out(rect, steps=3)
+        logger.info(f"[播种] 缩小视野结果: {zoom_ok}")
+        if self.stopped:
+            return all_actions
+
         # 第一步：截屏找所有空地
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
@@ -761,6 +768,10 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 return
             time.sleep(0.05)
+        # 缩小视野以提高空地识别准确度
+        self.pinch_zoom_out(rect, steps=3)
+        if self.stopped:
+            return
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
             return
@@ -1088,6 +1099,10 @@ class PlantStrategy(BaseStrategy):
             logger.info(f"施肥流程：is_test={is_test}, lands={lands}")
             logger.info(f"施肥流程：_capture_fn={self._capture_fn is not None}, stopped={self.stopped}")
             logger.info(f"施肥流程：action_executor={self.action_executor is not None}")
+            # 缩小视野以提高空地识别准确度
+            self.pinch_zoom_out(rect, steps=3)
+            if self.stopped:
+                return all_actions
             cv_img, dets, _ = self.capture(rect)
             logger.info(f"施肥流程：capture 返回 cv_img={cv_img is not None}, dets={len(dets) if dets else 0}")
             if cv_img is None:

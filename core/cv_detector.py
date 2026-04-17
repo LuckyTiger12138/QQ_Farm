@@ -237,8 +237,10 @@ class CVDetector:
 
             # 处理带alpha通道的模板（用于mask匹配）
             mask = None
-            if template.shape[2] == 4:
-                mask = template[:, :, 3]
+            if template.ndim == 3 and template.shape[2] == 4:
+                alpha = template[:, :, 3]
+                if not np.all(alpha == 255):
+                    mask = alpha
                 template = template[:, :, :3]
 
             if category not in self._templates:
@@ -330,13 +332,13 @@ class CVDetector:
                     results = self._match_template(
                         screenshot, gray_screen, tpl, threshold
                     )
-                    # 过滤掉置信度异常的结果（inf, nan, >1.0）
                     results = [r for r in results
-                               if not (r.confidence != r.confidence or  # nan 检查
+                               if not (r.confidence != r.confidence or
                                        r.confidence == float('inf') or
                                        r.confidence == float('-inf') or
                                        r.confidence > 1.0)]
                     results = self._nms(results, iou_threshold=0.5)
+
                     results.sort(key=lambda r: r.confidence, reverse=True)
                     return results
         return []
@@ -443,9 +445,9 @@ class CVDetector:
         tpl_mask = tpl["mask"]
         th, tw = tpl_img.shape[:2]
         sh, sw = screenshot.shape[:2]
-        use_color = tpl["category"] == "land"
+        category = tpl["category"]
 
-        gray_screen = None if use_color else cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+        gray_screen = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
 
         for scale in scales:
             new_w = int(tw * scale)
@@ -453,30 +455,40 @@ class CVDetector:
             if new_w >= sw or new_h >= sh or new_w < 10 or new_h < 10:
                 continue
 
-            resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
             resized_mask = None
             if tpl_mask is not None:
-                # mask 必须用最近邻插值，保持 0/255 二值
                 resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
                                           interpolation=cv2.INTER_NEAREST)
 
-            if use_color:
+            if category == "land":
+                resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
                 confidences = []
                 for c in range(3):
                     screen_ch = screenshot[:, :, c]
                     tpl_ch = resized_tpl[:, :, c]
                     if resized_mask is not None:
-                        mr = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED,
+                                               mask=resized_mask)
                     else:
-                        mr = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED)
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED)
                     confidences.append(mr)
                 match_result = np.mean(confidences, axis=0)
+
             else:
-                gray_tpl = cv2.cvtColor(resized_tpl, cv2.COLOR_BGR2GRAY)
+                resized_tpl = cv2.resize(
+                    cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY), (new_w, new_h))
                 if resized_mask is not None:
-                    match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                    match_result = cv2.matchTemplate(
+                        gray_screen, resized_tpl, cv2.TM_CCOEFF_NORMED,
+                        mask=resized_mask)
                 else:
-                    match_result = cv2.matchTemplate(gray_screen, gray_tpl, cv2.TM_CCOEFF_NORMED)
+                    match_result = cv2.matchTemplate(
+                        gray_screen, resized_tpl, cv2.TM_CCOEFF_NORMED)
+
+            np.nan_to_num(match_result, copy=False, nan=-1.0,
+                          posinf=-1.0, neginf=-1.0)
 
             locations = np.where(match_result >= threshold)
             for pt_y, pt_x in zip(*locations):
@@ -500,29 +512,34 @@ class CVDetector:
                         gray_screen: np.ndarray,
                         tpl: dict,
                         threshold: float) -> list[DetectResult]:
-        """对单个模板执行多尺度匹配（优化版：灰度缓存 + 尺度减少 + 候选点限制）"""
+        """对单个模板执行多尺度匹配
+
+        seed: 轮廓形状匹配（matchShapes，基于几何形状，不受颜色影响）
+        land: BGR 三通道彩色匹配
+        其他: 灰度匹配
+        """
         results = []
         tpl_img = tpl["image"]
         tpl_mask = tpl["mask"]
         th, tw = tpl_img.shape[:2]
         sh, sw = screenshot.shape[:2]
+        category = tpl["category"]
 
-        # ✅ 优化1：灰度模板缓存（参考 qq-farm-copilot）
-        # 加载时预转灰度，避免每次匹配都调用 cv2.cvtColor
-        if tpl.get("gray") is None and tpl["category"] != "land":
-            tpl["gray"] = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
-        
-        tpl_gray = tpl.get("gray")
+        # === 根据类别选择匹配表示 ===
+        if category == "land":
+            tpl_match = tpl_img
+            screen_match = screenshot
+            use_color = True
 
-        # ✅ 优化2：减少尺度数量（从 13 个降至 5 个）
-        # 参考 qq-farm-copilot 的尺度集合
+        else:
+            if tpl.get("gray") is None:
+                tpl["gray"] = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
+            tpl_match = tpl["gray"]
+            screen_match = gray_screen
+            use_color = False
+
         scales = [1.0, 0.9, 0.8, 1.1, 1.2]
-
-        # ✅ 优化3：候选点上限（参考 qq-farm-copilot）
-        max_hits = 64 if tpl["category"] == "land" else 8
-
-        # land 类别使用彩色匹配（保留金色等颜色特征）
-        use_color = tpl["category"] == "land"
+        max_hits = 64 if category == "land" else 8
 
         for scale in scales:
             new_w = int(tw * scale)
@@ -530,45 +547,40 @@ class CVDetector:
             if new_w >= sw or new_h >= sh or new_w < 10 or new_h < 10:
                 continue
 
+            resized_tpl = cv2.resize(tpl_match, (new_w, new_h))
+            resized_mask = None
+            if tpl_mask is not None:
+                resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
+                                          interpolation=cv2.INTER_NEAREST)
+
             if use_color:
-                # 彩色匹配：对 BGR 三通道分别匹配，取平均值
-                resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
-                resized_mask = None
-                if tpl_mask is not None:
-                    resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
-                                              interpolation=cv2.INTER_NEAREST)
-                
                 confidences = []
                 for c in range(3):
-                    screen_ch = screenshot[:, :, c]
+                    screen_ch = screen_match[:, :, c]
                     tpl_ch = resized_tpl[:, :, c]
                     if resized_mask is not None:
-                        match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED, mask=resized_mask)
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED,
+                                               mask=resized_mask)
                     else:
-                        match_result = cv2.matchTemplate(screen_ch, tpl_ch, cv2.TM_CCOEFF_NORMED)
-                    confidences.append(match_result)
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED)
+                    confidences.append(mr)
                 match_result = np.mean(confidences, axis=0)
             else:
-                # ✅ 灰度匹配（使用缓存的灰度模板）
-                resized_tpl_gray = cv2.resize(tpl_gray, (new_w, new_h))
-                resized_mask = None
-                if tpl_mask is not None:
-                    resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
-                                              interpolation=cv2.INTER_NEAREST)
-                
                 if resized_mask is not None:
                     match_result = cv2.matchTemplate(
-                        gray_screen, resized_tpl_gray, cv2.TM_CCOEFF_NORMED, mask=resized_mask
-                    )
+                        screen_match, resized_tpl, cv2.TM_CCOEFF_NORMED,
+                        mask=resized_mask)
                 else:
                     match_result = cv2.matchTemplate(
-                        gray_screen, resized_tpl_gray, cv2.TM_CCOEFF_NORMED
-                    )
+                        screen_match, resized_tpl, cv2.TM_CCOEFF_NORMED)
 
-            # ✅ 优化3：使用 np.argpartition 截取 top-N 候选点（避免全部保留）
+            np.nan_to_num(match_result, copy=False, nan=-1.0,
+                          posinf=-1.0, neginf=-1.0)
+
             locations = np.where(match_result >= threshold)
             if locations[0].size > max_hits:
-                # 只保留 top-N 最高置信度的候选点
                 scores = match_result[locations]
                 top_idx = np.argpartition(scores, -max_hits)[-max_hits:]
                 pt_ys = locations[0][top_idx]
@@ -579,20 +591,16 @@ class CVDetector:
 
             for pt_y, pt_x in zip(pt_ys, pt_xs):
                 confidence = float(match_result[pt_y, pt_x])
-                center_x = pt_x + new_w // 2
-                center_y = pt_y + new_h // 2
-
                 results.append(DetectResult(
                     name=tpl["name"],
                     category=tpl["category"],
-                    x=center_x,
-                    y=center_y,
+                    x=pt_x + new_w // 2,
+                    y=pt_y + new_h // 2,
                     w=new_w,
                     h=new_h,
                     confidence=confidence,
                 ))
 
-            # 如果在原始尺度找到了高置信度匹配，跳过其他尺度
             if scale == 1.0 and any(r.confidence > 0.95 for r in results):
                 break
 

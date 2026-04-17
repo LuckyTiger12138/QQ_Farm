@@ -1047,7 +1047,11 @@ class BotEngine(QObject):
 
             # 特殊处理：异地登录 (优先级最高，打断循环)
             if scene == Scene.REMOTE_LOGIN:
-                self._handle_remote_login(context)
+                if self.config.safety.auto_remote_login:
+                    self._handle_remote_login(context)
+                else:
+                    logger.warning("检测到异地登录，但重登功能已关闭，跳过")
+                    self.log_message.emit("⚠ 检测到异地登录，重登已关闭，请手动处理")
                 continue
 
             # 执行任务调度

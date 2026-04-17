@@ -328,6 +328,79 @@ class ActionExecutor:
             logger.error(f"点击失败: {e}")
             return False
 
+    def pinch_zoom(self, center_x: int, center_y: int,
+                   zoom_out: bool = True, steps: int = 3) -> bool:
+        """模拟双指缩放（通过 Ctrl+鼠标滚轮实现）
+
+        Args:
+            center_x: 缩放中心点（相对于窗口左上角）
+            center_y: 缩放中心点（相对于窗口左上角）
+            zoom_out: True=缩小（滚轮向下），False=放大（滚轮向上）
+            steps: 滚轮步数
+
+        Returns:
+            是否成功
+        """
+        abs_x, abs_y = self.relative_to_absolute(center_x, center_y)
+        direction = -1 if zoom_out else 1
+        delta = direction * 120
+        logger.info(f"[缩放] pinch_zoom: center=({center_x},{center_y}), abs=({abs_x},{abs_y}), "
+                     f"zoom_out={zoom_out}, steps={steps}, background={self.is_background}")
+
+        if self.is_background:
+            return self._pinch_zoom_background(abs_x, abs_y, delta, steps)
+        else:
+            return self._pinch_zoom_foreground(abs_x, abs_y, delta, steps)
+
+    def _pinch_zoom_foreground(self, abs_x: int, abs_y: int,
+                                delta: int, steps: int) -> bool:
+        """前台模式：Ctrl+鼠标滚轮缩放"""
+        try:
+            import pyautogui as pag
+            # pyautogui.scroll 参数是"滚轮点击次数"，不是 WM_MOUSEWHEEL delta
+            click_dir = 1 if delta > 0 else -1
+            # 先移动鼠标到缩放中心
+            pag.moveTo(int(abs_x), int(abs_y), duration=0.02)
+            # 按住 Ctrl 键
+            pag.keyDown('ctrl')
+            time.sleep(0.05)
+            # 每次滚 1 下，共 steps 次
+            for _ in range(steps):
+                pag.scroll(click_dir)
+                time.sleep(0.08)
+            # 释放 Ctrl 键
+            pag.keyUp('ctrl')
+            logger.debug(f"前台缩放: ({abs_x},{abs_y}), direction={'放大' if delta > 0 else '缩小'}, steps={steps}")
+            return True
+        except Exception as e:
+            logger.error(f"前台缩放失败: {e}")
+            return False
+
+    def _pinch_zoom_background(self, abs_x: int, abs_y: int,
+                                delta: int, steps: int) -> bool:
+        """后台模式：Ctrl+鼠标滚轮缩放（通过 PostMessageW 发送 WM_MOUSEWHEEL）"""
+        if not self._hwnd:
+            logger.warning("后台缩放失败：窗口句柄为空")
+            return False
+
+        hwnd = ctypes.wintypes.HWND(self._hwnd)
+        client_pos = self._screen_to_client(abs_x, abs_y)
+        if not client_pos:
+            return False
+
+        # WM_MOUSEWHEEL: wParam 高16位=delta, 低16位=键状态(MK_CONTROL=0x08)
+        # lParam: 低16位=x, 高16位=y (屏幕坐标)
+        MK_CONTROL = 0x0008
+
+        for _ in range(steps):
+            wParam = (delta & 0xFFFF) << 16 | MK_CONTROL
+            lParam = self._make_lparam(*client_pos)
+            user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wParam, lParam)
+            time.sleep(0.05)
+
+        logger.debug(f"后台缩放: 客户区({client_pos[0]},{client_pos[1]}), delta={delta}, steps={steps}")
+        return True
+
     def execute_action(self, action: Action) -> OperationResult:
         """执行单个操作"""
         pos = action.click_position

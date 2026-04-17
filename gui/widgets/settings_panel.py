@@ -757,7 +757,7 @@ class SettingsPanel(QWidget):
         toggle_items = [
             ("🌾", "收获"), ("🌱", "播种"), ("💊", "施肥"), ("🛒", "买种"),
             ("💧", "浇水"), ("🌿", "除草"), ("🐛", "除虫"), ("💰", "出售"),
-            ("🎯", "任务"), ("🔨", "扩建"),
+            ("🎯", "任务"), ("🔨", "扩建"), ("🔐", "重登"),
         ]
         self._toggle_grid = ToggleGrid(toggle_items)
 
@@ -1041,6 +1041,7 @@ class SettingsPanel(QWidget):
             c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
             c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
             c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
+            c.safety.auto_remote_login = self._toggle_grid.get_checkbox("重登").isChecked()
             # 好友操作新配置
             c.features.friend.enable_steal = self._friend_widget.get_enable_steal()
             c.features.friend.enable_weed = self._friend_widget.get_enable_weed()
@@ -1141,6 +1142,7 @@ class SettingsPanel(QWidget):
         self._toggle_grid.get_checkbox("出售").setChecked(c.features.auto_sell)
         self._toggle_grid.get_checkbox("任务").setChecked(c.features.auto_task)
         self._toggle_grid.get_checkbox("扩建").setChecked(c.features.auto_upgrade)
+        self._toggle_grid.get_checkbox("重登").setChecked(c.safety.auto_remote_login)
         # 好友操作
         self._friend_widget.set_enable_steal(c.features.friend.enable_steal)
         self._friend_widget.set_enable_weed(c.features.friend.enable_weed)

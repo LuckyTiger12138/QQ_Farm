@@ -320,6 +320,7 @@ class CropCanvas(QLabel):
         super().__init__(parent)
         self._original: np.ndarray | None = None   # 原始 BGRA 图像
         self._display_px: QPixmap | None = None     # 缩放后的显示 QPixmap
+        self._source_px: QPixmap | None = None      # 原始分辨率 QPixmap（resize 时重绘用）
         self._scale = 1.0                           # 缩放比例
         self._dragging = False
         self._start_pos: QPoint | None = None
@@ -363,18 +364,40 @@ class CropCanvas(QLabel):
         dh, dw, ch = rgb.shape
         data = rgb.tobytes()
         qimg = QImage(data, dw, dh, ch * dw, QImage.Format.Format_RGB888)
-        px = QPixmap.fromImage(qimg)
+        self._source_px = QPixmap.fromImage(qimg)  # 保存原始分辨率用于 resize 时重绘
+        # 修复 DPR 不匹配导致的模糊：设置 QPixmap 的 DPR 与屏幕一致
+        dpr = self.screen().devicePixelRatio() if self.screen() else 1.0
+        self._source_px.setDevicePixelRatio(dpr)
+        self._fit_image()
 
-        # 自适应缩放
-        max_w, max_h = 600, 400
+    def _fit_image(self):
+        """根据当前 widget 尺寸自适应缩放图像"""
+        if self._source_px is None:
+            return
+        # _source_px 设了 DPR，width()/height() 已是逻辑尺寸，直接使用
+        w = self._source_px.width()
+        h = self._source_px.height()
+        # 用 widget 实际尺寸作为上限，留 10px 内边距
+        max_w = max(self.width() - 10, 400)
+        max_h = max(self.height() - 10, 300)
         self._scale = min(max_w / w, max_h / h, 1.0)
-        scaled = px.scaled(int(w * self._scale), int(h * self._scale),
-                           Qt.AspectRatioMode.KeepAspectRatio,
-                           Qt.TransformationMode.SmoothTransformation)
+        target_w = int(w * self._scale)
+        target_h = int(h * self._scale)
+        dpr = self._source_px.devicePixelRatio()
+        scaled = self._source_px.scaled(
+            target_w, target_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        scaled.setDevicePixelRatio(dpr)
         self._display_px = scaled
         self.setPixmap(scaled)
-        self.setMinimumSize(scaled.size())
         self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._source_px is not None:
+            self._fit_image()
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self._original is not None:
@@ -925,12 +948,17 @@ class TemplateDetailPanel(QFrame):
         self._name: str = ""
         self._filepath: str = ""
         self._test_bgr: np.ndarray | None = None
+        self._test_source_px: QPixmap | None = None
         self._pending_threshold: float | None = None
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.setInterval(300)
         self._debounce_timer.timeout.connect(self._flush_threshold)
         self._build_ui()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_test_preview()
 
     def _build_ui(self):
         self.setStyleSheet(f"""
@@ -1336,9 +1364,20 @@ class TemplateDetailPanel(QFrame):
             from core.screen_capture import ScreenCapture
             wm = WindowManager()
             sc = ScreenCapture()
-            window = wm.find_window("QQ经典农场")
+            # 从 TemplatePanel 实时获取当前实例的窗口关键字和选择规则
+            keyword = "QQ经典农场"
+            select_rule = "auto"
+            p = self.parent()
+            while p:
+                if isinstance(p, TemplatePanel):
+                    keyword = p._current_window_keyword()
+                    select_rule = p._current_window_select_rule()
+                    break
+                p = p.parent()
+            logger.info(f"[模板详情] 测试截图，关键字: '{keyword}', 选择规则: '{select_rule}'")
+            window = wm.find_window(keyword, select_rule=select_rule)
             if not window:
-                self._test_info.setText("未找到游戏窗口")
+                self._test_info.setText(f"未找到包含 '{keyword}' 的窗口")
                 return
             wm.activate_window()
             import time as _t
@@ -1381,10 +1420,10 @@ class TemplateDetailPanel(QFrame):
             data = rgb.tobytes()
             qimg = QImage(data, w, h, 3 * w, QImage.Format.Format_RGB888)
             px = QPixmap.fromImage(qimg)
-            self._test_preview.setPixmap(
-                px.scaled(self._test_preview.width(), 160,
-                          Qt.AspectRatioMode.KeepAspectRatio,
-                          Qt.TransformationMode.SmoothTransformation))
+            dpr = self.screen().devicePixelRatio() if self.screen() else 1.0
+            px.setDevicePixelRatio(dpr)
+            self._test_source_px = px
+            self._fit_test_preview()
         except Exception as e:
             self._test_info.setText(f"读取失败: {e}")
 
@@ -1524,19 +1563,38 @@ class TemplateDetailPanel(QFrame):
     def _show_test_image(self, bgr: np.ndarray, results: list[DetectResult] | None = None):
         self._test_bgr_annotated = bgr  # 保存标注后的图，用于点击放大
         self._test_bgr_results = results or []  # 保存匹配结果
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        data = rgb.tobytes()
-        qimg = QImage(data, w, h, ch * w, QImage.Format.Format_RGB888)
-        px = QPixmap.fromImage(qimg)
-        max_h = self._test_scroll.viewport().height() - 4
-        scaled = px.scaled(
-            self._test_scroll.viewport().width() - 4,
-            max(max_h, 200),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        self._test_preview.setPixmap(scaled)
-        self._test_preview.setMinimumSize(scaled.size())
+        # 通过 PNG 文件中转，彻底绕开 numpy→bytes→QImage 数据链路问题
+        import tempfile
+        tmp = os.path.join(tempfile.gettempdir(), "qq_farm_preview.png")
+        ok, buf = cv2.imencode(".png", bgr)
+        if ok:
+            buf.tofile(tmp)
+            self._test_source_px = QPixmap(tmp)
+        else:
+            # fallback
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            self._test_rgb_data = rgb.tobytes()
+            qimg = QImage(self._test_rgb_data, w, h, ch * w, QImage.Format.Format_RGB888)
+            self._test_source_px = QPixmap.fromImage(qimg)
+        # 修复 DPR 不匹配导致的模糊
+        dpr = self.screen().devicePixelRatio() if self.screen() else 1.0
+        self._test_source_px.setDevicePixelRatio(dpr)
+        self._test_preview.setMinimumSize(100, 100)
+        self._fit_test_preview()
+
+    def _fit_test_preview(self):
+        """以原始像素分辨率显示预览图（不缩放，避免模糊）"""
+        source = getattr(self, '_test_source_px', None)
+        if source is None:
+            return
+        # QPixmap 设置了 DPR 后，width()/height() 返回逻辑尺寸
+        # 需要除以 DPR 得到实际显示尺寸
+        dpr = source.devicePixelRatio()
+        logic_w = int(source.width() / dpr)
+        logic_h = int(source.height() / dpr)
+        self._test_preview.setPixmap(source)
+        self._test_preview.resize(logic_w, logic_h)
 
     def _on_preview_click(self):
         """点击测试预览图，打开放大预览"""
@@ -1831,23 +1889,26 @@ class CaptureWorker(QThread):
     captured = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, keyword: str = "QQ经典农场"):
+    def __init__(self, keyword: str = "QQ经典农场", select_rule: str = "auto"):
         super().__init__()
         self._keyword = keyword
+        self._select_rule = select_rule
 
     def run(self):
         try:
+            logger.info(f"[模板截图] CaptureWorker 使用关键字: '{self._keyword}', 选择规则: '{self._select_rule}'")
             from core.window_manager import WindowManager
             from core.screen_capture import ScreenCapture
             wm = WindowManager()
             sc = ScreenCapture()
-            window = wm.find_window(self._keyword)
+            window = wm.find_window(self._keyword, select_rule=self._select_rule)
             if not window:
                 self.error.emit(f"未找到包含 '{self._keyword}' 的窗口")
                 return
             wm.activate_window()
             time.sleep(0.5)
             rect = (window.left, window.top, window.width, window.height)
+            logger.info(f"[模板截图] 截取窗口: {window.title} ({window.width}x{window.height}) @ ({window.left},{window.top})")
             image = sc.capture_region(rect)
             if image is None:
                 self.error.emit("截屏失败")
@@ -1930,14 +1991,22 @@ class ScreenshotSelector(QWidget):
                       3 * rgb.width, QImage.Format.Format_RGB888)
         if qimg.isNull():
             return
-        full = QPixmap.fromImage(qimg)
+        full = QPixmap.fromImage(qimg)  # DPR=1.0，保持原始像素尺寸
+        dpr = self.screen().devicePixelRatio() if self.screen() else 1.0
         self._scale = min(self.width() / rgb.width, self.height() / rgb.height, 1.0)
+        # 缩放到物理像素尺寸，确保高 DPI 下清晰
+        phys_w = int(rgb.width * self._scale * dpr)
+        phys_h = int(rgb.height * self._scale * dpr)
         self._pixmap = full.scaled(
-            int(rgb.width * self._scale), int(rgb.height * self._scale),
+            phys_w, phys_h,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation)
-        self._ox = (self.width() - self._pixmap.width()) // 2
-        self._oy = (self.height() - self._pixmap.height()) // 2
+        self._pixmap.setDevicePixelRatio(dpr)
+        # 居中偏移用逻辑尺寸（与坐标映射一致）
+        logic_w = int(rgb.width * self._scale)
+        logic_h = int(rgb.height * self._scale)
+        self._ox = (self.width() - logic_w) // 2
+        self._oy = (self.height() - logic_h) // 2
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -2174,6 +2243,9 @@ class TemplatePanel(QWidget):
     def __init__(self, detector: CVDetector, parent=None):
         super().__init__(parent)
         self._detector = detector
+        self._window_keyword: str = "QQ经典农场"  # 由 MainWindow 切换实例时更新
+        self._get_window_keyword = None  # callable，由 MainWindow 设置，实时获取当前配置的关键字
+        self._get_window_select_rule = None  # callable，实时获取窗口选择规则
         self._cards: list[TemplateCard] = []
         self._worker: CaptureWorker | None = None
         self._items: list[tuple[str, str, float]] = []
@@ -2806,9 +2878,27 @@ class TemplatePanel(QWidget):
                 self._detector.set_category_default(cat, spin.value())
             self._load_templates()
 
+    def _current_window_keyword(self) -> str:
+        """实时获取当前实例配置的窗口关键字"""
+        if self._get_window_keyword:
+            kw = self._get_window_keyword()
+            logger.info(f"[模板面板] 通过回调获取窗口关键字: '{kw}'")
+            return kw
+        logger.info(f"[模板面板] 使用缓存关键字: '{self._window_keyword}'")
+        return self._window_keyword
+
+    def _current_window_select_rule(self) -> str:
+        """实时获取当前实例配置的窗口选择规则"""
+        if self._get_window_select_rule:
+            return self._get_window_select_rule()
+        return "auto"
+
     def _on_capture(self):
         self._btn_capture.setEnabled(False)
-        self._worker = CaptureWorker("QQ经典农场")
+        kw = self._current_window_keyword()
+        rule = self._current_window_select_rule()
+        logger.info(f"[模板面板] 截屏采集，关键字: '{kw}', 选择规则: '{rule}'")
+        self._worker = CaptureWorker(kw, rule)
         self._worker.captured.connect(self._on_captured)
         self._worker.error.connect(self._on_cap_err)
         self._worker.finished.connect(self._clean_worker)
@@ -2833,8 +2923,11 @@ class TemplatePanel(QWidget):
             return
         self._replace_target_name = self._detail._name
         self._replace_target_path = self._detail._filepath
+        kw = self._current_window_keyword()
+        rule = self._current_window_select_rule()
+        logger.info(f"[模板面板] 截屏替换，关键字: '{kw}', 选择规则: '{rule}'，目标: {self._replace_target_name}")
         self._btn_capture.setEnabled(False)
-        self._worker = CaptureWorker("QQ经典农场")
+        self._worker = CaptureWorker(kw, rule)
         self._worker.captured.connect(self._on_capture_replace_ready)
         self._worker.error.connect(self._on_cap_err)
         self._worker.finished.connect(self._clean_worker)
