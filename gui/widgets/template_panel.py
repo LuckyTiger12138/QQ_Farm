@@ -1770,8 +1770,9 @@ class TemplateDetailPanel(QFrame):
         if os.path.exists(self._filepath):
             os.remove(self._filepath)
             self._detector.set_template_enabled(self._name, True)
-            self.template_changed.emit()
-            self.closed.emit()
+        # 先关闭详情面板，再通知刷新列表
+        self.closed.emit()
+        self.template_changed.emit()
 
     @staticmethod
     def _load_pixmap(fp: str) -> QPixmap | None:
@@ -2665,16 +2666,21 @@ class TemplatePanel(QWidget):
             f"确定删除「{name}」？此操作不可撤销。")
         if box.exec() != QMessageBox.StandardButton.Yes:
             return
-        fp = os.path.join(self._detector._templates_dir, f"{name}.png")
-        if not os.path.exists(fp):
-            fp = os.path.join(self._detector._templates_dir, f"{name}.jpg")
-        if os.path.exists(fp):
-            os.remove(fp)
+        # 尝试删除文件（可能已通过详情面板删除）
+        deleted = False
+        for ext in ('.png', '.jpg', '.jpeg'):
+            fp = os.path.join(self._detector._templates_dir, f"{name}{ext}")
+            if os.path.exists(fp):
+                os.remove(fp)
+                deleted = True
+                break
+        if deleted:
             self._detector.set_template_enabled(name, True)
-            if self._selected_name == name:
-                self._on_detail_close()
-            self._load_templates()
-            self.templates_changed.emit()
+        if self._selected_name == name:
+            self._on_detail_close()
+        # 始终刷新列表，无论文件是否存在
+        self._load_templates()
+        self.templates_changed.emit()
 
     def _on_import(self):
         from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
