@@ -7,6 +7,7 @@
   → 执行偷菜/帮忙 → 点击 icon 切换好友（含滑动翻页）
   → 完成后模板匹配 btn_home 回家
 """
+import re
 import time
 from loguru import logger
 
@@ -14,6 +15,12 @@ from models.farm_state import ActionType
 from core.cv_detector import DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
+
+try:
+    from utils.friend_name_ocr import FriendNameOCR
+    HAS_OCR = True
+except ImportError:
+    HAS_OCR = False
 
 MAX_FRIENDS_PER_ROUND = 20
 
@@ -29,6 +36,14 @@ CLOSE_BTN_POS = (510, 71)       # btn_close
 # 底部好友列表滑动区域（detail 页面下的横向好友列表）
 SWIPE_START = (405, 920)
 SWIPE_END = (150, 920)
+
+# 好友黑名单/OCR 相关常量
+FRIEND_VISIT_NAME_OCR_X1 = 150
+FRIEND_VISIT_NAME_OCR_X2 = 400
+FRIEND_VISIT_NAME_OCR_Y1 = 265
+FRIEND_VISIT_NAME_OCR_Y2 = 780
+FRIEND_VISIT_NAME_ABOVE_Y_WINDOW = 40
+FRIEND_BLACKLIST_MIN_PREFIX_LEN = 1
 
 # 一次截图检测的全部好友相关模板
 _ALL_FRIEND_TEMPLATES = [
@@ -46,6 +61,8 @@ _ALL_FRIEND_TEMPLATES = [
     "btn_claim", "btn_confirm", "btn_cancel",
     "btn_info", "btn_info_close", "btn_shop_close",
     "ui_remote_login", "ui_next_time",
+    # 好友请求
+    "btn_friend_apply", "btn_friend_agreed",
 ]
 
 _SCALES_FAST = [1.0, 0.9, 1.1]
@@ -66,6 +83,11 @@ class FriendStrategy(BaseStrategy):
         self._last_switched_icon_pos = None
         self._consecutive_same_pos_count = 0  # 连续点击同一位置次数
         self._max_consecutive_same = 3  # 最大允许连续点击同一位置
+        # 好友黑名单
+        self._friend_blacklist: list[str] = []
+        # OCR
+        self._friend_name_ocr = FriendNameOCR() if HAS_OCR else None
+        self._instance_id = 'default'
 
     # ── 主入口 ──────────────────────────────────────────────────
 
@@ -100,6 +122,9 @@ class FriendStrategy(BaseStrategy):
         if not self._enter_friend_list(rect):
             logger.warning("好友流程: 无法进入好友列表")
             return actions
+
+        # 1.5 自动同意好友请求
+        self.accept_friend_requests(rect)
 
         # 2. 进入第一个好友农场（传入开关参数，智能检测可操作目标）
         if not self._enter_friend_detail(rect, enable_steal, enable_weed, enable_water, enable_bug):
@@ -363,15 +388,36 @@ class FriendStrategy(BaseStrategy):
             )
 
             if operable['total'] > 0:
-                # ✅ 有可操作目标，点击拜访
+                # ✅ 有可操作目标，点击对应行的拜访按钮
                 logger.info(f"好友流程：检测到 {operable['total']} 个可操作目标，开始拜访")
-                btn = self._find_any_name(dets, ["btn_visit_first"])
+
+                # 找到第一个可操作目标的 Y 坐标
+                first_target = None
+                for key in ['steal', 'help_water', 'help_weed', 'help_bug']:
+                    if operable[key]:
+                        first_target = operable[key][0]
+                        break
+
+                # 找到所有拜访按钮，按 Y 坐标匹配同一行
+                visit_buttons = [d for d in dets if d.name == "btn_visit_first"]
+                btn = None
+                if first_target and visit_buttons:
+                    target_y = first_target.y
+                    # 找与可操作目标 Y 坐标最接近的拜访按钮（同一行）
+                    visit_buttons.sort(key=lambda d: abs(d.y - target_y))
+                    btn = visit_buttons[0]
+                    logger.info(f"好友流程：目标icon Y={target_y}, 匹配拜访按钮 Y={btn.y}")
+
                 if btn:
-                    self.click(btn.x, btn.y, "访问好友")
+                    self.click(btn.x, btn.y, f"访问好友(Y匹配{first_target.name})")
                 else:
-                    h, w = cv_img.shape[:2]
-                    fx, fy = _scale_pos(VISIT_BTN_POS, h, w)
-                    self.click(fx, fy, "访问好友(坐标兜底)")
+                    btn = self._find_any_name(dets, ["btn_visit_first"])
+                    if btn:
+                        self.click(btn.x, btn.y, "访问好友")
+                    else:
+                        h, w = cv_img.shape[:2]
+                        fx, fy = _scale_pos(VISIT_BTN_POS, h, w)
+                        self.click(fx, fy, "访问好友(坐标兜底)")
 
                 time.sleep(1.0)
 
@@ -415,19 +461,25 @@ class FriendStrategy(BaseStrategy):
             
             # ✅ 确认机制：循环检测直到按钮消失
             if rect:
-                return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+                success = self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+                if success:
+                    pass
+                return success
             return True
-        
+
         # 没有 btn_steal，尝试 icon 确认 + 固定坐标
         if any(d.name == "icon_steal_in_friend_detail" for d in dets):
             h, w = cv_img.shape[:2]
             fx, fy = _scale_pos(STEAL_BTN_POS, h, w)
             logger.info(f"偷菜流程：使用固定坐标 ({fx}, {fy})")
             self.click(fx, fy, "偷菜(坐标)", ActionType.STEAL)
-            
+
             # ✅ 确认机制
             if rect:
-                return self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+                success = self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+                if success:
+                    pass
+                return success
             return True
 
         return False
@@ -795,3 +847,86 @@ class FriendStrategy(BaseStrategy):
         if cv_img is None:
             return False
         return self._do_steal(cv_img, dets, rect)  # ✅ 传入 rect 参数
+
+    # ── 好友黑名单 ──────────────────────────────────────────────────
+
+    def set_blacklist(self, blacklist: list[str]):
+        """设置好友黑名单"""
+        self._friend_blacklist = blacklist
+
+    @staticmethod
+    def _normalize_friend_name(value: str) -> str:
+        """规范化昵称文本"""
+        text = str(value or '').strip()
+        if not text:
+            return ''
+        text = re.sub(r'[\W_]+', '', text, flags=re.UNICODE)
+        return text.lower()
+
+    def _is_blacklisted_friend_name(self, detected_name: str) -> bool:
+        """按前缀规则匹配黑名单"""
+        raw_name = str(detected_name or '').strip()
+        if not raw_name:
+            return False
+        prefix = self._normalize_friend_name(raw_name)
+        if not prefix or len(prefix) < FRIEND_BLACKLIST_MIN_PREFIX_LEN:
+            return False
+        for item in self._friend_blacklist:
+            candidate = self._normalize_friend_name(item)
+            if prefix.startswith(candidate):
+                return True
+        return False
+
+    def _detect_friend_name_near_visit_button(self, cv_img, visit_x: int, visit_y: int) -> str:
+        """OCR 识别访问按钮旁的好友昵称"""
+        if self._friend_name_ocr is None or cv_img is None:
+            return ''
+        h, w = cv_img.shape[:2]
+        x1 = max(0, FRIEND_VISIT_NAME_OCR_X1)
+        y1 = max(0, FRIEND_VISIT_NAME_OCR_Y1)
+        x2 = min(w, FRIEND_VISIT_NAME_OCR_X2)
+        y2 = min(h, FRIEND_VISIT_NAME_OCR_Y2)
+        if x2 <= x1 or y2 <= y1:
+            return ''
+        items = self._friend_name_ocr.detect_items(cv_img, region=(x1, y1, x2, y2))
+        y_low = float(visit_y - FRIEND_VISIT_NAME_ABOVE_Y_WINDOW)
+        y_high = float(visit_y)
+        candidates: list[tuple[float, str]] = []
+        for item in items:
+            text = str(item.text or '').strip()
+            if not text:
+                continue
+            ys = [point[1] for point in item.box]
+            center_y = float(min(ys) + max(ys)) / 2.0
+            if not (y_low <= center_y <= y_high):
+                continue
+            min_x = float(min(point[0] for point in item.box))
+            candidates.append((min_x, text))
+        candidates.sort(key=lambda c: c[0])
+        name = ''.join(c[1] for c in candidates).strip()
+        if name:
+            logger.debug(f"好友昵称OCR: {name}")
+        return name
+
+    # ── 自动同意好友请求 ──────────────────────────────────────────
+
+    def accept_friend_requests(self, rect: tuple):
+        """处理好友请求：自动同意"""
+        for _ in range(5):
+            if self.stopped:
+                return
+            cv_img, dets, _ = self.capture(rect)
+            if cv_img is None:
+                return
+            if not any(d.name == "btn_friend_apply" for d in dets):
+                return
+            agreed = self.find_by_name(dets, "btn_friend_agreed")
+            if agreed:
+                self.click(agreed.x, agreed.y, "同意好友请求")
+                time.sleep(0.5)
+                continue
+            close = self.find_any(dets, ["btn_close"])
+            if close:
+                self.click(close.x, close.y, "关闭好友弹窗")
+                time.sleep(0.3)
+

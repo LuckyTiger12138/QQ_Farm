@@ -1,0 +1,154 @@
+{
+  "window_title_keyword": "QQ经典农场",
+  "window_select_rule": "auto",
+  "features": {
+    "auto_harvest": true,
+    "auto_plant": true,
+    "auto_buy_seed": true,
+    "auto_weed": true,
+    "auto_water": true,
+    "auto_bug": true,
+    "auto_fertilize": true,
+    "auto_sell": false,
+    "auto_bad": false,
+    "auto_task": false,
+    "auto_upgrade": false,
+    "auto_svip_gift": false,
+    "auto_mall_gift": false,
+    "auto_mail": false
+  },
+  "safety": {
+    "random_delay_min": 0.1,
+    "random_delay_max": 0.3,
+    "click_offset_range": 5,
+    "max_actions_per_round": 20,
+    "run_mode": "background",
+    "window_position": "bottom_left",
+    "auto_remote_login": false,
+    "debug_log_enabled": false
+  },
+  "screenshot": {
+    "quality": 80,
+    "save_history": true,
+    "max_history_count": 50,
+    "capture_interval_seconds": 0.3
+  },
+  "schedule": {
+    "farm_check_seconds": 120,
+    "friend_check_seconds": 300,
+    "task_check_minutes": 60
+  },
+  "planting": {
+    "strategy": "preferred",
+    "preferred_crop": "椰子",
+    "player_level": 69,
+    "window_width": 581,
+    "window_height": 1054,
+    "warehouse_first": true,
+    "skip_event_crops": false,
+    "level_ocr_enabled": true,
+    "window_platform": "qq",
+    "planting_stable_seconds": 0.5,
+    "planting_stable_timeout_seconds": 5.0
+  },
+  "sell": {
+    "mode": "batch_all",
+    "sell_crops": []
+  },
+  "silent_hours": {
+    "enabled": false,
+    "start_hour": 2,
+    "start_minute": 0,
+    "end_hour": 6,
+    "end_minute": 0
+  },
+  "web": {
+    "enabled": false,
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "land": {
+    "profile": {
+      "level": 0,
+      "gold": "",
+      "coupon": "",
+      "exp": ""
+    },
+    "plots": []
+  },
+  "tasks": {
+    "main": {
+      "enabled": true,
+      "priority": 10,
+      "trigger": "interval",
+      "interval_seconds": 60,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 30,
+      "features": {}
+    },
+    "friend": {
+      "enabled": true,
+      "priority": 20,
+      "trigger": "interval",
+      "interval_seconds": 1800,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 300,
+      "features": {}
+    },
+    "gift": {
+      "enabled": false,
+      "priority": 30,
+      "trigger": "daily",
+      "interval_seconds": 120,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:05",
+      "next_run": "",
+      "failure_interval_seconds": 60,
+      "features": {}
+    },
+    "sell": {
+      "enabled": false,
+      "priority": 25,
+      "trigger": "interval",
+      "interval_seconds": 21600,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 3600,
+      "features": {}
+    },
+    "task": {
+      "enabled": false,
+      "priority": 25,
+      "trigger": "interval",
+      "interval_seconds": 21600,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 3600,
+      "features": {}
+    },
+    "share": {
+      "enabled": false,
+      "priority": 30,
+      "trigger": "daily",
+      "interval_seconds": 120,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:10",
+      "next_run": "",
+      "failure_interval_seconds": 60,
+      "features": {}
+    }
+  },
+  "executor": {
+    "min_task_interval_seconds": 5,
+    "empty_queue_policy": "stay",
+    "default_success_interval": 120,
+    "default_failure_interval": 60,
+    "max_failures": 3
+  }
+}

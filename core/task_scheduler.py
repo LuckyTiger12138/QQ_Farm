@@ -50,6 +50,16 @@ class TaskScheduler(QObject):
         self._next_farm_check: float = 0
         self._next_friend_check: float = 0
 
+        # 运行态指标（移植自 copilot：由 TaskExecutor 快照回写）
+        self._runtime_metrics = {
+            "current_task": "--",
+            "next_task": "--",
+            "next_run": "--",
+            "running_tasks": 0,
+            "pending_tasks": 0,
+            "waiting_tasks": 0,
+        }
+
     @property
     def state(self) -> BotState:
         return self._state
@@ -84,10 +94,23 @@ class TaskScheduler(QObject):
 
         logger.info(f"调度器已启动 (农场:{farm_interval_ms//1000}s, 好友:{friend_interval_ms//1000}s)")
 
+    def start_window_check(self):
+        """仅启动窗口存活监控（不启动定时触发）"""
+        if self._state == BotState.IDLE:
+            self._set_state(BotState.RUNNING)
+        self._window_monitor_timer.start(self._window_monitor_interval_ms)
+        logger.info("窗口存活监控已启动")
+
+    def mark_running(self):
+        """将调度器标记为运行状态（不启动任何定时器）"""
+        if self._state == BotState.IDLE:
+            self._set_state(BotState.RUNNING)
+
     def stop(self):
         """停止调度器"""
         self._farm_timer.stop()
         self._friend_timer.stop()
+        self._window_monitor_timer.stop()
         self._set_state(BotState.IDLE)
         logger.info("调度器已停止")
 
@@ -193,7 +216,7 @@ class TaskScheduler(QObject):
         self.stats_updated.emit(self.get_stats())
 
     def get_stats(self) -> dict:
-        """获取统计数据"""
+        """获取统计数据（含 runtime_metrics，移植自 copilot）"""
         elapsed = time.time() - self._start_time if self._start_time else 0
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
@@ -205,11 +228,25 @@ class TaskScheduler(QObject):
         }
         return {
             **self._stats,
+            **self._runtime_metrics,
             "elapsed": f"{hours}小时{minutes}分",
             "next_farm_check": datetime.fromtimestamp(self._next_farm_check).strftime("%H:%M:%S") if self._next_farm_check else "--",
             "next_friend_check": datetime.fromtimestamp(self._next_friend_check).strftime("%H:%M:%S") if self._next_friend_check else "--",
             "state": state_map.get(self._state.value, self._state.value),
         }
+
+    def update_runtime_metrics(self, **kwargs):
+        """更新运行态指标（移植自 copilot：由执行器快照回调写入）"""
+        changed = False
+        for key in (
+            "current_task", "next_task", "next_run",
+            "running_tasks", "pending_tasks", "waiting_tasks",
+        ):
+            if key in kwargs and self._runtime_metrics.get(key) != kwargs[key]:
+                self._runtime_metrics[key] = kwargs[key]
+                changed = True
+        if changed:
+            self.stats_updated.emit(self.get_stats())
 
     def reset_stats(self):
         for key in self._stats:

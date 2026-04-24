@@ -1,13 +1,17 @@
 {
-  "active_instance_id": "2",
+  "active_instance_id": "default",
   "instances": [
     {
       "id": "default",
       "name": "default"
     },
     {
-      "id": "2",
-      "name": "2"
+      "id": "qq2",
+      "name": "qq2"
+    },
+    {
+      "id": "wx",
+      "name": "wx"
     }
   ]
 }

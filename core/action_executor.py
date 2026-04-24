@@ -68,7 +68,7 @@ class ActionExecutor:
                 # 客户区相对于窗口左上角的偏移
                 self._client_offset_x = point.x - self._window_left
                 self._client_offset_y = point.y - self._window_top
-                logger.debug(f"客户区偏移: ({self._client_offset_x}, {self._client_offset_y})")
+                logger.trace(f"客户区偏移: ({self._client_offset_x}, {self._client_offset_y})")
             else:
                 logger.warning("获取客户区偏移失败（ClientToScreen 返回 False）")
         except Exception as e:
@@ -131,7 +131,7 @@ class ActionExecutor:
         lparam = self._make_lparam(cx, cy)
         hwnd = ctypes.wintypes.HWND(self._hwnd)
         
-        logger.debug(f"后台点击: hwnd={self._hwnd}, 屏幕=({abs_x},{abs_y}), 客户区=({cx},{cy})")
+        logger.trace(f"后台点击: hwnd={self._hwnd}, 屏幕=({abs_x},{abs_y}), 客户区=({cx},{cy})")
         
         # ✅ 使用 SendMessageW（同步消息，参考 qq-farm-copilot）
         user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
@@ -322,7 +322,7 @@ class ActionExecutor:
                 ok = self._click_foreground(target_x, target_y)
 
             if ok:
-                logger.debug(f"点击 ({target_x}, {target_y}) [{'后台' if self.is_background else '前台'}]")
+                logger.trace(f"点击 ({target_x}, {target_y}) [{'后台' if self.is_background else '前台'}]")
             return ok
         except Exception as e:
             logger.error(f"点击失败: {e}")
@@ -378,27 +378,121 @@ class ActionExecutor:
 
     def _pinch_zoom_background(self, abs_x: int, abs_y: int,
                                 delta: int, steps: int) -> bool:
-        """后台模式：Ctrl+鼠标滚轮缩放（通过 PostMessageW 发送 WM_MOUSEWHEEL）"""
+        """后台模式：通过 Windows Touch Injection API 模拟双指缩放。
+
+        需要管理员权限。delta<0 为缩小（双指捏合），delta>0 为放大（双指张开）。
+        """
         if not self._hwnd:
             logger.warning("后台缩放失败：窗口句柄为空")
             return False
 
-        hwnd = ctypes.wintypes.HWND(self._hwnd)
-        client_pos = self._screen_to_client(abs_x, abs_y)
-        if not client_pos:
+        # 检查管理员权限
+        if not ctypes.windll.shell32.IsUserAnAdmin():
+            logger.warning("后台缩放失败：需要管理员权限才能使用触摸注入")
             return False
 
-        # WM_MOUSEWHEEL: wParam 高16位=delta, 低16位=键状态(MK_CONTROL=0x08)
-        # lParam: 低16位=x, 高16位=y (屏幕坐标)
-        MK_CONTROL = 0x0008
+        # 获取窗口屏幕位置
+        pt = ctypes.wintypes.POINT(0, 0)
+        user32.ClientToScreen(ctypes.wintypes.HWND(self._hwnd), ctypes.byref(pt))
 
-        for _ in range(steps):
-            wParam = (delta & 0xFFFF) << 16 | MK_CONTROL
-            lParam = self._make_lparam(*client_pos)
-            user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wParam, lParam)
-            time.sleep(0.05)
+        # 缩放中心屏幕坐标
+        center_sx, center_sy = abs_x, abs_y
+        zoom_out = delta < 0
+        start_dist = 120  # 起始两指间距（像素）
+        end_dist = 30     # 结束两指间距
 
-        logger.debug(f"后台缩放: 客户区({client_pos[0]},{client_pos[1]}), delta={delta}, steps={steps}")
+        if not zoom_out:
+            start_dist, end_dist = end_dist, start_dist
+
+        # 定义触摸注入所需结构体
+        class _POINTER_INFO(ctypes.Structure):
+            _fields_ = [
+                ('pointerType', ctypes.c_ulong),
+                ('pointerId', ctypes.c_uint),
+                ('frameId', ctypes.c_uint),
+                ('pointerFlags', ctypes.c_ulong),
+                ('sourceDevice', ctypes.c_void_p),
+                ('hwndTarget', ctypes.c_void_p),
+                ('ptPixelLocation', ctypes.wintypes.POINT),
+                ('ptHimetricLocation', ctypes.wintypes.POINT),
+                ('ptPixelLocationRaw', ctypes.wintypes.POINT),
+                ('message', ctypes.c_uint),
+                ('time', ctypes.c_ulong),
+                ('historyCount', ctypes.c_uint),
+                ('InputData', ctypes.c_int),
+                ('dwKeyStates', ctypes.c_ulong),
+                ('PerformanceCount', ctypes.c_uint64),
+                ('buttonChangeType', ctypes.c_ulong),
+            ]
+
+        class _POINTER_TOUCH_INFO(ctypes.Structure):
+            _fields_ = [
+                ('pointerInfo', _POINTER_INFO),
+                ('touchFlags', ctypes.c_ulong),
+                ('touchMask', ctypes.c_ulong),
+                ('rcContact', ctypes.wintypes.RECT),
+                ('rcContactRaw', ctypes.wintypes.RECT),
+                ('orientation', ctypes.c_ulong),
+                ('pressure', ctypes.c_ulong),
+            ]
+
+        PT_TOUCH = 2
+        FLAG_DOWN = 0x00010005
+        FLAG_UPDATE = 0x00010006
+        FLAG_UP = 0x00010002
+        MASK_CONTACT = 0x00000001
+
+        def _make(pointer_id, x, y, flags):
+            t = _POINTER_TOUCH_INFO()
+            t.pointerInfo.pointerType = PT_TOUCH
+            t.pointerInfo.pointerId = pointer_id
+            t.pointerInfo.pointerFlags = flags
+            t.pointerInfo.ptPixelLocation = ctypes.wintypes.POINT(x, y)
+            t.touchMask = MASK_CONTACT
+            t.rcContact = ctypes.wintypes.RECT(x - 2, y - 2, x + 2, y + 2)
+            t.pressure = 512
+            return t
+
+        # 初始化触摸注入
+        _user32 = ctypes.WinDLL('user32', use_last_error=True)
+        if not _user32.InitializeTouchInjection(2, 0):
+            logger.warning(f"触摸注入初始化失败: err={ctypes.get_last_error()}")
+            return False
+
+        total_frames = max(steps * 5, 10)
+
+        # DOWN
+        f1x = center_sx - start_dist
+        f2x = center_sx + start_dist
+        contacts = (_POINTER_TOUCH_INFO * 2)(
+            _make(0, f1x, center_sy, FLAG_DOWN),
+            _make(1, f2x, center_sy, FLAG_DOWN),
+        )
+        _user32.InjectTouchInput(2, contacts)
+        time.sleep(0.02)
+
+        # UPDATE：两指逐渐靠近/远离
+        for i in range(1, total_frames + 1):
+            t = i / total_frames
+            dist = start_dist + (end_dist - start_dist) * t
+            f1x = center_sx - dist
+            f2x = center_sx + dist
+            contacts = (_POINTER_TOUCH_INFO * 2)(
+                _make(0, int(f1x), center_sy, FLAG_UPDATE),
+                _make(1, int(f2x), center_sy, FLAG_UPDATE),
+            )
+            _user32.InjectTouchInput(2, contacts)
+            time.sleep(0.016)
+
+        # UP
+        contacts = (_POINTER_TOUCH_INFO * 2)(
+            _make(0, int(f1x), center_sy, FLAG_UP),
+            _make(1, int(f2x), center_sy, FLAG_UP),
+        )
+        _user32.InjectTouchInput(2, contacts)
+
+        direction = '缩小' if zoom_out else '放大'
+        logger.debug(f"触摸缩放({direction}): center=({abs_x},{abs_y}), frames={total_frames}")
         return True
 
     def execute_action(self, action: Action) -> OperationResult:

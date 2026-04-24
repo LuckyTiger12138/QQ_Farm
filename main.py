@@ -1,6 +1,7 @@
 """QQ农场自动化助手 - 程序入口"""
-import sys
 import os
+os.environ['QT_ENABLE_HIGHDPI_SCALING'] = '0'
+import sys
 import time
 import threading
 

@@ -17,6 +17,7 @@ from loguru import logger
 from models.config import AppConfig
 from core.bot_engine import BotEngine
 from core.instance_manager import InstanceManager, InstanceSession
+from core.cross_instance_bus import CrossInstanceBus
 from gui.styles import Colors, GLASS_STYLESHEET, glass_button_style
 from gui.widgets.sidebar import Sidebar
 from gui.widgets.log_panel import LogPanel
@@ -24,6 +25,10 @@ from gui.widgets.status_panel import StatusPanel
 from gui.widgets.settings_panel import SettingsPanel
 from gui.widgets.template_panel import TemplatePanel
 from gui.widgets.instance_sidebar import InstanceSidebar
+from gui.widgets.land_detail_panel import LandDetailPanel
+from gui.widgets.task_panel import TaskPanel
+from gui.widgets.feature_panel import FeaturePanel
+from gui.widgets.global_settings_panel import GlobalSettingsPanel
 from utils.logger import get_log_signal
 
 
@@ -33,7 +38,9 @@ class MainWindow(QMainWindow):
         self.config = config
         self.instance_manager = instance_manager
         self._first_show = True
-        self.engine = BotEngine(config)
+        
+        # 跨实例通讯消息总线（所有引擎共享）
+        self._cross_bus = CrossInstanceBus()
         
         # 多实例支持：instance_id -> BotEngine
         self._engines: dict[str, BotEngine] = {}
@@ -46,7 +53,7 @@ class MainWindow(QMainWindow):
             if active:
                 instance_id = active.instance_id
         
-        self.engine = BotEngine(config, instance_id=instance_id)
+        self.engine = BotEngine(config, instance_id=instance_id, cross_bus=self._cross_bus)
         self._current_instance_id = instance_id
         if instance_manager:
             self._engines[instance_id] = self.engine
@@ -97,18 +104,37 @@ class MainWindow(QMainWindow):
         status_page = self._build_status_page()
         self._stack.addWidget(status_page)
 
-        # 页面 1: 设置页
+        # 页面 1: 地块详情页
+        self._land_panel = LandDetailPanel(self.config)
+        self._land_panel.refresh_requested.connect(self._on_land_refresh_requested)
+        self._stack.addWidget(self._land_panel)
+
+        # 页面 2: 任务调度页
+        self._task_panel = TaskPanel(self.config)
+        self._task_panel.config_changed.connect(self._on_config_changed)
+        self._stack.addWidget(self._task_panel)
+
+        # 页面 3: 功能配置页
+        self._feature_panel = FeaturePanel(self.config)
+        self._feature_panel.config_changed.connect(self._on_config_changed)
+        self._stack.addWidget(self._feature_panel)
+
+        # 页面 4: 设置页
         self._settings_panel = SettingsPanel(self.config)
         self._stack.addWidget(self._settings_panel)
 
-        # 页面 2: 模板管理页
+        # 页面 5: 模板管理页
         self._template_panel = TemplatePanel(self.engine.cv_detector)
         # 设置回调：实时读取当前活跃实例的窗口关键字和选择规则
         self._template_panel._get_window_keyword = self._get_active_window_keyword
         self._template_panel._get_window_select_rule = self._get_active_window_select_rule
         self._stack.addWidget(self._template_panel)
 
-        # 页面 3: 日志页
+        # 页面 6: 全局设置页
+        self._global_panel = GlobalSettingsPanel()
+        self._stack.addWidget(self._global_panel)
+
+        # 页面 7: 日志页
         self._log_panel = LogPanel()
         self._stack.addWidget(self._log_panel)
 
@@ -243,6 +269,7 @@ class MainWindow(QMainWindow):
         self.engine.detection_result.connect(lambda det, iid=engine_id: self._on_screenshot_updated(iid, det))
         self.engine.state_changed.connect(self._on_state_changed)
         self.engine.stats_updated.connect(self._status_panel.update_stats)
+        self.engine.stats_updated.connect(self._on_stats_for_task_panel)
         get_log_signal().new_log.connect(self._log_panel.append_log)
         self._settings_panel.config_changed.connect(self._on_config_changed)
         self._settings_panel.web_server_toggled.connect(self._on_web_server_toggled)
@@ -251,7 +278,7 @@ class MainWindow(QMainWindow):
     # ── 导航切换 ────────────────────────────────────────────
 
     def _on_navigation(self, key: str):
-        page_map = {"status": 0, "settings": 1, "template": 2, "logs": 3}
+        page_map = {"status": 0, "land": 1, "task": 2, "feature": 3, "settings": 4, "template": 5, "global": 6, "logs": 7}
         idx = page_map.get(key, 0)
         self._stack.setCurrentIndex(idx)
 
@@ -276,10 +303,7 @@ class MainWindow(QMainWindow):
     def _on_screenshot_updated(self, instance_id: str, image: Image.Image):
         """截图更新：只显示当前选中实例的截图"""
         if instance_id == self._current_instance_id:
-            logger.debug(f"✓ 截图更新: 实例 {instance_id} (当前选中)")
             self._update_screenshot(image)
-        else:
-            logger.debug(f"✗ 截图忽略: 实例 {instance_id} (当前选中 {self._current_instance_id})")
 
     # ── 控制按钮 ────────────────────────────────────────────
 
@@ -328,8 +352,18 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self):
         """定时刷新状态面板数据"""
-        if self._stack.currentIndex() == 0:
+        idx = self._stack.currentIndex()
+        if idx == 0:
+            # scheduler.get_stats() 已包含 runtime_metrics（由执行器快照回调实时更新）
             self._status_panel.update_stats(self.engine.scheduler.get_stats())
+        # 始终刷新任务调度面板的 next_run（不限制当前页面）
+        if self.engine and self.engine._async_executor:
+            self._task_panel.refresh_snapshots(self.engine._task_snapshots)
+
+    def _on_stats_for_task_panel(self, _stats):
+        """stats_updated 信号触发时同步刷新任务调度面板"""
+        if self.engine and self.engine._task_snapshots:
+            self._task_panel.refresh_snapshots(self.engine._task_snapshots)
 
     def _on_config_changed(self, config: AppConfig):
         """设置面板配置变更时，只更新当前显示的实例"""
@@ -337,12 +371,21 @@ class MainWindow(QMainWindow):
         self.engine.update_config(config)
 
     def _on_config_updated(self, config: AppConfig):
-        """引擎配置更新时同步 GUI（如 Web 端修改配置）"""
+        """引擎配置更新时同步 GUI（如地块巡查完成、Web 端修改配置）"""
         self.config = config
         self._settings_panel.config = config
         self._settings_panel._loading += 1
         self._settings_panel._load_config()
         self._settings_panel._loading -= 1
+        # 刷新地块详情面板
+        self._land_panel.set_config(config)
+
+    def _on_land_refresh_requested(self):
+        """地块详情页「立即刷新」按钮：触发 OCR 识别个人信息"""
+        try:
+            self.engine._sync_head_profile_from_ocr()
+        except Exception:
+            pass
 
     def _on_web_server_toggled(self, start: bool):
         """Web 服务启动/停止"""
@@ -535,7 +578,7 @@ class MainWindow(QMainWindow):
 
         # 获取或创建该实例的 BotEngine
         if instance_id not in self._engines:
-            new_engine = BotEngine(session.config, instance_id=instance_id)
+            new_engine = BotEngine(session.config, instance_id=instance_id, cross_bus=self._cross_bus)
             self._engines[instance_id] = new_engine
             # 连接信号（截图信号使用 instance_id 过滤，只显示当前选中实例）
             new_engine.log_message.connect(self._log_panel.append_log)
@@ -543,6 +586,7 @@ class MainWindow(QMainWindow):
             new_engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
             new_engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
             new_engine.stats_updated.connect(self._status_panel.update_stats)
+            new_engine.stats_updated.connect(self._on_stats_for_task_panel)
             new_engine.config_updated.connect(self._on_config_updated)
             logger.info(f"已创建实例 {instance_id} 的 BotEngine，window_select_rule={session.config.window_select_rule}")
         else:
@@ -578,6 +622,15 @@ class MainWindow(QMainWindow):
         self._template_panel._window_keyword = session.config.window_title_keyword or "QQ经典农场"
         self._template_panel._load_templates()
 
+        # 更新地块详情面板
+        self._land_panel.set_config(session.config)
+
+        # 更新任务调度面板
+        self._task_panel.set_config(session.config)
+
+        # 更新功能配置面板
+        self._feature_panel.set_config(session.config)
+
         # 更新实例侧边栏高亮
         self._instance_sidebar.set_active_instance(instance_id)
 
@@ -604,7 +657,7 @@ class MainWindow(QMainWindow):
         """获取或创建实例的 BotEngine"""
         instance_id = session.instance_id
         if instance_id not in self._engines:
-            engine = BotEngine(session.config, instance_id=instance_id)
+            engine = BotEngine(session.config, instance_id=instance_id, cross_bus=self._cross_bus)
             self._engines[instance_id] = engine
             # 连接信号（截图信号使用 instance_id 过滤，只显示当前选中实例）
             engine.log_message.connect(self._log_panel.append_log)
@@ -612,6 +665,7 @@ class MainWindow(QMainWindow):
             engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
             engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
             engine.stats_updated.connect(self._status_panel.update_stats)
+            engine.stats_updated.connect(self._on_stats_for_task_panel)
             engine.config_updated.connect(self._on_config_updated)
         return self._engines[instance_id]
 

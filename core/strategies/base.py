@@ -6,12 +6,17 @@ from models.farm_state import Action, ActionType
 from core.cv_detector import CVDetector, DetectResult
 
 
+# 默认精简尺度集合（只检测 3 个尺度，比全量检测 5 个尺度更快）
+SCALES_FAST = [1.0, 0.9, 1.1]
+
+
 class BaseStrategy:
     def __init__(self, cv_detector: CVDetector):
         self.cv_detector = cv_detector
         self.action_executor = None
         self._capture_fn = None
         self._stop_requested = False
+        self.navigator = None
 
     def set_capture_fn(self, fn):
         self._capture_fn = fn
@@ -24,6 +29,42 @@ class BaseStrategy:
         if self._capture_fn:
             return self._capture_fn(rect, save=False)
         return None, [], None
+
+    def quick_capture(self, rect: tuple):
+        """快速截屏，只返回 cv_img"""
+        if self._capture_fn:
+            cv_img, _, _ = self._capture_fn(rect, save=False)
+            return cv_img
+        return None
+
+    def quick_detect(self, rect: tuple, names: list[str],
+                     thresholds: dict[str, float] | None = None,
+                     scales: list[float] | None = None,
+                     roi_map: dict[str, tuple[int, int, int, int]] | None = None) -> tuple:
+        """快速截屏 + 按需检测指定模板
+        
+        Args:
+            rect: 窗口区域
+            names: 要检测的模板名列表
+            thresholds: 单模板阈值覆盖
+            scales: 自定义尺度集合，默认 [1.0, 0.9, 1.1]
+            roi_map: ROI 区域映射 {template_name: (x1, y1, x2, y2)}
+        
+        Returns:
+            tuple: (cv_img, detections)
+        """
+        cv_img = self.quick_capture(rect)
+        if cv_img is None:
+            return None, []
+        
+        detections = self.cv_detector.detect_targeted(
+            cv_img,
+            names=names,
+            thresholds=thresholds,
+            scales=scales or SCALES_FAST,
+            roi_map=roi_map
+        )
+        return cv_img, detections
 
     def click(self, x: int, y: int, desc: str = "",
               action_type: str = ActionType.NAVIGATE) -> bool:

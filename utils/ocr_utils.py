@@ -48,6 +48,7 @@ class OCRTool:
         self,
         bgr: np.ndarray,
         *,
+        region: tuple[int, int, int, int] | None = None,
         scale: float = 1.0,
         alpha: float = 1.0,
         beta: float = 0.0,
@@ -56,17 +57,29 @@ class OCRTool:
 
         Args:
             bgr: OpenCV BGR image.
+            region: optional ROI (x1, y1, x2, y2) in original coordinates.
             scale: resize factor before OCR.
             alpha/beta: brightness/contrast adjustment.
 
         Returns:
             List of OCRItem with boxes mapped back to original image coordinates.
         """
-        if scale == 1.0 and alpha == 1.0 and beta == 0.0:
-            proc = bgr
-        else:
-            h, w = bgr.shape[:2]
-            proc = cv2.resize(bgr, (int(w * scale), int(h * scale)))
+        offset_x, offset_y = 0, 0
+        proc = bgr
+        if region is not None:
+            h, w = proc.shape[:2]
+            x1, y1, x2, y2 = region
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            proc = proc[y1:y2, x1:x2]
+            offset_x, offset_y = x1, y1
+
+        if scale != 1.0 or alpha != 1.0 or beta != 0.0:
+            sh, sw = proc.shape[:2]
+            proc = cv2.resize(proc, (int(sw * scale), int(sh * scale)),
+                              interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA)
             if alpha != 1.0 or beta != 0.0:
                 proc = cv2.convertScaleAbs(proc, alpha=alpha, beta=beta)
 
@@ -75,11 +88,14 @@ class OCRTool:
             return []
 
         items: list[OCRItem] = []
+        inv = 1.0 / scale if scale != 0 else 1.0
         for line in raw:
             box_raw = line[0]  # list of 4 points
             text = line[1]
             score = line[2]
             mapped_box = self._rescale_box(box_raw, scale)
+            # offset back to original image coordinates
+            mapped_box = [(p[0] + offset_x, p[1] + offset_y) for p in mapped_box]
             items.append(OCRItem(box=mapped_box, text=str(text), score=float(score)))
         return items
 

@@ -1,1278 +1,646 @@
-"""设置面板 — 现代卡片式布局，实时生效"""
-import os
+"""Fluent 设置面板 — 卡片式布局，实时生效，深色主题自适应。"""
+
+from __future__ import annotations
+
 import ctypes
+import os
+import pathlib
+
 import pygetwindow as gw
+from PyQt6.QtCore import QTime, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QSpinBox, QCheckBox, QComboBox,
-    QFrame, QFormLayout, QGridLayout, QPushButton,
-    QFileDialog, QScrollArea, QTimeEdit,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QSizePolicy,
+    QTimeEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import QTime
-from PyQt6.QtCore import pyqtSignal, Qt
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    CheckBox,
+    ComboBox,
+    DoubleSpinBox,
+    LineEdit,
+    PushButton,
+    ScrollArea,
+    SpinBox,
+)
 
-from models.config import AppConfig, PlantMode, RunMode, SellMode, WindowPosition
-from models.game_data import CROPS, get_crop_names, format_grow_time, get_best_crop_for_level
 from gui.styles import Colors
-
-
-class FriendSettingsWidget(QFrame):
-    """好友操作设置"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._loading = True
-        self._init_ui()
-        self._loading = False
-
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        # 4个独立开关
-        self._cb_steal = QCheckBox("👀 偷菜")
-        self._cb_weed = QCheckBox("🌿 除草")
-        self._cb_water = QCheckBox("💧 浇水")
-        self._cb_bug = QCheckBox("🐛 除虫")
-
-        for cb in [self._cb_steal, self._cb_weed, self._cb_water, self._cb_bug]:
-            cb.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {Colors.TEXT};
-                    font-size: 13px;
-                    spacing: 6px;
-                }}
-                QCheckBox::indicator {{
-                    width: 18px; height: 18px;
-                    border: 1.5px solid rgba(0, 0, 0, 30);
-                    border-radius: 4px;
-                    background: {Colors.INPUT_BG};
-                }}
-                QCheckBox::indicator:checked {{
-                    background: {Colors.PRIMARY};
-                    border-color: {Colors.PRIMARY};
-                    image: url(gui/icons/check.svg);
-                }}
-            """)
-
-        # 偷菜次数上限
-        max_steal_row = QHBoxLayout()
-        max_steal_row.setSpacing(8)
-        max_steal_label = QLabel("每轮偷菜上限")
-        max_steal_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
-        max_steal_row.addWidget(max_steal_label)
-
-        self._max_steal_spin = QSpinBox()
-        self._max_steal_spin.setRange(0, 100)
-        self._max_steal_spin.setSpecialValueText("无限制")
-        self._max_steal_spin.setFixedWidth(100)
-        self._max_steal_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-        """)
-        max_steal_row.addWidget(self._max_steal_spin)
-        max_steal_row.addStretch()
-
-        layout.addWidget(self._cb_steal)
-        layout.addWidget(self._cb_weed)
-        layout.addWidget(self._cb_water)
-        layout.addWidget(self._cb_bug)
-        layout.addLayout(max_steal_row)
-
-    def get_enable_steal(self) -> bool:
-        return self._cb_steal.isChecked()
-
-    def get_enable_weed(self) -> bool:
-        return self._cb_weed.isChecked()
-
-    def get_enable_water(self) -> bool:
-        return self._cb_water.isChecked()
-
-    def get_enable_bug(self) -> bool:
-        return self._cb_bug.isChecked()
-
-    def get_max_steal(self) -> int:
-        return self._max_steal_spin.value()
-
-    def set_enable_steal(self, val: bool):
-        self._cb_steal.setChecked(val)
-
-    def set_enable_weed(self, val: bool):
-        self._cb_weed.setChecked(val)
-
-    def set_enable_water(self, val: bool):
-        self._cb_water.setChecked(val)
-
-    def set_enable_bug(self, val: bool):
-        self._cb_bug.setChecked(val)
-
-    def set_max_steal(self, val: int):
-        self._max_steal_spin.setValue(val)
-
-    def connect_changed(self, callback):
-        for cb in [self._cb_steal, self._cb_weed, self._cb_water, self._cb_bug]:
-            cb.toggled.connect(callback)
-        self._max_steal_spin.valueChanged.connect(callback)
-
-
-class SilentHoursWidget(QFrame):
-    """静默时段设置"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._loading = True
-        self._init_ui()
-        self._loading = False
-
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-
-        # 启用开关
-        self._cb_enabled = QCheckBox("启用静默时段")
-        self._cb_enabled.setStyleSheet(f"""
-            QCheckBox {{
-                color: {Colors.TEXT};
-                font-size: 13px;
-                font-weight: 600;
-                spacing: 8px;
-            }}
-            QCheckBox::indicator {{
-                width: 18px; height: 18px;
-                border: 1.5px solid rgba(0, 0, 0, 30);
-                border-radius: 5px;
-                background: {Colors.INPUT_BG};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {Colors.PRIMARY};
-                border-color: {Colors.PRIMARY};
-                image: url(gui/icons/check.svg);
-            }}
-        """)
-        layout.addWidget(self._cb_enabled)
-
-        # 时间行
-        time_row = QHBoxLayout()
-        time_row.setSpacing(10)
-
-        start_label = QLabel("开始")
-        start_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none;")
-        time_row.addWidget(start_label)
-
-        from PyQt6.QtCore import QTime
-        self._start_time = QTimeEdit()
-        self._start_time.setDisplayFormat("HH:mm")
-        self._start_time.setTime(QTime(2, 0))
-        self._start_time.setFixedWidth(95)
-        time_row.addWidget(self._start_time)
-
-        end_label = QLabel("结束")
-        end_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none;")
-        time_row.addWidget(end_label)
-
-        self._end_time = QTimeEdit()
-        self._end_time.setDisplayFormat("HH:mm")
-        self._end_time.setTime(QTime(6, 0))
-        self._end_time.setFixedWidth(95)
-        time_row.addWidget(self._end_time)
-
-        time_row.addStretch()
-        layout.addLayout(time_row)
-
-    def get_enabled(self) -> bool:
-        return self._cb_enabled.isChecked()
-
-    def get_start_hour(self) -> int:
-        return self._start_time.time().hour()
-
-    def get_start_minute(self) -> int:
-        return self._start_time.time().minute()
-
-    def get_end_hour(self) -> int:
-        return self._end_time.time().hour()
-
-    def get_end_minute(self) -> int:
-        return self._end_time.time().minute()
-
-    def set_enabled_state(self, val: bool):
-        self._cb_enabled.setChecked(val)
-
-    def set_start_time(self, hour: int, minute: int):
-        from PyQt6.QtCore import QTime
-        self._start_time.setTime(QTime(hour, minute))
-
-    def set_end_time(self, hour: int, minute: int):
-        from PyQt6.QtCore import QTime
-        self._end_time.setTime(QTime(hour, minute))
-
-    def connect_changed(self, callback):
-        self._cb_enabled.toggled.connect(callback)
-        self._start_time.timeChanged.connect(callback)
-        self._end_time.timeChanged.connect(callback)
-
-
-class WebServerWidget(QFrame):
-    """Web 服务设置"""
-    web_server_toggled = pyqtSignal(bool)  # True=启动, False=停止
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._loading = True
-        self._init_ui()
-        self._loading = False
-
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-
-        # 状态行 + 启停按钮
-        ctrl_row = QHBoxLayout()
-        ctrl_row.setSpacing(10)
-
-        self._status_label = QLabel("● 已停止")
-        self._status_label.setStyleSheet(
-            f"color: {Colors.TEXT_DIM}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
-        )
-        ctrl_row.addWidget(self._status_label)
-
-        self._toggle_btn = QPushButton("启动")
-        self._toggle_btn.setFixedWidth(80)
-        self._toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Colors.SUCCESS};
-                border: none;
-                border-radius: 8px;
-                color: #FFFFFF;
-                padding: 6px 14px;
-                font-weight: 600;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: #2db84e;
-            }}
-            QPushButton:pressed {{
-                background-color: #27a544;
-            }}
-        """)
-        self._toggle_btn.clicked.connect(self._on_toggle)
-        ctrl_row.addWidget(self._toggle_btn)
-        ctrl_row.addStretch()
-        layout.addLayout(ctrl_row)
-
-        # 地址和端口行
-        addr_row = QHBoxLayout()
-        addr_row.setSpacing(8)
-
-        host_label = QLabel("地址")
-        host_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
-        addr_row.addWidget(host_label)
-
-        self._host_edit = QLineEdit()
-        self._host_edit.setText("0.0.0.0")
-        self._host_edit.setFixedWidth(120)
-        self._host_edit.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-        """)
-        addr_row.addWidget(self._host_edit)
-
-        port_label = QLabel("端口")
-        port_label.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12px; background: transparent; border: none;")
-        addr_row.addWidget(port_label)
-
-        self._port_spin = QSpinBox()
-        self._port_spin.setRange(1024, 65535)
-        self._port_spin.setValue(8080)
-        self._port_spin.setFixedWidth(80)
-        self._port_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-        """)
-        addr_row.addWidget(self._port_spin)
-        addr_row.addStretch()
-
-        layout.addLayout(addr_row)
-
-    def _on_toggle(self):
-        """点击启动/停止按钮"""
-        from loguru import logger
-        new_state = not self._is_running()
-        logger.info(f"WebServerWidget._on_toggle: new_state={new_state}, _is_running={self._is_running()}")
-        logger.info(f"准备发射 web_server_toggled 信号...")
-        self.web_server_toggled.emit(new_state)
-        logger.info(f"web_server_toggled 信号已发射")
-        self._update_ui(new_state)
-
-    def _is_running(self) -> bool:
-        return self._toggle_btn.text() == "停止"
-
-    def _update_ui(self, running: bool):
-        if running:
-            self._status_label.setText("● 运行中")
-            self._status_label.setStyleSheet(
-                f"color: {Colors.SUCCESS}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
-            )
-            self._toggle_btn.setText("停止")
-            self._toggle_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {Colors.DANGER};
-                    border: none;
-                    border-radius: 8px;
-                    color: #FFFFFF;
-                    padding: 6px 14px;
-                    font-weight: 600;
-                    font-size: 12px;
-                }}
-                QPushButton:hover {{
-                    background-color: #d62f26;
-                }}
-            """)
-            self._host_edit.setEnabled(False)
-            self._port_spin.setEnabled(False)
-        else:
-            self._status_label.setText("● 已停止")
-            self._status_label.setStyleSheet(
-                f"color: {Colors.TEXT_DIM}; font-size: 13px; font-weight: 600; background: transparent; border: none;"
-            )
-            self._toggle_btn.setText("启动")
-            self._toggle_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {Colors.SUCCESS};
-                    border: none;
-                    border-radius: 8px;
-                    color: #FFFFFF;
-                    padding: 6px 14px;
-                    font-weight: 600;
-                    font-size: 12px;
-                }}
-                QPushButton:hover {{
-                    background-color: #2db84e;
-                }}
-                QPushButton:pressed {{
-                    background-color: #27a544;
-                }}
-            """)
-            self._host_edit.setEnabled(True)
-            self._port_spin.setEnabled(True)
-
-    def get_enabled(self) -> bool:
-        return self._is_running()
-
-    def get_host(self) -> str:
-        return self._host_edit.text().strip()
-
-    def get_port(self) -> int:
-        return self._port_spin.value()
-
-    def set_enabled_state(self, val: bool):
-        """从配置加载时设置 UI 状态"""
-        self._loading = True
-        self._update_ui(val)
-        self._loading = False
-
-    def set_host(self, val: str):
-        self._host_edit.setText(val)
-
-    def set_port(self, val: int):
-        self._port_spin.setValue(val)
-
-    def connect_changed(self, callback):
-        """地址/端口变化时触发保存（不包含按钮）"""
-        self._host_edit.editingFinished.connect(callback)
-        self._port_spin.valueChanged.connect(callback)
-
-
-class SellStrategyWidget(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._loading = True
-        self._crop_cbs: dict[str, QCheckBox] = {}
-        self._init_ui()
-
-    def _init_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(8)
-
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(10)
-
-        mode_label = QLabel("出售模式")
-        mode_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent; border: none; min-width: 80px;")
-        mode_row.addWidget(mode_label)
-
-        self._sell_mode_combo = QComboBox()
-        self._sell_mode_combo.addItem("批量全部出售", SellMode.BATCH_ALL.value)
-        self._sell_mode_combo.addItem("选择性出售", SellMode.SELECTIVE.value)
-        self._sell_mode_combo.setFixedWidth(140)
-        mode_row.addWidget(self._sell_mode_combo)
-        mode_row.addStretch()
-        main_layout.addLayout(mode_row)
-
-        self._sell_options = QFrame()
-        self._sell_options.setStyleSheet(f"""
-            QFrame {{
-                background-color: rgba(0, 0, 0, 4);
-                border-radius: 10px;
-            }}
-        """)
-        options_layout = QVBoxLayout(self._sell_options)
-        options_layout.setContentsMargins(10, 10, 10, 10)
-        options_layout.setSpacing(4)
-
-        select_all_row = QHBoxLayout()
-        self._cb_select_all = QCheckBox("全选")
-        self._cb_select_all.setStyleSheet(f"""
-            QCheckBox {{
-                color: {Colors.PRIMARY};
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            QCheckBox::indicator {{
-                width: 16px; height: 16px;
-                border: 1.5px solid {Colors.PRIMARY};
-                border-radius: 4px;
-                background: {Colors.INPUT_BG};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {Colors.PRIMARY};
-                border-color: {Colors.PRIMARY};
-                image: url(gui/icons/check.svg);
-            }}
-        """)
-        self._cb_select_all.toggled.connect(self._on_select_all)
-        select_all_row.addWidget(self._cb_select_all)
-        select_all_row.addStretch()
-        options_layout.addLayout(select_all_row)
-
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        for i, (name, _, req_level, _, _, _) in enumerate(CROPS):
-            cb = QCheckBox(f"{name}")
-            cb.setToolTip(f"需要等级: Lv{req_level}")
-            cb.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {Colors.TEXT};
-                    font-size: 11px;
-                    spacing: 4px;
-                }}
-                QCheckBox::indicator {{
-                    width: 14px; height: 14px;
-                    border: 1.5px solid rgba(0, 0, 0, 30);
-                    border-radius: 3px;
-                    background: {Colors.INPUT_BG};
-                }}
-                QCheckBox::indicator:checked {{
-                    background: {Colors.PRIMARY};
-                    border-color: {Colors.PRIMARY};
-                    image: url(gui/icons/check.svg);
-                }}
-            """)
-            self._crop_cbs[name] = cb
-            grid.addWidget(cb, i // 5, i % 5)
-        options_layout.addLayout(grid)
-
-        main_layout.addWidget(self._sell_options)
-
-        self._sell_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        self._on_mode_changed(0)
-        self._loading = False
-
-    def _on_mode_changed(self, index: int):
-        is_selective = self._sell_mode_combo.itemData(index) == SellMode.SELECTIVE.value
-        self._sell_options.setVisible(is_selective)
-
-    def _on_select_all(self, checked: bool):
-        self._loading = True
-        for cb in self._crop_cbs.values():
-            cb.setChecked(checked)
-        self._loading = False
-
-    def get_mode(self) -> SellMode:
-        return SellMode(self._sell_mode_combo.currentData())
-
-    def get_sell_crops(self) -> list[str]:
-        return [name for name, cb in self._crop_cbs.items() if cb.isChecked()]
-
-    def set_mode(self, mode: SellMode):
-        idx = 0 if mode == SellMode.BATCH_ALL else 1
-        self._sell_mode_combo.setCurrentIndex(idx)
-
-    def set_sell_crops(self, crops: list[str]):
-        self._loading = True
-        for name, cb in self._crop_cbs.items():
-            cb.setChecked(name in crops)
-        self._loading = False
-
-    def connect_mode_changed(self, callback):
-        self._sell_mode_combo.currentIndexChanged.connect(callback)
-
-    def connect_crops_changed(self, callback):
-        for cb in self._crop_cbs.values():
-            cb.toggled.connect(callback)
-        self._cb_select_all.toggled.connect(callback)
-from gui.styles import Colors
-
-
-class SettingRow(QFrame):
-    def __init__(self, icon: str, title: str, widget: QWidget, parent=None):
-        super().__init__(parent)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.CARD_BG};
-                border: none;
-                border-bottom: 1px solid {Colors.BORDER};
-            }}
-            QFrame:last-child {{
-                border-bottom: none;
-            }}
-        """)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
-
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet("font-size: 18px; background: transparent; border: none;")
-        layout.addWidget(icon_lbl)
-
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"""
-            color: {Colors.TEXT}; font-size: 13px;
-            background: transparent; border: none;
-        """)
-        layout.addWidget(title_lbl)
-        layout.addStretch()
-
-        widget.setStyleSheet(f"""
-            background-color: {Colors.INPUT_BG};
-            border: 1px solid {Colors.BORDER};
-            border-radius: 8px;
-            padding: 5px 10px;
-            color: {Colors.TEXT};
-            min-height: 22px;
-        """)
-        layout.addWidget(widget)
-
-
-class SettingCard(QFrame):
-    def __init__(self, icon: str, title: str, subtitle: str, content_widget: QWidget, parent=None):
-        super().__init__(parent)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 14px;
-            }}
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        header = QHBoxLayout()
-        header.setContentsMargins(16, 14, 16, 4)
-        header.setSpacing(12)
-
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet("font-size: 20px; background: transparent; border: none;")
-        header.addWidget(icon_lbl)
-
-        info = QVBoxLayout()
-        info.setSpacing(2)
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"""
-            color: {Colors.TEXT}; font-size: 14px; font-weight: 600;
-            background: transparent; border: none;
-        """)
-        info.addWidget(title_lbl)
-
-        if subtitle:
-            sub_lbl = QLabel(subtitle)
-            sub_lbl.setStyleSheet(f"""
-                color: {Colors.TEXT_DIM}; font-size: 11px;
-                background: transparent; border: none;
-            """)
-            info.addWidget(sub_lbl)
-
-        header.addLayout(info)
-        header.addStretch()
-        layout.addLayout(header)
-
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(16, 4, 16, 14)
-        content_layout.setSpacing(8)
-        content_layout.addWidget(content_widget)
-        layout.addLayout(content_layout)
-
-
-class ToggleGrid(QFrame):
-    def __init__(self, items: list[tuple[str, str]], parent=None):
-        super().__init__(parent)
-        self._checkboxes = {}
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(6)
-
-        for i, (icon, label_text) in enumerate(items):
-            cb = QCheckBox(f" {icon} {label_text}")
-            cb.setStyleSheet(f"""
-                QCheckBox {{
-                    color: {Colors.TEXT};
-                    font-size: 12px;
-                    spacing: 4px;
-                }}
-                QCheckBox::indicator {{
-                    width: 16px; height: 16px;
-                    border: 1.5px solid rgba(0, 0, 0, 30);
-                    border-radius: 4px;
-                    background: {Colors.INPUT_BG};
-                }}
-                QCheckBox::indicator:checked {{
-                    background: {Colors.PRIMARY};
-                    border-color: {Colors.PRIMARY};
-                    image: url(gui/icons/check.svg);
-                }}
-            """)
-            self._checkboxes[label_text] = cb
-            grid.addWidget(cb, i // 4, i % 4)
-
-    def get_checkbox(self, name: str) -> QCheckBox:
-        return self._checkboxes[name]
+from gui.widgets.fluent_container import StableElevatedCardWidget, TransparentCardContainer
+from models.config import AppConfig, PlantMode, RunMode, SellMode, WindowPosition, CrossInstancePartnerConfig
+from models.game_data import CROPS, format_grow_time, get_best_crop_for_level, get_crop_names
 
 
 class SettingsPanel(QWidget):
+    """实例设置编辑面板 — 卡片式分组布局。"""
+
     config_changed = pyqtSignal(object)
-    web_server_toggled = pyqtSignal(bool)  # 转发 WebServerWidget 的启停信号
+    web_server_toggled = pyqtSignal(bool)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         self.config = config
-        self._loading = 0  # 引用计数，支持嵌套保护
+        self._crop_names = get_crop_names()
+        self._loading = 0
         self._init_ui()
         self._load_config()
-        self._connect_auto_save()
+        self._connect_signals()
         self._loading = False
 
+    # ── UI 构建 ────────────────────────────────────────────────
+
     def _init_ui(self):
-        scroll = QScrollArea()
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        scroll = ScrollArea(self)
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("background: transparent; border: none;")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll)
 
-        container = QWidget()
-        container.setStyleSheet("background: transparent; border: none;")
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        content = TransparentCardContainer(self)
+        scroll.setWidget(content)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll.viewport().setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
 
-        # ── 顶部标题 ──
-        header = QHBoxLayout()
-        title = QLabel("参数设置")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT}; font-size: 20px; font-weight: 700;
-            background: transparent; border: none;
-        """)
-        header.addWidget(title)
-        header.addStretch()
-        layout.addLayout(header)
-
-        # ===== 种植设置卡片 =====
-        plant_widget = QWidget()
-        plant_layout = QVBoxLayout(plant_widget)
-        plant_layout.setContentsMargins(0, 0, 0, 0)
-        plant_layout.setSpacing(0)
-
-        self._player_level = QSpinBox()
-        self._player_level.setRange(1, 100)
-        self._player_level.setFixedWidth(80)
-        self._player_level.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-            QSpinBox:focus {{
-                border-color: {Colors.BORDER_FOCUS};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background: transparent; border: none;
-            }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background: rgba(0, 122, 255, 10);
-            }}
-        """)
-
-        self._strategy_combo = QComboBox()
-        self._strategy_combo.addItem("自动最优", PlantMode.BEST_EXP_RATE.value)
-        self._strategy_combo.addItem("手动指定", PlantMode.PREFERRED.value)
-        self._strategy_combo.setFixedWidth(120)
-
-        self._auto_crop_label = QLabel()
-        self._auto_crop_label.setStyleSheet(
-            f"color: {Colors.SUCCESS}; font-weight: 600; font-size: 12px; background: transparent; border: none;"
-        )
-
-        self._crop_combo = QComboBox()
-        self._crop_names = get_crop_names()
-
-        level_row = QHBoxLayout()
-        level_row.addWidget(QLabel("等级"))
-        level_row.addWidget(self._player_level)
-        level_row.addStretch()
-        level_row.addWidget(QLabel("策略"))
-        level_row.addWidget(self._strategy_combo)
-
-        plant_layout.addWidget(self._make_row("🌱", "种植策略", level_row))
-        plant_layout.addWidget(self._make_row("✨", "推荐作物", self._auto_crop_label))
-        plant_layout.addWidget(self._make_row("🌾", "指定作物", self._crop_combo))
-
-        self._player_level.valueChanged.connect(self._on_level_changed)
-        self._player_level.valueChanged.connect(self._update_auto_crop_label)
-        self._strategy_combo.currentIndexChanged.connect(self._on_strategy_changed)
-
-        plant_card = SettingCard("🌿", "种植", "等级、策略与作物选择", plant_widget)
+        # ── 种植卡片 ──
+        plant_card, plant_form = self._build_group_card(content, "种植", "settingsPlantCard")
         layout.addWidget(plant_card)
 
-        # ===== 功能开关卡片 =====
-        toggle_items = [
-            ("🌾", "收获"), ("🌱", "播种"), ("💊", "施肥"), ("🛒", "买种"),
-            ("💧", "浇水"), ("🌿", "除草"), ("🐛", "除虫"), ("💰", "出售"),
-            ("🎯", "任务"), ("🔨", "扩建"), ("🔐", "重登"),
-        ]
-        self._toggle_grid = ToggleGrid(toggle_items)
+        level_row = QWidget(plant_card)
+        level_layout = QHBoxLayout(level_row)
+        level_layout.setContentsMargins(0, 0, 0, 0)
+        level_layout.setSpacing(8)
+        self.level = SpinBox(plant_card)
+        self.level.setRange(1, 100)
+        level_layout.addWidget(self.level)
+        self.level_ocr = CheckBox("OCR同步", plant_card)
+        level_layout.addWidget(self.level_ocr)
+        level_layout.addStretch()
+        plant_form.addRow(self._field_label("等级", plant_card), level_row)
 
-        feat_card = SettingCard("⚙️", "功能开关", "选择需要自动执行的操作", self._toggle_grid)
-        layout.addWidget(feat_card)
+        self.strategy = ComboBox(plant_card)
+        self.strategy.addItem("自动最新", userData=PlantMode.LATEST_LEVEL.value)
+        self.strategy.addItem("自动最优", userData=PlantMode.BEST_EXP_RATE.value)
+        self.strategy.addItem("手动指定", userData=PlantMode.PREFERRED.value)
+        plant_form.addRow(self._field_label("播种策略", plant_card), self.strategy)
 
-        # ===== 好友操作设置卡片 =====
-        self._friend_widget = FriendSettingsWidget()
-        friend_card = SettingCard("👥", "好友操作", "偷菜/帮忙独立开关与次数限制", self._friend_widget)
-        layout.addWidget(friend_card)
+        self.auto_crop_label = CaptionLabel("", plant_card)
+        self.auto_crop_label.setStyleSheet("color: #16a34a; font-weight: 600;")
+        plant_form.addRow(self._field_label("推荐作物", plant_card), self.auto_crop_label)
 
-        # ===== 出售策略卡片 =====
-        self._sell_widget = SellStrategyWidget()
-        sell_card = SettingCard("💰", "出售策略", "出售模式与作物选择", self._sell_widget)
+        self.crop = ComboBox(plant_card)
+        plant_form.addRow(self._field_label("指定作物", plant_card), self.crop)
+
+        self.warehouse_first = CheckBox("仓库优先", plant_card)
+        warehouse_tip = CaptionLabel("建议开启，关闭后可能会因种子模板识别出错导致重复购买。", plant_card)
+        warehouse_tip.setWordWrap(True)
+        warehouse_tip.setStyleSheet("color: #d97706;")
+        plant_form.addRow(self._field_label("播种", plant_card), self.warehouse_first)
+        plant_form.addRow(self._field_label("", plant_card), warehouse_tip)
+        self.skip_event_crops = CheckBox("排除活动作物", plant_card)
+        plant_form.addRow(self._field_label("其他设置", plant_card), self.skip_event_crops)
+
+        # ── 窗口与环境卡片 ──
+        env_card, env_form = self._build_group_card(content, "窗口与环境", "settingsEnvCard")
+        layout.addWidget(env_card)
+
+        self.window_keyword = LineEdit(env_card)
+        self.window_keyword.setPlaceholderText("窗口标题关键字")
+        env_form.addRow(self._field_label("窗口关键词", env_card), self.window_keyword)
+
+        select_row = QWidget(env_card)
+        select_layout = QHBoxLayout(select_row)
+        select_layout.setContentsMargins(0, 0, 0, 0)
+        select_layout.setSpacing(8)
+        self.window_select = ComboBox(select_row)
+        select_layout.addWidget(self.window_select, 1)
+        self.refresh_btn = PushButton("刷新", select_row)
+        self.refresh_btn.setFixedWidth(64)
+        select_layout.addWidget(self.refresh_btn)
+        env_form.addRow(self._field_label("选择窗口", env_card), select_row)
+
+        select_tip = CaptionLabel("自动模式按平台匹配；手动模式指定窗口索引。", env_card)
+        select_tip.setWordWrap(True)
+        select_tip.setStyleSheet("color: #64748b;")
+        env_form.addRow(self._field_label("", env_card), select_tip)
+
+        self.run_mode = ComboBox(env_card)
+        self.run_mode.addItem("后台模式（窗口可遮挡）", userData=RunMode.BACKGROUND.value)
+        self.run_mode.addItem("前台模式（需窗口置顶）", userData=RunMode.FOREGROUND.value)
+        env_form.addRow(self._field_label("运行方式", env_card), self.run_mode)
+
+        self.window_position = ComboBox(env_card)
+        self.window_position.addItem("左下角", userData=WindowPosition.BOTTOM_LEFT.value)
+        self.window_position.addItem("左上角", userData=WindowPosition.TOP_LEFT.value)
+        self.window_position.addItem("右下角", userData=WindowPosition.BOTTOM_RIGHT.value)
+        self.window_position.addItem("右上角", userData=WindowPosition.TOP_RIGHT.value)
+        self.window_position.addItem("居中", userData=WindowPosition.CENTER.value)
+        env_form.addRow(self._field_label("窗口位置", env_card), self.window_position)
+
+        self.game_shortcut = LineEdit(env_card)
+        self.game_shortcut.setPlaceholderText("QQ 农场小程序快捷方式路径...")
+        shortcut_row = QWidget(env_card)
+        shortcut_layout = QHBoxLayout(shortcut_row)
+        shortcut_layout.setContentsMargins(0, 0, 0, 0)
+        shortcut_layout.setSpacing(8)
+        shortcut_layout.addWidget(self.game_shortcut, 1)
+        self.browse_btn = PushButton("浏览...", shortcut_row)
+        self.browse_btn.setFixedWidth(70)
+        shortcut_layout.addWidget(self.browse_btn)
+        env_form.addRow(self._field_label("游戏路径", env_card), shortcut_row)
+
+        # ── 出售卡片 ──
+        sell_card, sell_form = self._build_group_card(content, "出售策略", "settingsSellCard")
         layout.addWidget(sell_card)
 
-        # ===== 其他设置卡片 =====
-        misc_widget = QWidget()
-        misc_layout = QVBoxLayout(misc_widget)
-        misc_layout.setContentsMargins(0, 0, 0, 0)
-        misc_layout.setSpacing(0)
+        self.sell_mode = ComboBox(sell_card)
+        self.sell_mode.addItem("批量全部出售", userData=SellMode.BATCH_ALL.value)
+        self.sell_mode.addItem("选择性出售", userData=SellMode.SELECTIVE.value)
+        sell_form.addRow(self._field_label("出售模式", sell_card), self.sell_mode)
 
-        self._window_keyword = QLineEdit()
-        self._window_keyword.setPlaceholderText("QQ农场")
+        self._sell_crop_cbs: dict[str, CheckBox] = {}
+        sell_crops_row = QWidget(sell_card)
+        sell_crops_layout = QVBoxLayout(sell_crops_row)
+        sell_crops_layout.setContentsMargins(0, 0, 0, 0)
+        sell_crops_layout.setSpacing(4)
+        for name, _, req_level, _, _, _ in CROPS:
+            cb = CheckBox(f"{name} (Lv{req_level})", sell_crops_row)
+            self._sell_crop_cbs[name] = cb
+            sell_crops_layout.addWidget(cb)
+        self.sell_crops_container = sell_crops_row
+        sell_form.addRow(self._field_label("出售作物", sell_card), sell_crops_row)
 
-        # 窗口选择下拉框
-        self._window_select = QComboBox()
-        self._window_select.setFixedWidth(280)
-        self._window_select_refresh = QPushButton('刷新')
-        self._window_select_refresh.setObjectName('windowSelectRefreshButton')
-        self._window_select_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._window_select_refresh.setFixedWidth(64)
-        self._window_select_refresh.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: 1px solid {Colors.BORDER};
-                color: {Colors.TEXT};
-                border-radius: 6px;
-                font-size: 12px;
-                padding: 4px 8px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(0, 122, 255, 10);
-                border-color: {Colors.PRIMARY};
-            }}
-        """)
-
-        self._game_shortcut = QLineEdit()
-        self._game_shortcut.setPlaceholderText("选择 QQ 农场小程序快捷方式...")
-        self._btn_browse = QPushButton("浏览...")
-        self._btn_browse.setFixedWidth(70)
-        self._btn_browse.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Colors.PRIMARY};
-                border: none;
-                border-radius: 8px;
-                color: #FFFFFF;
-                padding: 5px 14px;
-                font-weight: 600;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.PRIMARY_HOVER};
-            }}
-        """)
-
-        shortcut_row = QHBoxLayout()
-        shortcut_row.addWidget(self._game_shortcut)
-        shortcut_row.addWidget(self._btn_browse)
-
-        # 窗口选择行
-        window_select_row = QHBoxLayout()
-        window_select_row.addWidget(self._window_select)
-        window_select_row.addWidget(self._window_select_refresh)
-        window_select_row.addStretch()
-
-        self._window_select_tip = QLabel('自动模式按平台匹配；手动模式指定窗口索引（不保存句柄）。')
-        self._window_select_tip.setWordWrap(True)
-        self._window_select_tip.setStyleSheet(f'color: {Colors.TEXT_SECONDARY}; font-size: 11px; background: transparent;')
-
-        self._farm_interval = QSpinBox()
-        self._farm_interval.setRange(1, 99999)
-        self._farm_interval.setSuffix(" 秒")
-        self._farm_interval.setFixedWidth(90)
-        self._farm_interval.setValue(120)
-        self._farm_interval.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background: transparent; border: none;
-            }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background: rgba(0, 122, 255, 10);
-            }}
-        """)
-
-        self._friend_interval = QSpinBox()
-        self._friend_interval.setRange(1, 99999)
-        self._friend_interval.setSuffix(" 秒")
-        self._friend_interval.setFixedWidth(90)
-        self._friend_interval.setValue(300)
-        self._friend_interval.setStyleSheet(f"""
-            QSpinBox {{
-                background-color: {Colors.INPUT_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 8px;
-                padding: 5px 10px;
-                color: {Colors.TEXT};
-                min-height: 22px;
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background: transparent; border: none;
-            }}
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background: rgba(0, 122, 255, 10);
-            }}
-        """)
-
-        interval_row = QHBoxLayout()
-        interval_row.addWidget(QLabel("农场"))
-        interval_row.addWidget(self._farm_interval)
-        interval_row.addWidget(QLabel("好友"))
-        interval_row.addWidget(self._friend_interval)
-        interval_row.addStretch()
-
-        misc_layout.addWidget(self._make_row("🔍", "窗口关键词", self._window_keyword))
-        misc_layout.addWidget(self._make_row("🎯", "选择窗口", window_select_row))
-        misc_layout.addWidget(self._make_row("", "", self._window_select_tip))
-
-        self._run_mode_combo = QComboBox()
-        self._run_mode_combo.addItem("前台模式（需要窗口置顶）", RunMode.FOREGROUND.value)
-        self._run_mode_combo.addItem("后台模式（QQ窗口可遮挡）", RunMode.BACKGROUND.value)
-        self._run_mode_combo.setFixedWidth(200)
-
-        misc_layout.addWidget(self._make_row("🖥️", "运行模式", self._run_mode_combo))
-
-        # 窗口位置选择
-        self._window_position_combo = QComboBox()
-        self._window_position_combo.addItem("🔽 左下角", WindowPosition.BOTTOM_LEFT.value)
-        self._window_position_combo.addItem("🔼 左上角", WindowPosition.TOP_LEFT.value)
-        self._window_position_combo.addItem("🔽 右下角", WindowPosition.BOTTOM_RIGHT.value)
-        self._window_position_combo.addItem("🔼 右上角", WindowPosition.TOP_RIGHT.value)
-        self._window_position_combo.addItem("⊙ 居中", WindowPosition.CENTER.value)
-        self._window_position_combo.setFixedWidth(150)
-
-        misc_layout.addWidget(self._make_row("📍", "窗口位置", self._window_position_combo))
-        misc_layout.addWidget(self._make_row("📁", "游戏路径", shortcut_row))
-        misc_layout.addWidget(self._make_row("⏰", "检查间隔", interval_row))
-
-        misc_card = SettingCard("🔧", "其他", "窗口、路径与调度设置", misc_widget)
-        layout.addWidget(misc_card)
-
-        # ===== 静默时段卡片 =====
-        self._silent_widget = SilentHoursWidget()
-        silent_card = SettingCard("🌙", "静默时段", "指定时间段内不执行任何操作", self._silent_widget)
-        layout.addWidget(silent_card)
-
-        # ===== Web 服务卡片 =====
-        self._web_widget = WebServerWidget()
-        # 连接信号，添加日志追踪
-        def _on_web_server_toggle(start: bool):
-            from loguru import logger
-            logger.info(f"SettingsPanel 收到 web_server_toggled 信号: start={start}")
-            self.web_server_toggled.emit(start)
-            logger.info(f"SettingsPanel 已转发 web_server_toggled 信号")
-            
-        self._web_widget.web_server_toggled.connect(_on_web_server_toggle)
-        web_card = SettingCard("🌐", "Web 服务", "通过网页查看截图与控制 Bot", self._web_widget)
+        # ── Web 服务卡片 ──
+        web_card, web_form = self._build_group_card(content, "Web 服务", "settingsWebCard")
         layout.addWidget(web_card)
 
-        layout.addStretch()
+        self.web_status = CaptionLabel("● 已停止", web_card)
+        self.web_status.setStyleSheet("font-weight: 600;")
+        self.web_toggle_btn = PushButton("启动", web_card)
+        web_ctrl_row = QWidget(web_card)
+        web_ctrl_layout = QHBoxLayout(web_ctrl_row)
+        web_ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        web_ctrl_layout.setSpacing(8)
+        web_ctrl_layout.addWidget(self.web_status)
+        web_ctrl_layout.addStretch()
+        web_ctrl_layout.addWidget(self.web_toggle_btn)
+        web_form.addRow(self._field_label("状态", web_card), web_ctrl_row)
 
-        scroll.setWidget(container)
+        self.web_host = LineEdit(web_card)
+        self.web_host.setFixedWidth(150)
+        self.web_port = SpinBox(web_card)
+        self.web_port.setRange(1024, 65535)
+        web_addr_row = QWidget(web_card)
+        web_addr_layout = QHBoxLayout(web_addr_row)
+        web_addr_layout.setContentsMargins(0, 0, 0, 0)
+        web_addr_layout.setSpacing(8)
+        web_addr_layout.addWidget(CaptionLabel("地址:", web_addr_row))
+        web_addr_layout.addWidget(self.web_host)
+        web_addr_layout.addWidget(CaptionLabel("端口:", web_addr_row))
+        web_addr_layout.addWidget(self.web_port)
+        web_addr_layout.addStretch()
+        web_form.addRow(self._field_label("", web_card), web_addr_row)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        # ── 高级卡片 ──
+        adv_card, adv_form = self._build_group_card(content, "高级", "settingsAdvCard")
+        layout.addWidget(adv_card)
 
-        self._btn_browse.clicked.connect(self._on_browse_shortcut)
+        delay_row = QWidget(adv_card)
+        delay_layout = QHBoxLayout(delay_row)
+        delay_layout.setContentsMargins(0, 0, 0, 0)
+        delay_layout.setSpacing(8)
+        self.delay_min = DoubleSpinBox(delay_row)
+        self.delay_min.setRange(0, 10)
+        self.delay_min.setDecimals(2)
+        self.delay_min.setSingleStep(0.05)
+        self.delay_min.setSuffix(" 秒")
+        self.delay_max = DoubleSpinBox(delay_row)
+        self.delay_max.setRange(0, 10)
+        self.delay_max.setDecimals(2)
+        self.delay_max.setSingleStep(0.05)
+        self.delay_max.setSuffix(" 秒")
+        delay_layout.addWidget(CaptionLabel("最小", delay_row))
+        delay_layout.addWidget(self.delay_min, 1)
+        delay_layout.addWidget(CaptionLabel("最大", delay_row))
+        delay_layout.addWidget(self.delay_max, 1)
+        adv_form.addRow(self._field_label("随机延迟", adv_card), delay_row)
 
-    def _make_row(self, icon: str, title: str, widget) -> QFrame:
-        row = QFrame()
-        row.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.CARD_BG};
-                border: none;
-                border-bottom: 1px solid {Colors.BORDER};
-            }}
-        """)
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(16, 10, 16, 10)
-        layout.setSpacing(12)
+        self.offset = SpinBox(adv_card)
+        self.offset.setRange(0, 50)
+        adv_form.addRow(self._field_label("点击抖动", adv_card), self.offset)
 
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet("font-size: 16px; background: transparent; border: none;")
-        layout.addWidget(icon_lbl)
+        self.max_actions = SpinBox(adv_card)
+        self.max_actions.setRange(1, 500)
+        adv_form.addRow(self._field_label("单轮点击上限", adv_card), self.max_actions)
 
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 12px;
-            background: transparent; border: none;
-            min-width: 80px;
-        """)
-        layout.addWidget(title_lbl)
-        layout.addStretch()
+        self.capture_interval = DoubleSpinBox(adv_card)
+        self.capture_interval.setRange(0.0, 5.0)
+        self.capture_interval.setDecimals(2)
+        self.capture_interval.setSingleStep(0.05)
+        self.capture_interval.setSuffix(" 秒")
+        adv_form.addRow(self._field_label("截图间隔", adv_card), self.capture_interval)
 
-        if isinstance(widget, QWidget):
-            layout.addWidget(widget)
-        elif isinstance(widget, QHBoxLayout):
-            layout.addLayout(widget)
+        self.planting_stable = DoubleSpinBox(adv_card)
+        self.planting_stable.setRange(0.1, 5.0)
+        self.planting_stable.setDecimals(1)
+        self.planting_stable.setSingleStep(0.1)
+        self.planting_stable.setSuffix(" 秒")
+        adv_form.addRow(self._field_label("播种稳定时间", adv_card), self.planting_stable)
 
-        return row
+        self.planting_stable_timeout = DoubleSpinBox(adv_card)
+        self.planting_stable_timeout.setRange(0.5, 30.0)
+        self.planting_stable_timeout.setDecimals(1)
+        self.planting_stable_timeout.setSingleStep(0.5)
+        self.planting_stable_timeout.setSuffix(" 秒")
+        adv_form.addRow(self._field_label("播种稳定超时", adv_card), self.planting_stable_timeout)
 
-    def _on_browse_shortcut(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择游戏快捷方式", "",
-            "快捷方式 (*.lnk);;所有文件 (*.*)"
+        self.debug = CheckBox("启用 Debug 日志", adv_card)
+        adv_form.addRow(self._field_label("调试日志", adv_card), self.debug)
+
+        # 静默时段
+        silent_row = QWidget(adv_card)
+        silent_layout = QHBoxLayout(silent_row)
+        silent_layout.setContentsMargins(0, 0, 0, 0)
+        silent_layout.setSpacing(8)
+        self.silent_enabled = CheckBox("静默时段", silent_row)
+        silent_layout.addWidget(self.silent_enabled)
+        self.silent_start = QTimeEdit(silent_row)
+        self.silent_start.setDisplayFormat("HH:mm")
+        self.silent_start.setFixedWidth(80)
+        silent_layout.addWidget(self.silent_start)
+        silent_layout.addWidget(BodyLabel("~"))
+        self.silent_end = QTimeEdit(silent_row)
+        self.silent_end.setDisplayFormat("HH:mm")
+        self.silent_end.setFixedWidth(80)
+        silent_layout.addWidget(self.silent_end)
+        silent_layout.addStretch()
+        adv_form.addRow(self._field_label("", adv_card), silent_row)
+
+        self.logs_path_label = CaptionLabel("", adv_card)
+        self.logs_path_label.setWordWrap(True)
+        self.logs_path_label.setStyleSheet("color: #64748b;")
+        adv_form.addRow(self._field_label("日志路径", adv_card), self.logs_path_label)
+
+        # ── 大小号通讯卡片 ──
+        ci_card, ci_form = self._build_group_card(content, "大小号通讯", "settingsCrossInstanceCard")
+        layout.addWidget(ci_card)
+
+        self.ci_enabled = CheckBox("启用大小号通讯", ci_card)
+        ci_tip = CaptionLabel("当本实例地块即将成熟时，通知配对实例去偷菜。", ci_card)
+        ci_tip.setWordWrap(True)
+        ci_tip.setStyleSheet("color: #64748b;")
+        ci_form.addRow(self._field_label("总开关", ci_card), self.ci_enabled)
+        ci_form.addRow(self._field_label("", ci_card), ci_tip)
+
+        ci_opts_row = QWidget(ci_card)
+        ci_opts_layout = QHBoxLayout(ci_opts_row)
+        ci_opts_layout.setContentsMargins(0, 0, 0, 0)
+        ci_opts_layout.setSpacing(12)
+        self.ci_send = CheckBox("发送成熟通知", ci_opts_row)
+        self.ci_accept = CheckBox("接收偷菜任务", ci_opts_row)
+        ci_opts_layout.addWidget(self.ci_send)
+        ci_opts_layout.addWidget(self.ci_accept)
+        ci_opts_layout.addStretch()
+        ci_form.addRow(self._field_label("选项", ci_card), ci_opts_row)
+
+        self.ci_threshold = SpinBox(ci_card)
+        self.ci_threshold.setRange(30, 3600)
+        self.ci_threshold.setSingleStep(30)
+        self.ci_threshold.setSuffix(" 秒")
+        ci_form.addRow(self._field_label("通知阈值", ci_card), self.ci_threshold)
+
+        self.ci_partners = LineEdit(ci_card)
+        self.ci_partners.setPlaceholderText("格式: 实例ID:好友昵称, 实例ID:好友昵称")
+        ci_partners_tip = CaptionLabel("多个配对用逗号分隔，如: qq2:小号A, wx:大号B", ci_card)
+        ci_partners_tip.setWordWrap(True)
+        ci_partners_tip.setStyleSheet("color: #64748b;")
+        ci_form.addRow(self._field_label("配对列表", ci_card), self.ci_partners)
+        ci_form.addRow(self._field_label("", ci_card), ci_partners_tip)
+
+        # ── 声明卡片 ──
+        decl_card, decl_form = self._build_group_card(content, "声明", "settingsDeclCard")
+        layout.addWidget(decl_card)
+
+        free_notice = CaptionLabel(
+            "本软件免费开源。如果你花钱购买的，请立即退款！ "
+            "GitHub: github.com/luckytiger12138/qq-farm | Gitee: gitee.com/luckytiger12138/qq-farm",
+            decl_card,
         )
-        if file_path:
-            self._game_shortcut.setText(file_path)
-            self._auto_save()
+        free_notice.setWordWrap(True)
+        free_notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        free_notice.setStyleSheet("color: #dc2626; font-weight: 700;")
+        decl_form.addRow(self._field_label("免责声明", decl_card), free_notice)
 
-    def _connect_auto_save(self):
-        self._player_level.valueChanged.connect(self._auto_save)
-        self._strategy_combo.currentIndexChanged.connect(self._auto_save)
-        self._crop_combo.currentIndexChanged.connect(self._auto_save)
-        self._window_keyword.editingFinished.connect(self._auto_save)
-        self._game_shortcut.editingFinished.connect(self._auto_save)
-        self._run_mode_combo.currentIndexChanged.connect(self._auto_save)
-        self._window_position_combo.currentIndexChanged.connect(self._auto_save)
-        self._farm_interval.valueChanged.connect(self._auto_save)
-        self._friend_interval.valueChanged.connect(self._auto_save)
-        for cb in self._toggle_grid._checkboxes.values():
+        layout.addStretch()
+
+    # ── 通用卡片构建 ─────────────────────────────────────────
+
+    @staticmethod
+    def _apply_card_style(card: StableElevatedCardWidget, object_name: str):
+        card.setObjectName(object_name)
+        card.setStyleSheet(
+            f"ElevatedCardWidget#{object_name} {{"
+            " border-radius: 10px; border: 1px solid rgba(100,116,139,0.22); }"
+            f"ElevatedCardWidget#{object_name}:hover {{"
+            " background-color: rgba(37,99,235,0.06); border: 1px solid rgba(59,130,246,0.32); }"
+        )
+
+    @staticmethod
+    def _style_form(form: QFormLayout):
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(10)
+        form.setHorizontalSpacing(0)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+    @staticmethod
+    def _field_label(text: str, parent: QWidget) -> CaptionLabel:
+        text_value = str(text or "").strip()
+        label = CaptionLabel(f"{text_value}:" if text_value else "", parent)
+        if text_value:
+            label.setFixedWidth(label.sizeHint().width() + label.fontMetrics().horizontalAdvance("字"))
+            label.setStyleSheet("color: #475569; font-weight: 600;")
+        return label
+
+    def _build_group_card(self, parent: QWidget, title: str, object_name: str) -> tuple:
+        card = StableElevatedCardWidget(parent)
+        self._apply_card_style(card, object_name)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(9)
+        title_label = BodyLabel(title)
+        title_label.setStyleSheet("font-weight: 700; font-size: 14px; color: #1e293b;")
+        card_layout.addWidget(title_label)
+        divider = QFrame(card)
+        divider.setObjectName("settingsCardDivider")
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("QFrame#settingsCardDivider { background-color: rgba(37,99,235,0.10); border: none; }")
+        card_layout.addWidget(divider)
+        form = QFormLayout()
+        self._style_form(form)
+        card_layout.addLayout(form)
+        return card, form
+
+    @staticmethod
+    def _set_combo_data(combo: ComboBox, value):
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    # ── 信号连接 ────────────────────────────────────────────
+
+    def _connect_signals(self):
+        # 种植
+        self.level.valueChanged.connect(self._on_level_changed)
+        self.level.valueChanged.connect(self._update_auto_crop_label)
+        self.strategy.currentIndexChanged.connect(self._on_strategy_changed)
+        self.crop.currentIndexChanged.connect(self._auto_save)
+        self.level_ocr.toggled.connect(self._auto_save)
+        self.warehouse_first.toggled.connect(self._auto_save)
+        self.skip_event_crops.toggled.connect(self._auto_save)
+        # 窗口
+        self.window_keyword.editingFinished.connect(self._on_keyword_committed)
+        self.refresh_btn.clicked.connect(self._refresh_windows)
+        self.window_select.currentIndexChanged.connect(self._auto_save)
+        self.run_mode.currentIndexChanged.connect(self._auto_save)
+        self.window_position.currentIndexChanged.connect(self._auto_save)
+        self.game_shortcut.editingFinished.connect(self._auto_save)
+        self.browse_btn.clicked.connect(self._on_browse_shortcut)
+        # 静默时段
+        self.silent_enabled.toggled.connect(self._auto_save)
+        self.silent_start.timeChanged.connect(self._auto_save)
+        self.silent_end.timeChanged.connect(self._auto_save)
+        # 出售
+        self.sell_mode.currentIndexChanged.connect(self._on_sell_mode_changed)
+        for cb in self._sell_crop_cbs.values():
             cb.toggled.connect(self._auto_save)
-        self._sell_widget.connect_mode_changed(self._auto_save)
-        self._sell_widget.connect_crops_changed(self._auto_save)
-        # 新组件连接
-        self._friend_widget.connect_changed(self._auto_save)
-        self._silent_widget.connect_changed(self._auto_save)
-        self._web_widget.connect_changed(self._auto_save)
-        # 窗口选择信号
-        self._window_select.currentIndexChanged.connect(self._auto_save)
-        self._window_select_refresh.clicked.connect(self._refresh_window_select)
+        # Web
+        self.web_toggle_btn.clicked.connect(self._on_web_toggle)
+        self.web_host.editingFinished.connect(self._auto_save)
+        self.web_port.valueChanged.connect(self._auto_save)
+        # 高级
+        self.delay_min.valueChanged.connect(self._auto_save)
+        self.delay_max.valueChanged.connect(self._auto_save)
+        self.offset.valueChanged.connect(self._auto_save)
+        self.max_actions.valueChanged.connect(self._auto_save)
+        self.capture_interval.valueChanged.connect(self._auto_save)
+        self.planting_stable.valueChanged.connect(self._auto_save)
+        self.planting_stable_timeout.valueChanged.connect(self._auto_save)
+        self.debug.toggled.connect(self._auto_save)
+        # 大小号通讯
+        self.ci_enabled.toggled.connect(self._auto_save)
+        self.ci_send.toggled.connect(self._auto_save)
+        self.ci_accept.toggled.connect(self._auto_save)
+        self.ci_threshold.valueChanged.connect(self._auto_save)
+        self.ci_partners.editingFinished.connect(self._auto_save)
+
+    # ── 自动保存 ────────────────────────────────────────────
 
     def _auto_save(self):
-        import traceback
-        from loguru import logger
         if self._loading > 0:
-            logger.debug(f"💾 _auto_save 被阻止: _loading={self._loading}")
             return
-        logger.info(f"💾 _auto_save 执行: config_id={id(self.config)}, auto_harvest={self._toggle_grid.get_checkbox('收获').isChecked()}")
-        logger.debug(f"调用栈:\n{''.join(traceback.format_stack()[-6:-1])}")
+        self._loading += 1
         try:
-            self._loading += 1  # 引用计数
             c = self.config
-            c.planting.player_level = self._player_level.value()
-            c.planting.strategy = PlantMode(self._strategy_combo.currentData())
-            idx = self._crop_combo.currentIndex()
-            if 0 <= idx < len(self._crop_names):
-                c.planting.preferred_crop = self._crop_names[idx]
-            c.window_title_keyword = self._window_keyword.text().strip()
-            c.window_select_rule = str(self._window_select.currentData() or 'auto')
-            c.safety.run_mode = RunMode(self._run_mode_combo.currentData())
-            c.safety.window_position = WindowPosition(self._window_position_combo.currentData())
-            c.planting.game_shortcut_path = self._game_shortcut.text().strip()
-            c.schedule.farm_check_seconds = self._farm_interval.value()
-            c.schedule.friend_check_seconds = self._friend_interval.value()
-            c.features.auto_harvest = self._toggle_grid.get_checkbox("收获").isChecked()
-            c.features.auto_plant = self._toggle_grid.get_checkbox("播种").isChecked()
-            c.features.auto_fertilize = self._toggle_grid.get_checkbox("施肥").isChecked()
-            c.features.auto_buy_seed = self._toggle_grid.get_checkbox("买种").isChecked()
-            c.features.auto_water = self._toggle_grid.get_checkbox("浇水").isChecked()
-            c.features.auto_weed = self._toggle_grid.get_checkbox("除草").isChecked()
-            c.features.auto_bug = self._toggle_grid.get_checkbox("除虫").isChecked()
-            c.features.auto_sell = self._toggle_grid.get_checkbox("出售").isChecked()
-            c.features.auto_task = self._toggle_grid.get_checkbox("任务").isChecked()
-            c.features.auto_upgrade = self._toggle_grid.get_checkbox("扩建").isChecked()
-            c.safety.auto_remote_login = self._toggle_grid.get_checkbox("重登").isChecked()
-            # 好友操作新配置
-            c.features.friend.enable_steal = self._friend_widget.get_enable_steal()
-            c.features.friend.enable_weed = self._friend_widget.get_enable_weed()
-            c.features.friend.enable_water = self._friend_widget.get_enable_water()
-            c.features.friend.enable_bug = self._friend_widget.get_enable_bug()
-            c.features.friend.max_steal_per_round = self._friend_widget.get_max_steal()
-            # 出售策略
-            c.sell.mode = self._sell_widget.get_mode()
-            c.sell.sell_crops = self._sell_widget.get_sell_crops()
+            # 种植
+            c.planting.player_level = int(self.level.value())
+            c.planting.level_ocr_enabled = bool(self.level_ocr.isChecked())
+            c.planting.strategy = PlantMode(str(self.strategy.currentData() or PlantMode.PREFERRED.value))
+            c.planting.preferred_crop = str(self.crop.currentData() or c.planting.preferred_crop)
+            c.planting.warehouse_first = bool(self.warehouse_first.isChecked())
+            c.planting.skip_event_crops = bool(self.skip_event_crops.isChecked())
+            # 窗口
+            c.window_title_keyword = str(self.window_keyword.text() or "").strip()
+            c.window_select_rule = str(self.window_select.currentData() or "auto")
+            c.safety.run_mode = RunMode(str(self.run_mode.currentData() or RunMode.BACKGROUND.value))
+            c.safety.window_position = WindowPosition(
+                str(self.window_position.currentData() or WindowPosition.BOTTOM_LEFT.value)
+            )
+            c.planting.game_shortcut_path = str(self.game_shortcut.text() or "").strip()
             # 静默时段
-            c.silent_hours.enabled = self._silent_widget.get_enabled()
-            c.silent_hours.start_hour = self._silent_widget.get_start_hour()
-            c.silent_hours.start_minute = self._silent_widget.get_start_minute()
-            c.silent_hours.end_hour = self._silent_widget.get_end_hour()
-            c.silent_hours.end_minute = self._silent_widget.get_end_minute()
-            # Web 服务（地址/端口）
-            c.web.host = self._web_widget.get_host()
-            c.web.port = self._web_widget.get_port()
+            c.silent_hours.enabled = bool(self.silent_enabled.isChecked())
+            c.silent_hours.start_hour = self.silent_start.time().hour()
+            c.silent_hours.start_minute = self.silent_start.time().minute()
+            c.silent_hours.end_hour = self.silent_end.time().hour()
+            c.silent_hours.end_minute = self.silent_end.time().minute()
+            # 出售
+            c.sell.mode = SellMode(str(self.sell_mode.currentData() or SellMode.BATCH_ALL.value))
+            c.sell.sell_crops = [name for name, cb in self._sell_crop_cbs.items() if cb.isChecked()]
+            # Web
+            c.web.host = str(self.web_host.text() or "0.0.0.0").strip()
+            c.web.port = int(self.web_port.value())
+            # 高级
+            d_min, d_max = float(self.delay_min.value()), float(self.delay_max.value())
+            c.safety.random_delay_min = min(d_min, d_max)
+            c.safety.random_delay_max = max(d_min, d_max)
+            c.safety.click_offset_range = int(self.offset.value())
+            c.safety.max_actions_per_round = int(self.max_actions.value())
+            c.safety.debug_log_enabled = bool(self.debug.isChecked())
+            c.screenshot.capture_interval_seconds = float(self.capture_interval.value())
+            c.planting.planting_stable_seconds = float(self.planting_stable.value())
+            c.planting.planting_stable_timeout_seconds = float(self.planting_stable_timeout.value())
+            # 大小号通讯
+            c.cross_instance.enabled = bool(self.ci_enabled.isChecked())
+            c.cross_instance.send_alerts = bool(self.ci_send.isChecked())
+            c.cross_instance.accept_steal = bool(self.ci_accept.isChecked())
+            c.cross_instance.alert_threshold_seconds = int(self.ci_threshold.value())
+            c.cross_instance.partners = self._parse_partners(str(self.ci_partners.text() or ""))
+
             c.save()
             self.config_changed.emit(c)
         finally:
             self._loading -= 1
 
+    # ── 种植策略联动 ────────────────────────────────────────
+
     def _on_level_changed(self, level: int):
-        self._loading += 1  # 引用计数，保护嵌套调用
-        current_crop = (self._crop_names[self._crop_combo.currentIndex()]
-                        if self._crop_combo.currentIndex() >= 0 else "")
-        self._crop_combo.clear()
+        self._loading += 1
+        current_crop = str(self.crop.currentData() or "")
+        self.crop.clear()
         for name, _, req_level, grow_time, exp, _ in CROPS:
             time_str = format_grow_time(grow_time)
             if req_level <= level:
-                self._crop_combo.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}经验)")
+                self.crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
             else:
-                self._crop_combo.addItem(f"[锁] {name} (需Lv{req_level})")
+                self.crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
         if current_crop in self._crop_names:
-            self._crop_combo.setCurrentIndex(self._crop_names.index(current_crop))
+            idx = self._crop_names.index(current_crop)
+            if idx < self.crop.count():
+                self.crop.setCurrentIndex(idx)
         self._loading -= 1
 
-    def _on_strategy_changed(self, index: int):
-        is_manual = self._strategy_combo.itemData(index) == PlantMode.PREFERRED.value
-        self._crop_combo.setEnabled(is_manual)
-        self._auto_crop_label.setVisible(not is_manual)
+    def _on_strategy_changed(self, *_):
+        is_manual = str(self.strategy.currentData() or "") == PlantMode.PREFERRED.value
+        self.crop.setEnabled(is_manual)
+        self.auto_crop_label.setVisible(not is_manual)
         self._update_auto_crop_label()
 
     def _update_auto_crop_label(self):
-        level = self._player_level.value()
-        best = get_best_crop_for_level(level)
-        if best:
-            name, _, _, grow_time, exp, _ = best
-            time_str = format_grow_time(grow_time)
-            rate = exp / grow_time
-            self._auto_crop_label.setText(f"{name} ({time_str}, {exp}exp, {rate:.4f}/s)")
+        level = int(self.level.value())
+        strategy_value = str(self.strategy.currentData() or "")
+        if strategy_value == PlantMode.LATEST_LEVEL.value:
+            from models.game_data import get_latest_crop_for_level
+            crop = get_latest_crop_for_level(level)
+            if crop:
+                name, _, _, grow_time, exp, _ = crop
+                self.auto_crop_label.setText(f"{name} ({format_grow_time(grow_time)}, {exp}exp, 最新)")
+            else:
+                self.auto_crop_label.setText("无可用作物")
+        elif strategy_value == PlantMode.BEST_EXP_RATE.value:
+            best = get_best_crop_for_level(level)
+            if best:
+                name, _, _, grow_time, exp, _ = best
+                rate = exp / grow_time
+                self.auto_crop_label.setText(f"{name} ({format_grow_time(grow_time)}, {exp}exp, {rate:.4f}/s)")
+            else:
+                self.auto_crop_label.setText("无可用作物")
+
+    # ── 出售模式联动 ────────────────────────────────────────
+
+    def _on_sell_mode_changed(self, index: int):
+        is_selective = str(self.sell_mode.currentData() or "") == SellMode.SELECTIVE.value
+        self.sell_crops_container.setVisible(is_selective)
+
+    # ── Web 服务 ────────────────────────────────────────────
+
+    def _on_web_toggle(self):
+        is_running = self.web_toggle_btn.text() == "停止"
+        new_state = not is_running
+        self._update_web_ui(new_state)
+        self.web_server_toggled.emit(new_state)
+
+    def _update_web_ui(self, running: bool):
+        if running:
+            self.web_status.setText("● 运行中")
+            self.web_status.setStyleSheet("color: #16a34a; font-weight: 600;")
+            self.web_toggle_btn.setText("停止")
+            self.web_host.setEnabled(False)
+            self.web_port.setEnabled(False)
         else:
-            self._auto_crop_label.setText("无可用作物")
+            self.web_status.setText("● 已停止")
+            self.web_status.setStyleSheet("color: #64748b; font-weight: 600;")
+            self.web_toggle_btn.setText("启动")
+            self.web_host.setEnabled(True)
+            self.web_port.setEnabled(True)
 
-    def _load_config(self):
-        c = self.config
-        self._player_level.setValue(c.planting.player_level)
-        strategy_idx = 0 if c.planting.strategy == PlantMode.BEST_EXP_RATE else 1
-        self._strategy_combo.setCurrentIndex(strategy_idx)
-        self._on_strategy_changed(strategy_idx)
-        self._update_auto_crop_label()
-        if c.planting.preferred_crop in self._crop_names:
-            self._crop_combo.setCurrentIndex(
-                self._crop_names.index(c.planting.preferred_crop))
-        self._on_level_changed(c.planting.player_level)
-        self._window_keyword.setText(c.window_title_keyword)
-        # 加载窗口选择
-        self._refresh_window_select(c.window_select_rule)
-        
-        # 加载运行模式（阻止信号防止递归）
-        self._run_mode_combo.blockSignals(True)
-        run_mode_idx = 0 if c.safety.run_mode == RunMode.FOREGROUND else 1
-        self._run_mode_combo.setCurrentIndex(run_mode_idx)
-        self._run_mode_combo.blockSignals(False)
-        
-        # 加载窗口位置（阻止信号防止递归）
-        self._window_position_combo.blockSignals(True)
-        current_pos = c.safety.window_position.value
-        idx = self._window_position_combo.findData(current_pos)
-        if idx >= 0:
-            self._window_position_combo.setCurrentIndex(idx)
-        self._window_position_combo.blockSignals(False)
-        
-        self._game_shortcut.setText(c.planting.game_shortcut_path)
-        self._farm_interval.setValue(c.schedule.farm_check_seconds)
-        self._friend_interval.setValue(c.schedule.friend_check_seconds)
-        # 功能开关
-        from loguru import logger
-        logger.info(f"📋 _load_config: 加载功能开关 | auto_harvest={c.features.auto_harvest}, auto_plant={c.features.auto_plant}")
-        self._toggle_grid.get_checkbox("收获").setChecked(c.features.auto_harvest)
-        self._toggle_grid.get_checkbox("播种").setChecked(c.features.auto_plant)
-        self._toggle_grid.get_checkbox("施肥").setChecked(c.features.auto_fertilize)
-        self._toggle_grid.get_checkbox("买种").setChecked(c.features.auto_buy_seed)
-        self._toggle_grid.get_checkbox("浇水").setChecked(c.features.auto_water)
-        self._toggle_grid.get_checkbox("除草").setChecked(c.features.auto_weed)
-        self._toggle_grid.get_checkbox("除虫").setChecked(c.features.auto_bug)
-        self._toggle_grid.get_checkbox("出售").setChecked(c.features.auto_sell)
-        self._toggle_grid.get_checkbox("任务").setChecked(c.features.auto_task)
-        self._toggle_grid.get_checkbox("扩建").setChecked(c.features.auto_upgrade)
-        self._toggle_grid.get_checkbox("重登").setChecked(c.safety.auto_remote_login)
-        # 好友操作
-        self._friend_widget.set_enable_steal(c.features.friend.enable_steal)
-        self._friend_widget.set_enable_weed(c.features.friend.enable_weed)
-        self._friend_widget.set_enable_water(c.features.friend.enable_water)
-        self._friend_widget.set_enable_bug(c.features.friend.enable_bug)
-        self._friend_widget.set_max_steal(c.features.friend.max_steal_per_round)
-        # 出售策略
-        self._sell_widget.set_mode(c.sell.mode)
-        self._sell_widget.set_sell_crops(c.sell.sell_crops)
-        # 静默时段
-        self._silent_widget.set_enabled_state(c.silent_hours.enabled)
-        self._silent_widget.set_start_time(c.silent_hours.start_hour, c.silent_hours.start_minute)
-        self._silent_widget.set_end_time(c.silent_hours.end_hour, c.silent_hours.end_minute)
-        # Web 服务
-        self._web_widget.set_enabled_state(c.web.enabled)
-        self._web_widget.set_host(c.web.host)
-        self._web_widget.set_port(c.web.port)
+    # ── 窗口选择 ────────────────────────────────────────────
 
-    # ── 窗口选择相关方法 ─────────────────────────────────────
+    def _on_keyword_committed(self):
+        self._refresh_windows()
+        self._auto_save()
 
-    def _refresh_window_select(self, preferred_rule: str | None = None):
-        """刷新窗口候选列表"""
-        keyword = self._window_keyword.text().strip() or 'QQ农场'
+    def _on_browse_shortcut(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择游戏快捷方式", "", "快捷方式 (*.lnk);;所有文件 (*.*)"
+        )
+        if file_path:
+            self.game_shortcut.setText(file_path)
+            self._auto_save()
+
+    def _refresh_windows(self):
+        keyword = str(self.window_keyword.text() or "").strip() or "QQ农场"
         windows = self._list_windows(keyword)
-
-        # 阻止信号触发
-        self._window_select.blockSignals(True)
-        self._window_select.clear()
-
-        # 第一项永远是"自动"
-        self._window_select.addItem('自动（按平台优先）', 'auto')
-
-        # 添加所有匹配的窗口
+        current = str(self.window_select.currentData() or self.config.window_select_rule or "auto")
+        self.window_select.blockSignals(True)
+        self.window_select.clear()
+        self.window_select.addItem("自动（按平台优先）", userData="auto")
         for idx, info in enumerate(windows):
-            label = self._format_window_option(idx, info)
-            self._window_select.addItem(label, f'index:{idx}')
-
-        # 恢复之前选中的规则
-        self._set_window_select_rule(preferred_rule or self.config.window_select_rule)
-        self._window_select.blockSignals(False)
-
-        # 彻底禁用下拉列表 tooltip
-        self._disable_combo_tooltip(self._window_select)
-
-    @staticmethod
-    def _disable_combo_tooltip(combo: QComboBox) -> None:
-        """完全禁用 QComboBox 下拉框的系统原生 tooltip"""
-        combo.setToolTip('')
-        combo.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
-        view = combo.view()
-        if view:
-            view.viewport().setToolTip('')
-            view.viewport().setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
-            view.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, False)
-
-    def _set_window_select_rule(self, select_rule: str):
-        """按规则值设置下拉当前项，找不到则回退自动"""
-        target = str(select_rule or 'auto').strip().lower() or 'auto'
-        found_index = 0  # 默认选中"自动"
-        for i in range(self._window_select.count()):
-            if str(self._window_select.itemData(i) or '').strip().lower() == target:
-                found_index = i
-                break
-        self._window_select.setCurrentIndex(found_index)
+            self.window_select.addItem(self._format_window_option(idx, info), userData=f"index:{idx}")
+        self._set_combo_data(self.window_select, current)
+        self.window_select.blockSignals(False)
 
     @staticmethod
     def _format_window_option(index: int, info: dict) -> str:
-        """格式化窗口下拉显示文案"""
-        title = str(info.get('title', '')).replace('\n', ' ').strip()
+        title = str(info.get("title", "")).replace("\n", " ").strip()
         if len(title) > 20:
-            title = f'{title[:20]}...'
-        process_name = str(info.get('process_name', '') or '').strip().lower()
-        if process_name == 'qq.exe' or process_name.startswith('qq'):
-            platform = 'QQ'
-        elif process_name.startswith('wechat') or 'weixin' in process_name:
-            platform = '微信'
+            title = f"{title[:20]}..."
+        process_name = str(info.get("process_name", "") or "").strip().lower()
+        if process_name == "qq.exe" or process_name.startswith("qq"):
+            platform = "QQ"
+        elif process_name.startswith("wechat") or "weixin" in process_name:
+            platform = "微信"
         else:
-            # 通过标题推断
-            title_lower = str(info.get('title', '')).lower()
-            if 'qq' in title_lower:
-                platform = 'QQ'
-            elif 'wechat' in title_lower or '微信' in title_lower:
-                platform = '微信'
-            else:
-                platform = '未知'
+            platform = "未知"
         hwnd_hex = f"0x{int(info.get('hwnd', 0)):X}"
         return (
-            f'#{index + 1} [{platform}] {title} | '
-            f'{int(info.get("width", 0))}x{int(info.get("height", 0))} | '
-            f'({int(info.get("left", 0))},{int(info.get("top", 0))}) {hwnd_hex}'
+            f"#{index + 1} [{platform}] {title} | "
+            f"{int(info.get('width', 0))}x{int(info.get('height', 0))} | "
+            f"({int(info.get('left', 0))},{int(info.get('top', 0))}) {hwnd_hex}"
         )
 
     @staticmethod
     def _list_windows(title_keyword: str) -> list[dict]:
-        """按关键词列出候选窗口"""
         try:
             all_windows = gw.getAllWindows()
             matched: list[dict] = []
             seen_hwnd: set[int] = set()
-
             for win in all_windows:
-                title = str(getattr(win, 'title', '') or '')
+                title = str(getattr(win, "title", "") or "")
                 if not title.strip():
                     continue
-
-                # 关键词匹配
                 keyword = title_keyword.lower()
                 title_lower = title.lower()
                 if keyword not in title_lower:
-                    # 回退：包含"农场"且不是"助手"
-                    if '农场' not in title_lower or '助手' in title_lower:
+                    if "农场" not in title_lower or "助手" in title_lower:
                         continue
-
-                hwnd = int(getattr(win, '_hWnd', 0) or 0)
+                hwnd = int(getattr(win, "_hWnd", 0) or 0)
                 if hwnd <= 0 or hwnd in seen_hwnd:
                     continue
-
-                width = int(getattr(win, 'width', 0) or 0)
-                height = int(getattr(win, 'height', 0) or 0)
-                left = int(getattr(win, 'left', 0) or 0)
-                top = int(getattr(win, 'top', 0) or 0)
-
-                # 严格过滤：过小、在屏幕外的窗口都不要
-                if width < 300 or height < 300:
+                width = int(getattr(win, "width", 0) or 0)
+                height = int(getattr(win, "height", 0) or 0)
+                left = int(getattr(win, "left", 0) or 0)
+                top = int(getattr(win, "top", 0) or 0)
+                if width < 300 or height < 300 or left < -5000 or top < -5000:
                     continue
-                if left < -5000 or top < -5000:
-                    continue
-
-                # 获取进程名
-                process_name = ''
+                process_name = ""
                 try:
                     pid = ctypes.c_ulong()
                     ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -1282,33 +650,123 @@ class SettingsPanel(QWidget):
                             proc = psutil.Process(pid.value)
                             process_name = proc.name()
                         except ImportError:
-                            # psutil 未安装时通过标题推断
-                            if 'qq' in title_lower:
-                                process_name = 'QQ.exe'
-                            elif 'wechat' in title_lower or '微信' in title:
-                                process_name = 'WeChat.exe'
+                            if "qq" in title_lower:
+                                process_name = "QQ.exe"
+                            elif "wechat" in title_lower or "微信" in title:
+                                process_name = "WeChat.exe"
                 except Exception:
                     pass
-
-                # 额外过滤：开发者工具/VSCode 相关窗口
-                if 'megumiss' in title_lower or 'devtools' in title_lower or 'chrome-devtools' in title_lower:
+                if "megumiss" in title_lower or "devtools" in title_lower:
                     continue
-
+                proc_lower = (process_name or "").lower()
+                if proc_lower in ("chrome.exe", "msedge.exe", "firefox.exe", "code.exe"):
+                    continue
                 matched.append({
-                    'hwnd': hwnd,
-                    'title': title,
-                    'left': left,
-                    'top': top,
-                    'width': width,
-                    'height': height,
-                    'process_name': process_name,
+                    "hwnd": hwnd, "title": title, "left": left, "top": top,
+                    "width": width, "height": height, "process_name": process_name,
                 })
                 seen_hwnd.add(hwnd)
-
-            # 按位置排序，保证顺序稳定
-            matched.sort(key=lambda item: (int(item['left']), int(item['top']), int(item['hwnd'])))
+            matched.sort(key=lambda item: (int(item["left"]), int(item["top"]), int(item["hwnd"])))
             return matched
         except Exception as e:
             from loguru import logger
-            logger.error(f'列出窗口失败: {e}')
+            logger.error(f"列出窗口失败: {e}")
             return []
+
+    # ── 加载配置 ────────────────────────────────────────────
+
+    def _load_config(self):
+        c = self.config
+        # 种植
+        self.level.setValue(int(c.planting.player_level))
+        self.level_ocr.setChecked(bool(c.planting.level_ocr_enabled))
+        self._set_combo_data(self.strategy, c.planting.strategy.value)
+        self._on_strategy_changed()
+        self._on_level_changed(c.planting.player_level)
+        self._update_auto_crop_label()
+        if c.planting.preferred_crop in self._crop_names:
+            self._set_combo_data(self.crop, c.planting.preferred_crop)
+        self.warehouse_first.setChecked(bool(c.planting.warehouse_first))
+        self.skip_event_crops.setChecked(bool(c.planting.skip_event_crops))
+        # 窗口
+        self.window_keyword.setText(str(c.window_title_keyword or ""))
+        self._refresh_windows()
+        self._set_combo_data(self.window_select, c.window_select_rule or "auto")
+        self._set_combo_data(self.run_mode, c.safety.run_mode.value)
+        self._set_combo_data(self.window_position, c.safety.window_position.value)
+        self.game_shortcut.setText(str(c.planting.game_shortcut_path or ""))
+        # 静默时段
+        self.silent_enabled.setChecked(c.silent_hours.enabled)
+        self.silent_start.setTime(QTime(c.silent_hours.start_hour, c.silent_hours.start_minute))
+        self.silent_end.setTime(QTime(c.silent_hours.end_hour, c.silent_hours.end_minute))
+        # 出售
+        self._set_combo_data(self.sell_mode, c.sell.mode.value)
+        self._on_sell_mode_changed(0)
+        for name, cb in self._sell_crop_cbs.items():
+            cb.setChecked(name in c.sell.sell_crops)
+        # Web
+        self._update_web_ui(c.web.enabled)
+        self.web_host.setText(str(c.web.host or "0.0.0.0"))
+        self.web_port.setValue(int(c.web.port))
+        # 高级
+        self.delay_min.setValue(float(c.safety.random_delay_min))
+        self.delay_max.setValue(float(c.safety.random_delay_max))
+        self.offset.setValue(int(c.safety.click_offset_range))
+        self.max_actions.setValue(int(c.safety.max_actions_per_round))
+        self.capture_interval.setValue(float(c.screenshot.capture_interval_seconds))
+        self.planting_stable.setValue(float(c.planting.planting_stable_seconds))
+        self.planting_stable_timeout.setValue(float(c.planting.planting_stable_timeout_seconds))
+        self.debug.setChecked(bool(c.safety.debug_log_enabled))
+        # 大小号通讯
+        self.ci_enabled.setChecked(bool(c.cross_instance.enabled))
+        self.ci_send.setChecked(bool(c.cross_instance.send_alerts))
+        self.ci_accept.setChecked(bool(c.cross_instance.accept_steal))
+        self.ci_threshold.setValue(int(c.cross_instance.alert_threshold_seconds))
+        self.ci_partners.setText(self._format_partners(c.cross_instance.partners))
+        # 日志路径
+        cfg_path = str(getattr(c, "_config_path", "") or "").strip()
+        if cfg_path:
+            try:
+                p = pathlib.Path(cfg_path).resolve()
+                if p.name.lower() == "config.json" and p.parent.name == "configs":
+                    self.logs_path_label.setText(str((p.parent.parent / "logs").resolve()))
+                else:
+                    self.logs_path_label.setText(str(pathlib.Path("logs").resolve()))
+            except Exception:
+                self.logs_path_label.setText(str(pathlib.Path("logs").resolve()))
+
+    # ── 大小号通讯配对解析 ────────────────────────────────────
+
+    @staticmethod
+    def _parse_partners(text: str) -> list:
+        """解析配对字符串 'id1:name1, id2:name2' → CrossInstancePartnerConfig 列表"""
+        partners = []
+        text = str(text or "").strip()
+        if not text:
+            return partners
+        for part in text.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" in part:
+                iid, fname = part.split(":", 1)
+                iid = iid.strip()
+                fname = fname.strip()
+                if iid and fname:
+                    partners.append(CrossInstancePartnerConfig(
+                        instance_id=iid, friend_name=fname, enabled=True,
+                    ))
+        return partners
+
+    @staticmethod
+    def _format_partners(partners: list) -> str:
+        """将 CrossInstancePartnerConfig 列表格式化为 'id1:name1, id2:name2'"""
+        if not partners:
+            return ""
+        parts = []
+        for p in partners:
+            iid = getattr(p, "instance_id", "") or ""
+            fname = getattr(p, "friend_name", "") or ""
+            if iid and fname:
+                parts.append(f"{iid}:{fname}")
+        return ", ".join(parts)

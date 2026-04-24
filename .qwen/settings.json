@@ -3,7 +3,9 @@
     "allow": [
       "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot/**)",
       "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot\\core\\engine\\bot/**)",
-      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot\\core\\engine\\task/**)"
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot\\core\\engine\\task/**)",
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot-master\\utils/**)",
+      "Read(C:\\Users\\FuXing\\Downloads\\Compressed\\qq-farm-copilot-master\\models/**)"
     ]
   },
   "$version": 3

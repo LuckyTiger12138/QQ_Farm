@@ -119,6 +119,14 @@ def get_best_crop_for_level(level: int) -> tuple | None:
     return max(available, key=lambda c: c[4] / c[3])
 
 
+def get_latest_crop_for_level(level: int) -> tuple | None:
+    """获取当前等级下可种植的最高等级（解锁等级最高）作物"""
+    available = get_crops_for_level(level)
+    if not available:
+        return None
+    return max(available, key=lambda c: c[2])
+
+
 def get_crop_index_in_list(name: str, level: int) -> int:
     """获取指定作物在当前等级可种列表中的位置索引（从0开始）
 

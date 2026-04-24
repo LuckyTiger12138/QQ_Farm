@@ -77,6 +77,7 @@ class CVDetector:
     def __init__(self, templates_dir: str = "templates"):
         self._templates_dir = templates_dir
         self._templates: dict[str, list[dict]] = {}  # category -> [{name, image, mask}]
+        self._templates_by_name: dict[str, dict] = {}  # name -> template dict（快速查找）
         self._loaded = False
         self._disabled_names: set[str] = set()
         self._disabled_file = os.path.join(templates_dir, "disabled.json")
@@ -204,6 +205,7 @@ class CVDetector:
     def load_templates(self):
         """加载所有模板图片"""
         self._templates = {}
+        self._templates_by_name = {}
         if not os.path.exists(self._templates_dir):
             os.makedirs(self._templates_dir, exist_ok=True)
             logger.warning(f"模板目录 {self._templates_dir} 为空，请先采集模板")
@@ -242,16 +244,24 @@ class CVDetector:
                 if not np.all(alpha == 255):
                     mask = alpha
                 template = template[:, :, :3]
+            
+            # 处理灰度图：预处理并缓存
+            if template.ndim == 2:
+                template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+            gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 
             if category not in self._templates:
                 self._templates[category] = []
 
-            self._templates[category].append({
+            tpl_data = {
                 "name": name,
                 "image": template,
+                "gray": gray,
                 "mask": mask,
                 "category": category,
-            })
+            }
+            self._templates[category].append(tpl_data)
+            self._templates_by_name[name] = tpl_data  # 快速查找
             count += 1
 
         self._loaded = True
@@ -399,33 +409,160 @@ class CVDetector:
     def detect_targeted(self, screenshot: np.ndarray,
                         names: list[str],
                         thresholds: dict[str, float] | None = None,
-                        scales: list[float] | None = None) -> list[DetectResult]:
-        """快速检测：只扫描指定模板名称，使用精简尺度集合"""
+                        scales: list[float] | None = None,
+                        roi_map: dict[str, tuple[int, int, int, int]] | None = None) -> list[DetectResult]:
+        """快速检测：只扫描指定模板名称，使用精简尺度集合
+        
+        Args:
+            screenshot: 截图
+            names: 要检测的模板名列表
+            thresholds: 单模板阈值覆盖 {template_name: threshold}
+            scales: 自定义尺度集合，默认 [1.0, 0.9, 1.1]
+            roi_map: ROI 区域映射 {template_name: (x1, y1, x2, y2)}，只在指定区域检测
+        
+        Returns:
+            list[DetectResult]: 检测结果列表
+        """
         if not self._loaded:
             self.load_templates()
 
+        if not names:
+            return []
+        
+        # 去重
         name_set = set(names)
-        # 精简尺度：只试 3 个尺度而非 13 个
+        # 精简尺度：只试 3 个尺度而非 5 个
         fast_scales = scales or [1.0, 0.9, 1.1]
 
         results = []
-        for category, templates in self._templates.items():
-            for tpl in templates:
-                if tpl["name"] not in name_set:
-                    continue
-                thresh = (thresholds.get(tpl["name"], 0.8)
-                          if thresholds else self.get_template_threshold(tpl["name"]))
-                results.extend(
-                    self._match_template_with_scales(
-                        screenshot, tpl, thresh, fast_scales
+        gray_screen = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+        
+        for name in name_set:
+            tpl = self._templates_by_name.get(name)
+            if tpl is None:
+                continue
+            
+            # 获取阈值
+            thresh = (thresholds.get(name, 0.8) if thresholds
+                      else self.get_template_threshold(name))
+            
+            # 检查是否有 ROI
+            roi = roi_map.get(name) if roi_map else None
+            if roi is not None:
+                # ROI 匹配：在局部区域搜索，再将命中坐标映射回全图
+                x1, y1, x2, y2 = [int(v) for v in roi]
+                sh, sw = screenshot.shape[:2]
+                x1 = max(0, min(x1, sw - 1))
+                y1 = max(0, min(y1, sh - 1))
+                x2 = max(x1 + 1, min(x2, sw))
+                y2 = max(y1 + 1, min(y2, sh))
+                if x2 > x1 and y2 > y1:
+                    roi_img = screenshot[y1:y2, x1:x2]
+                    roi_gray = gray_screen[y1:y2, x1:x2]
+                    tpl_matches = self._match_template_with_scales_roi(
+                        roi_img, roi_gray, tpl, thresh, fast_scales, offset=(x1, y1)
                     )
+                    results.extend(tpl_matches)
+            else:
+                # 全图匹配
+                tpl_matches = self._match_template_with_scales(
+                    screenshot, tpl, thresh, fast_scales
                 )
+                results.extend(tpl_matches)
 
+        # 过滤异常置信度
         results = [r for r in results
-                   if not (r.confidence != r.confidence or
+                   if not (r.confidence != r.confidence or  # nan 检查
                            r.confidence == float('inf') or
+                           r.confidence == float('-inf') or
                            r.confidence > 1.0)]
+        
+        # 按类别分组 NMS 去重
         return self._nms_by_category(results, iou_threshold=0.3)
+
+    def _match_template_with_scales_roi(self, roi_img, roi_gray, tpl, threshold, scales, offset):
+        """在 ROI 区域内进行模板匹配，返回相对于全图的坐标
+        
+        Args:
+            roi_img: ROI 区域彩色图
+            roi_gray: ROI 区域灰度图
+            tpl: 模板数据
+            threshold: 匹配阈值
+            scales: 缩放集合
+            offset: ROI 区域左上角在全图中的偏移 (x, y)
+        
+        Returns:
+            list[DetectResult]: 检测结果列表（坐标已映射到全图）
+        """
+        results = []
+        tpl_img = tpl["image"]
+        tpl_mask = tpl.get("mask")
+        tpl_gray = tpl.get("gray")
+        th, tw = tpl_img.shape[:2]
+        rh, rw = roi_img.shape[:2]
+        category = tpl["category"]
+        offset_x, offset_y = offset
+
+        for scale in scales:
+            new_w = int(tw * scale)
+            new_h = int(th * scale)
+            if new_w >= rw or new_h >= rh or new_w < 10 or new_h < 10:
+                continue
+
+            resized_mask = None
+            if tpl_mask is not None:
+                resized_mask = cv2.resize(tpl_mask, (new_w, new_h),
+                                          interpolation=cv2.INTER_NEAREST)
+
+            if category == "land":
+                resized_tpl = cv2.resize(tpl_img, (new_w, new_h))
+                confidences = []
+                for c in range(3):
+                    screen_ch = roi_img[:, :, c]
+                    tpl_ch = resized_tpl[:, :, c]
+                    if resized_mask is not None:
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED,
+                                               mask=resized_mask)
+                    else:
+                        mr = cv2.matchTemplate(screen_ch, tpl_ch,
+                                               cv2.TM_CCOEFF_NORMED)
+                    confidences.append(mr)
+                match_result = np.mean(confidences, axis=0)
+            else:
+                if tpl_gray is not None:
+                    resized_tpl = cv2.resize(tpl_gray, (new_w, new_h))
+                else:
+                    resized_tpl = cv2.resize(cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY), (new_w, new_h))
+                if resized_mask is not None:
+                    match_result = cv2.matchTemplate(
+                        roi_gray, resized_tpl, cv2.TM_CCOEFF_NORMED,
+                        mask=resized_mask)
+                else:
+                    match_result = cv2.matchTemplate(
+                        roi_gray, resized_tpl, cv2.TM_CCOEFF_NORMED)
+
+            np.nan_to_num(match_result, copy=False, nan=-1.0,
+                          posinf=-1.0, neginf=-1.0)
+
+            locations = np.where(match_result >= threshold)
+            for pt_y, pt_x in zip(*locations):
+                confidence = float(match_result[pt_y, pt_x])
+                # 坐标映射回全图
+                results.append(DetectResult(
+                    name=tpl["name"],
+                    category=tpl["category"],
+                    x=pt_x + new_w // 2 + offset_x,
+                    y=pt_y + new_h // 2 + offset_y,
+                    w=new_w,
+                    h=new_h,
+                    confidence=confidence,
+                ))
+
+            if scale == 1.0 and any(r.confidence > 0.95 for r in results):
+                break
+
+        return results
 
     def _find_template(self, name: str) -> dict | None:
         """按名称查找模板数据"""
@@ -442,7 +579,8 @@ class CVDetector:
         """使用指定尺度集合进行模板匹配"""
         results = []
         tpl_img = tpl["image"]
-        tpl_mask = tpl["mask"]
+        tpl_mask = tpl.get("mask")
+        tpl_gray = tpl.get("gray")
         th, tw = tpl_img.shape[:2]
         sh, sw = screenshot.shape[:2]
         category = tpl["category"]
@@ -477,8 +615,12 @@ class CVDetector:
                 match_result = np.mean(confidences, axis=0)
 
             else:
-                resized_tpl = cv2.resize(
-                    cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY), (new_w, new_h))
+                # 使用缓存的灰度图
+                if tpl_gray is not None:
+                    resized_tpl = cv2.resize(tpl_gray, (new_w, new_h))
+                else:
+                    resized_tpl = cv2.resize(
+                        cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY), (new_w, new_h))
                 if resized_mask is not None:
                     match_result = cv2.matchTemplate(
                         gray_screen, resized_tpl, cv2.TM_CCOEFF_NORMED,
@@ -520,7 +662,8 @@ class CVDetector:
         """
         results = []
         tpl_img = tpl["image"]
-        tpl_mask = tpl["mask"]
+        tpl_mask = tpl.get("mask")
+        tpl_gray = tpl.get("gray")
         th, tw = tpl_img.shape[:2]
         sh, sw = screenshot.shape[:2]
         category = tpl["category"]
@@ -532,9 +675,11 @@ class CVDetector:
             use_color = True
 
         else:
-            if tpl.get("gray") is None:
-                tpl["gray"] = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
-            tpl_match = tpl["gray"]
+            # 使用缓存的灰度图
+            if tpl_gray is None:
+                tpl_gray = cv2.cvtColor(tpl_img, cv2.COLOR_BGR2GRAY)
+                tpl["gray"] = tpl_gray
+            tpl_match = tpl_gray
             screen_match = gray_screen
             use_color = False
 

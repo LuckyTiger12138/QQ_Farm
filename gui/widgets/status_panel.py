@@ -1,256 +1,270 @@
-"""状态面板 — 现代卡片式统计仪表盘"""
-from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel, QHBoxLayout, QVBoxLayout, QFrame
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QLinearGradient, QColor
+"""Fluent 状态面板 — 任务队列信息 + 操作统计 + 深色主题自适应。"""
 
-from gui.styles import Colors
+from __future__ import annotations
 
+from datetime import datetime, timedelta
 
-class GradientCard(QFrame):
-    def __init__(self, gradient_start: str, gradient_end: str, parent=None):
-        super().__init__(parent)
-        self._gradient_start = gradient_start
-        self._gradient_end = gradient_end
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self._update_style()
-
-    def _update_style(self):
-        self.setStyleSheet(f"""
-            QFrame {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {self._gradient_start}, stop:1 {self._gradient_end});
-                border: none;
-                border-radius: 16px;
-                padding: 16px;
-            }}
-        """)
-
-
-class StatBadge(QFrame):
-    def __init__(self, icon: str, title: str, value: str, value_color: str, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 12px;
-            }}
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(6)
-
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet("font-size: 20px; background: transparent; border: none;")
-        top_row.addWidget(icon_lbl)
-
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 12px; background: transparent; border: none;")
-        top_row.addWidget(title_lbl)
-        top_row.addStretch()
-
-        layout.addLayout(top_row)
-
-        self._value_lbl = QLabel(value)
-        self._value_lbl.setStyleSheet(f"""
-            color: {value_color}; font-size: 22px; font-weight: 700;
-            background: transparent; border: none;
-        """)
-        layout.addWidget(self._value_lbl)
-
-    def set_value(self, text: str):
-        self._value_lbl.setText(text)
-
-
-class MiniStatCard(QFrame):
-    def __init__(self, icon: str, title: str, value: str, accent: str, parent=None):
-        super().__init__(parent)
-        self._accent = accent
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {Colors.CARD_BG};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 14px;
-            }}
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-
-        icon_row = QHBoxLayout()
-        icon_lbl = QLabel(icon)
-        icon_lbl.setStyleSheet(f"font-size: 18px; background: transparent; border: none;")
-        icon_row.addWidget(icon_lbl)
-        icon_row.addStretch()
-
-        self._dot = QLabel()
-        self._dot.setFixedSize(8, 8)
-        self._dot.setStyleSheet(f"""
-            background-color: {accent};
-            border-radius: 4px;
-            border: none;
-        """)
-        icon_row.addWidget(self._dot)
-        layout.addLayout(icon_row)
-
-        self._value_lbl = QLabel(value)
-        self._value_lbl.setStyleSheet(f"""
-            color: {Colors.TEXT}; font-size: 24px; font-weight: 700;
-            background: transparent; border: none;
-        """)
-        self._value_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._value_lbl)
-
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-size: 11px; background: transparent; border: none;")
-        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title_lbl)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    ElevatedCardWidget,
+    FluentIcon,
+    IconWidget,
+    StrongBodyLabel,
+    isDarkTheme,
+)
 
 
 class StatusPanel(QWidget):
+    """运行态统计显示（状态 + 任务队列 + 操作统计）。"""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._labels = {}
-        self._pulse_timer = QTimer(self)
-        self._pulse_timer.setInterval(800)
-        self._pulse_opacity = 1.0
-        self._pulse_direction = -1
-        self._pulse_timer.timeout.connect(self._pulse_tick)
-        self._init_ui()
+        self._labels: dict[str, StrongBodyLabel] = {}
+        self._numeric_keys = {
+            "running_tasks", "pending_tasks", "waiting_tasks",
+            "harvest", "plant", "water", "weed", "bug", "fertilize",
+        }
+        self._build_ui()
 
-    def _init_ui(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(12)
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
 
-        # ── 顶部标题 ──
-        header = QHBoxLayout()
-        title = QLabel("状态总览")
-        title.setStyleSheet(f"""
-            color: {Colors.TEXT}; font-size: 20px; font-weight: 700;
-            background: transparent; border: none;
-        """)
-        header.addWidget(title)
-        header.addStretch()
-        outer.addLayout(header)
+        # ── 运行状态卡片 ──
+        runtime_card, runtime_grid = self._build_card("运行状态", FluentIcon.ROBOT)
+        self._add_cell(runtime_grid, 0, 0, "状态", "state", "空闲")
+        self._add_cell(runtime_grid, 0, 1, "已运行", "elapsed", "--")
+        self._add_cell(runtime_grid, 0, 2, "下次检查", "next_farm_check", "--")
+        root.addWidget(runtime_card)
 
-        # ── 3 张大卡片 ──
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        # ── 任务队列卡片 ──
+        tasks_card, tasks_grid = self._build_card("任务队列", FluentIcon.CALENDAR)
+        self._add_cell(tasks_grid, 0, 0, "当前任务", "current_task", "--")
+        self._add_cell(tasks_grid, 0, 1, "运行中", "running_tasks", "0")
+        self._add_cell(tasks_grid, 0, 2, "待执行", "pending_tasks", "0")
+        self._add_cell(tasks_grid, 0, 3, "等待中", "waiting_tasks", "0")
+        self._add_cell(tasks_grid, 1, 0, "下一任务", "next_task", "--")
+        self._add_cell(tasks_grid, 1, 1, "下次执行", "next_run", "--")
+        root.addWidget(tasks_card)
 
-        self._state_card = GradientCard("#007AFF", "#5856D6")
-        state_layout = QVBoxLayout(self._state_card)
-        state_layout.setContentsMargins(20, 18, 20, 18)
-        state_layout.setSpacing(8)
+        # ── 操作统计卡片 ──
+        stats_card, stats_grid = self._build_card("操作统计", FluentIcon.APPLICATION)
+        self._add_cell(stats_grid, 0, 0, "收获", "harvest", "0")
+        self._add_cell(stats_grid, 0, 1, "播种", "plant", "0")
+        self._add_cell(stats_grid, 0, 2, "浇水", "water", "0")
+        self._add_cell(stats_grid, 1, 0, "除草", "weed", "0")
+        self._add_cell(stats_grid, 1, 1, "除虫", "bug", "0")
+        self._add_cell(stats_grid, 1, 2, "施肥", "fertilize", "0")
+        root.addWidget(stats_card)
+        root.addStretch()
 
-        state_header = QHBoxLayout()
-        state_icon = QLabel("⚡")
-        state_icon.setStyleSheet("font-size: 22px; background: transparent; border: none;")
-        state_header.addWidget(state_icon)
-        state_header.addStretch()
-        self._state_badge = QLabel("未启动")
-        self._state_badge.setStyleSheet("""
-            color: rgba(255,255,255,0.7); font-size: 12px;
-            background: rgba(255,255,255,0.15); border: none;
-            border-radius: 10px; padding: 3px 10px;
-        """)
-        state_header.addWidget(self._state_badge)
-        state_layout.addLayout(state_header)
+    def _build_card(self, title: str, icon: FluentIcon) -> tuple[ElevatedCardWidget, QGridLayout]:
+        card = ElevatedCardWidget(self)
+        card.setObjectName("statusCard")
+        card.setStyleSheet(
+            "ElevatedCardWidget#statusCard { border-radius: 10px; border: 1px solid rgba(100,116,139,0.22); }"
+            "ElevatedCardWidget#statusCard:hover {"
+            " background-color: rgba(37,99,235,0.06); border: 1px solid rgba(59,130,246,0.32); }"
+        )
+        wrapper = QVBoxLayout(card)
+        wrapper.setContentsMargins(12, 10, 12, 10)
+        wrapper.setSpacing(8)
 
-        self._state_value = QLabel("● 未启动")
-        self._state_value.setStyleSheet("""
-            color: #FFFFFF; font-size: 26px; font-weight: 700;
-            background: transparent; border: none;
-        """)
-        state_layout.addWidget(self._state_value)
+        header = QWidget(card)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        icon_widget = IconWidget(icon, header)
+        icon_widget.setFixedSize(14, 14)
+        header_layout.addWidget(icon_widget)
+        title_label = BodyLabel(title)
+        title_label.setStyleSheet("font-weight: 700; font-size: 14px; color: #1e293b;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        wrapper.addWidget(header)
 
-        top_row.addWidget(self._state_card, 1)
-
-        self._time_card = StatBadge("⏱", "已运行", "--", Colors.TEXT)
-        top_row.addWidget(self._time_card, 1)
-
-        self._next_card = StatBadge("🕐", "下次检查", "--", Colors.TEXT)
-        top_row.addWidget(self._next_card, 1)
-
-        outer.addLayout(top_row)
-
-        # ── 操作统计：6 个彩色卡片 ──
-        grid_label = QLabel("操作统计")
-        grid_label.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;
-            background: transparent; border: none;
-        """)
-        outer.addWidget(grid_label)
+        divider = QWidget(card)
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background-color: rgba(37,99,235,0.10); border: none;")
+        wrapper.addWidget(divider)
 
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setContentsMargins(0, 2, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        wrapper.addLayout(grid)
+        return card, grid
 
-        stats = [
-            ("🌾", "收获", "0", Colors.SUCCESS),
-            ("🌱", "播种", "0", "#007AFF"),
-            ("💧", "浇水", "0", "#5AC8FA"),
-            ("🌿", "除草", "0", "#34C759"),
-            ("🐛", "除虫", "0", Colors.WARNING),
-            ("💊", "施肥", "0", "#AF52DE"),
-        ]
-        self._mini_cards = {}
-        for i, (icon, label_text, val, accent) in enumerate(stats):
-            card = MiniStatCard(icon, label_text, val, accent)
-            self._mini_cards[label_text] = card
-            grid.addWidget(card, i // 3, i % 3)
+    def _add_cell(self, grid: QGridLayout, row: int, col: int, title: str, key: str, default: str):
+        row_widget = QWidget(self)
+        row_widget.setObjectName("statusItem")
+        row_widget.setStyleSheet("QWidget#statusItem { border: none; border-radius: 6px; background: transparent; }")
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(6, 2, 6, 2)
+        row_layout.setSpacing(6)
+        title_label = CaptionLabel(f"{title}:")
+        title_label.setTextColor(QColor("#64748B"), QColor("#94A3B8"))
+        row_layout.addWidget(title_label)
+        value = StrongBodyLabel(default)
+        if key in self._numeric_keys:
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            value.setMinimumWidth(value.fontMetrics().horizontalAdvance("00000"))
+        if key in {"current_task", "next_run"}:
+            value.setStyleSheet("font-weight: 700;")
+        value.setTextColor(QColor("#0F172A"), QColor("#E5E7EB"))
+        row_layout.addWidget(value)
+        row_layout.addStretch()
+        grid.addWidget(row_widget, row, col)
+        self._labels[key] = value
 
-        outer.addLayout(grid)
-        outer.addStretch()
+    def _set_value(self, key: str, value: str, *, tooltip: str | None = None):
+        label = self._labels.get(key)
+        if label is None:
+            return
+        text = str(value)
+        label.setText(text)
+        label.setToolTip(text if tooltip is None else str(tooltip))
 
-        self._labels["elapsed"] = self._time_card._value_lbl
-        self._labels["next_farm"] = self._next_card._value_lbl
+    @staticmethod
+    def _safe_int(value) -> int:
+        try:
+            return int(str(value))
+        except Exception:
+            return 0
 
-    def _pulse_tick(self):
-        self._pulse_opacity += self._pulse_direction * 0.12
-        if self._pulse_opacity <= 0.5:
-            self._pulse_direction = 1
-        elif self._pulse_opacity >= 1.0:
-            self._pulse_direction = -1
-        self._state_value.setStyleSheet(f"""
-            color: rgba(255, 255, 255, {self._pulse_opacity:.2f});
-            font-size: 26px; font-weight: 700;
-            background: transparent; border: none;
-        """)
+    @staticmethod
+    def _format_seconds(seconds: int) -> str:
+        sec = max(0, int(seconds))
+        day, rem = divmod(sec, 86400)
+        hour, rem = divmod(rem, 3600)
+        minute, second = divmod(rem, 60)
+        if day > 0:
+            return f"{day}天{hour}小时"
+        if hour > 0:
+            return f"{hour}小时{minute}分"
+        if minute > 0:
+            return f"{minute}分{second}秒"
+        return f"{second}秒"
+
+    @classmethod
+    def _format_next_run(cls, raw_value) -> tuple[str, str]:
+        raw = str(raw_value or "--").strip()
+        if not raw or raw == "--":
+            return "--", "--"
+        normalized = raw.replace("T", " ")
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                parsed = datetime.strptime(normalized, fmt)
+                break
+            except Exception:
+                continue
+        if parsed is None:
+            for fmt in ("%m-%d %H:%M:%S", "%m-%d %H:%M"):
+                try:
+                    partial = datetime.strptime(normalized, fmt)
+                    now = datetime.now()
+                    parsed = partial.replace(year=now.year)
+                    if parsed < now - timedelta(days=180):
+                        parsed = parsed.replace(year=now.year + 1)
+                    break
+                except Exception:
+                    continue
+        if parsed is None:
+            return raw, raw
+        now = datetime.now()
+        delta = int((parsed - now).total_seconds())
+        when = parsed.strftime("%H:%M:%S") if parsed.date() == now.date() else parsed.strftime("%m-%d %H:%M:%S")
+        relative = f"{cls._format_seconds(delta)}后" if delta >= 0 else f"{cls._format_seconds(-delta)}前"
+        return f"{when}({relative})", parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _short_text(raw_value, limit: int = 22) -> str:
+        text = str(raw_value or "--")
+        if len(text) <= limit:
+            return text
+        head = max(4, limit // 2 - 2)
+        tail = max(4, limit - head - 3)
+        return f"{text[:head]}...{text[-tail:]}"
+
+    def _set_counter_color(self, key: str, value: int, active_light: str, active_dark: str):
+        label = self._labels.get(key)
+        if label is None:
+            return
+        if int(value) <= 0:
+            label.setTextColor(QColor("#64748B"), QColor("#94A3B8"))
+            return
+        label.setTextColor(QColor(active_light), QColor(active_dark))
+
+    def _set_state_badge(self, state: str, state_text: str):
+        fg_map = {
+            "idle": QColor("#64748B"),
+            "running": QColor("#16A34A"),
+            "paused": QColor("#D97706"),
+            "error": QColor("#DC2626"),
+        }
+        style_map = {
+            "idle": ("rgba(100,116,139,0.10)", "rgba(100,116,139,0.30)"),
+            "running": ("rgba(22,163,74,0.12)", "rgba(22,163,74,0.34)"),
+            "paused": ("rgba(217,119,6,0.12)", "rgba(217,119,6,0.34)"),
+            "error": ("rgba(220,38,38,0.12)", "rgba(220,38,38,0.34)"),
+        }
+        fg = fg_map.get(state, QColor("#2563EB"))
+        bg, border = style_map.get(state, ("rgba(37,99,235,0.12)", "rgba(37,99,235,0.34)"))
+        label = self._labels.get("state")
+        if label is None:
+            return
+        label.setText(state_text)
+        label.setToolTip(state_text)
+        label.setTextColor(fg, fg)
+        label.setStyleSheet(
+            "QLabel {"
+            f" background-color: {bg};"
+            f" border: 1px solid {border};"
+            " border-radius: 8px;"
+            " padding: 0 7px;"
+            " font-size: 12px;"
+            " font-weight: 600;"
+            " }"
+        )
 
     def update_stats(self, stats: dict):
-        state = stats.get("state", "idle")
-        state_map = {
-            "idle":    ("未启动", "● 未启动", False),
-            "running": ("运行中", "● 运行中", True),
-            "paused":  ("已暂停", "● 已暂停", False),
-            "error":   ("异常",   "● 异常", False),
-        }
-        badge_text, value_text, pulse = state_map.get(state, ("运行中", "● 运行中", True))
+        state = str(stats.get("state", "idle"))
+        state_text = {
+            "idle": "空闲",
+            "running": "运行中",
+            "paused": "已暂停",
+            "error": "异常",
+        }.get(state, state)
+        self._set_state_badge(state, state_text)
+        self._set_value("elapsed", stats.get("elapsed", "--"))
 
-        self._state_badge.setText(badge_text)
-        self._state_value.setText(value_text)
+        # 任务队列信息
+        running_tasks = self._safe_int(stats.get("running_tasks", 0))
+        pending_tasks = self._safe_int(stats.get("pending_tasks", 0))
+        waiting_tasks = self._safe_int(stats.get("waiting_tasks", 0))
+        self._set_value("current_task", self._short_text(stats.get("current_task", "--")))
+        self._set_value("running_tasks", running_tasks)
+        self._set_value("pending_tasks", pending_tasks)
+        self._set_value("waiting_tasks", waiting_tasks)
+        self._set_counter_color("running_tasks", running_tasks, "#16A34A", "#4ADE80")
+        self._set_counter_color("pending_tasks", pending_tasks, "#2563EB", "#60A5FA")
+        self._set_counter_color("waiting_tasks", waiting_tasks, "#D97706", "#FBBF24")
+        self._set_value("next_task", self._short_text(stats.get("next_task", "--")))
+        next_run_text, next_run_tooltip = self._format_next_run(stats.get("next_run", "--"))
+        self._set_value("next_run", next_run_text, tooltip=next_run_tooltip)
 
-        if pulse:
-            self._pulse_timer.start()
-        else:
-            self._pulse_timer.stop()
-            self._state_value.setStyleSheet("""
-                color: #FFFFFF; font-size: 26px; font-weight: 700;
-                background: transparent; border: none;
-            """)
+        # 操作统计
+        for key in ("harvest", "plant", "water", "weed", "bug", "fertilize"):
+            value = self._safe_int(stats.get(key, 0))
+            self._set_value(key, value)
+            self._set_counter_color(key, value, "#0F766E", "#2DD4BF")
 
-        self._labels["elapsed"].setText(stats.get("elapsed", "--"))
-        self._labels["next_farm"].setText(stats.get("next_farm_check", "--"))
-
-        count_map = {
-            "收获": "harvest", "播种": "plant", "浇水": "water",
-            "除草": "weed", "除虫": "bug", "施肥": "fertilize",
-        }
-        for cn_label, key in count_map.items():
-            if cn_label in self._mini_cards:
-                self._mini_cards[cn_label]._value_lbl.setText(str(stats.get(key, 0)))
+        # 向后兼容：旧字段
+        if "next_farm_check" in self._labels:
+            self._set_value("next_farm_check", stats.get("next_farm_check", "--"))

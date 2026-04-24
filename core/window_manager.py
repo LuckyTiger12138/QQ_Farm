@@ -50,7 +50,6 @@ class WindowManager:
                     title = str(getattr(win, 'title', '') or '')
                     if title_keyword.lower() in title.lower():
                         info = self._create_window_info(win)
-                        logger.debug(f"复用已锁定窗口：{info.title} (hwnd={hwnd})")
                         return info
         except Exception as e:
             logger.error(f"验证 hwnd {hwnd} 失败: {e}")
@@ -124,7 +123,7 @@ class WindowManager:
             height=w.height,
         )
         self._cached_window = info
-        logger.debug(f"找到窗口：{info.title} ({info.width}x{info.height})")
+        logger.trace(f"找到窗口：{info.title} ({info.width}x{info.height})")
         return info
 
     def get_window_rect(self) -> tuple[int, int, int, int] | None:
@@ -250,8 +249,27 @@ class WindowManager:
 
                 width = int(getattr(win, 'width', 0) or 0)
                 height = int(getattr(win, 'height', 0) or 0)
-                if width <= 0 or height <= 0:
+                # 严格过滤：过小的窗口不要（Chrome 标签提示、工具提示等）
+                if width < 300 or height < 300:
                     continue
+
+                # 过滤：排除浏览器等非游戏窗口
+                try:
+                    pid = ctypes.c_ulong()
+                    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value:
+                        try:
+                            import psutil
+                            proc_name = psutil.Process(pid.value).name().lower()
+                        except Exception:
+                            proc_name = ''
+                        # 排除浏览器进程
+                        if proc_name in ('chrome.exe', 'msedge.exe', 'firefox.exe',
+                                         'brave.exe', 'opera.exe', 'vivaldi.exe',
+                                         'code.exe', 'explorer.exe'):
+                            continue
+                except Exception:
+                    pass
 
                 matched.append(win)
                 seen_hwnd.add(hwnd)

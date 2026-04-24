@@ -24,7 +24,7 @@ from loguru import logger
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from models.config import AppConfig, PlantMode, RunMode
+from models.config import AppConfig, PlantMode, RunMode, TaskScheduleItemConfig
 from models.farm_state import ActionType
 from models.game_data import get_best_crop_for_level, get_crop_by_name, format_grow_time
 from core.window_manager import WindowManager
@@ -34,11 +34,19 @@ from core.action_executor import ActionExecutor
 from core.task_scheduler import TaskScheduler, BotState
 from core.scene_detector import Scene, identify_scene
 from core.silent_hours import is_silent_time, get_silent_remaining_seconds
-from core.task_executor import TaskExecutor, TaskItem
+from core.task_executor import (
+    TaskExecutor as AsyncTaskExecutor,
+    TaskItem, TaskResult, TaskContext, TaskSnapshot,
+    build_task_item,
+)
+from tasks.land_scan import LandScanTask
 from core.strategies import (
     PopupStrategy, HarvestStrategy, MaintainStrategy,
     PlantStrategy, ExpandStrategy, FriendStrategy, TaskStrategy,
+    GiftStrategy, TargetedStealStrategy,
 )
+from core.ui.navigator import Navigator
+from core.cross_instance_bus import CrossInstanceBus, StealAlert
 
 
 class BotWorker(QThread):
@@ -88,9 +96,18 @@ SCENE_TEMPLATES = [
     "icon_bug_in_friend_detail",
     # 状态图标
     "icon_mature", "icon_bug", "icon_water",
+    # 地块状态图标（地块巡查用）
+    "icon_land_stand", "icon_land_red", "icon_land_black",
+    "icon_land_gold", "icon_land_gold_2",
+    "btn_land_right", "btn_land_left",
+    "btn_expand_brand", "btn_land_pop_empty",
+    "btn_crop_removal", "btn_crop_maturity_time_suffix",
     # UI 元素（异地登录等）
     "ui_remote_login", "ui_next_time", "icon_levelup",
     "ui_shangcheng", "btn_shangcehng_fanhui",
+    # 页面导航标识（商城/邮件/菜单）
+    "mall_check", "mail_check", "menu_check",
+    "main_goto_mall", "main_goto_menu", "menu_goto_mail",
 ]
 
 LAND_TEMPLATES = [
@@ -109,10 +126,12 @@ class BotEngine(QObject):
     _request_farm_check = pyqtSignal()
     config_updated = pyqtSignal(object)  # 配置更新信号，通知 GUI 刷新
 
-    def __init__(self, config: AppConfig, instance_id: str = 'default'):
+    def __init__(self, config: AppConfig, instance_id: str = 'default',
+                 cross_bus: CrossInstanceBus | None = None):
         super().__init__()
         self.config = config
         self.instance_id = instance_id  # 实例 ID，用于日志和截图分离
+        self._cross_bus = cross_bus  # 跨实例消息总线
         
         # 老板键状态
         self._game_hidden = False  # 游戏窗口是否已隐藏
@@ -132,8 +151,11 @@ class BotEngine(QObject):
         self.expand = ExpandStrategy(self.cv_detector)      # P3
         self.task = TaskStrategy(self.cv_detector)          # P3.5
         self.friend = FriendStrategy(self.cv_detector)      # P4
+        self.gift = GiftStrategy(self.cv_detector)          # P5 礼品领取
+        self.targeted_steal = TargetedStealStrategy(self.cv_detector)  # 定点偷菜（大小号通讯）
         self._strategies = [self.popup, self.harvest, self.maintain,
-                            self.plant, self.expand, self.task, self.friend]
+                            self.plant, self.expand, self.task, self.friend, self.gift,
+                            self.targeted_steal]
 
         # [4] 操作执行层
         self.action_executor: ActionExecutor | None = None
@@ -146,6 +168,15 @@ class BotEngine(QObject):
         self._fertilized = False  # 标记是否已施肥
         self._planted_idle_rounds = 0  # 已播种但未检测到收获按钮的连续轮数
 
+        # 新版异步执行器
+        self._async_executor: AsyncTaskExecutor | None = None
+        self._task_snapshots: TaskSnapshot | None = None
+        self._bot_stop_requested = False  # 通用停止标志（任务级别）
+
+        # OCR 工具（延迟初始化）
+        self._head_info_ocr = None
+        self._land_scan_task: LandScanTask | None = None
+
 
         self.scheduler.farm_check_triggered.connect(self._on_farm_check)
         self.scheduler.friend_check_triggered.connect(self._on_friend_check)
@@ -155,12 +186,49 @@ class BotEngine(QObject):
         self.scheduler.window_lost.connect(self._on_window_lost)
         self.scheduler.set_window_check_fn(self._is_window_alive)
 
+    def _ensure_head_info_ocr(self):
+        """延迟初始化 HeadInfoOCR。"""
+        if self._head_info_ocr is not None:
+            return self._head_info_ocr
+        try:
+            from utils.head_info_ocr import HeadInfoOCR
+            from utils.ocr_provider import get_ocr_tool
+            self._head_info_ocr = HeadInfoOCR(ocr_tool=get_ocr_tool())
+        except Exception as e:
+            logger.debug(f"HeadInfoOCR 初始化失败: {e}")
+            self._head_info_ocr = None
+        return self._head_info_ocr
+
+    def _ensure_land_scan_task(self) -> LandScanTask | None:
+        """延迟初始化 LandScanTask。"""
+        if self._land_scan_task is not None:
+            return self._land_scan_task
+        try:
+            from utils.ocr_provider import get_ocr_tool
+            self._land_scan_task = LandScanTask(ocr_tool=get_ocr_tool())
+        except Exception as e:
+            logger.debug(f"LandScanTask 初始化失败: {e}")
+            self._land_scan_task = None
+        return self._land_scan_task
+
+    def _ensure_main_scene(self, rect: tuple):
+        """确保游戏回到主界面（关闭弹窗）。"""
+        cv_img, detections = self._fast_capture_and_detect(rect)
+        if cv_img is None:
+            return
+        popup = self.popup
+        if popup:
+            popup.handle_popup(detections)
+
     # 策略用快速截屏检测所需的额外模板
     _STRATEGY_EXTRA_TEMPLATES = [
         "btn_expand_confirm", "btn_fertilize_popup",
         "bth_feiliao2_yj", "bth_feiliao_pt",
         "btn_batch_sell", "btn_sell", "btn_cangku",
         "btn_haoyou", "btn_task",
+        # 礼品领取相关
+        "btn_qqsvip", "btn_mall_free", "btn_mall_free_done",
+        "btn_oneclick_open", "mall_goto_main", "btn_shangcehng_fanhui",
     ]
 
     def _init_strategies(self):
@@ -169,9 +237,28 @@ class BotEngine(QObject):
             s.action_executor = self.action_executor
             s.set_capture_fn(self._fast_strategy_capture)
             s._stop_requested = False
+        # 页面导航器
+        def _nav_click(x: int, y: int, desc: str = "") -> None:
+            """Navigator 用的点击函数，复用 Strategy 的 click 逻辑"""
+            if self.action_executor and not self._bot_stop_requested:
+                from models.farm_state import Action
+                action = Action(type=ActionType.NAVIGATE,
+                                click_position={"x": x, "y": y},
+                                priority=0, description=desc)
+                self.action_executor.execute_action(action)
+
+        self._navigator = Navigator(
+            capture_fn=self._fast_strategy_capture,
+            click_fn=_nav_click,
+            stopped_fn=lambda: self._bot_stop_requested,
+        )
+        self.gift.navigator = self._navigator
         self.task.sell_config = self.config.sell
         self.plant.auto_buy_seed = self.config.features.auto_buy_seed
         self.plant.auto_fertilize = self.config.features.auto_fertilize
+        # 好友策略配置
+        self.friend.set_blacklist(self.config.features.friend.blacklist)
+        self.friend._instance_id = self.instance_id
 
     def _fast_strategy_capture(self, rect: tuple, save: bool = False,
                                 prefix: str = "strategy",
@@ -191,29 +278,24 @@ class BotEngine(QObject):
         return cv_image, detections, None
 
     def update_config(self, config: AppConfig):
-        logger.info(f"⚙️ BotEngine[{self.instance_id}].update_config: config_id={id(config)} | auto_harvest={config.features.auto_harvest}")
+        logger.info(
+            f"⚙️ BotEngine[{self.instance_id}].update_config: config_id={id(config)} | "
+            f"auto_harvest={config.features.auto_harvest} | cross_instance.enabled={config.cross_instance.enabled}"
+        )
         self.config = config
         self.task.sell_config = config.sell
         self.plant.auto_buy_seed = config.features.auto_buy_seed
         self.plant.auto_fertilize = self.config.features.auto_fertilize
         self.config_updated.emit(config)  # 通知 GUI 刷新
 
-        # ✅ 更新调度器定时器间隔（修改配置后自动刷新）
-        farm_ms = config.schedule.farm_check_seconds * 1000
-        friend_ms = config.schedule.friend_check_seconds * 1000
-        self.scheduler.set_farm_interval(farm_ms)
-        self.scheduler.set_friend_interval(friend_ms)
-        logger.debug(f"调度器间隔已更新: 农场={config.schedule.farm_check_seconds}s, 好友={config.schedule.friend_check_seconds}s")
+        # ✅ 同步任务执行器配置（间隔/启用状态等）
+        if self._async_executor:
+            self._sync_executor_tasks()
 
         # ✅ 重新加载模板元数据（确保修改的阈值配置生效）
-        # 用户通过 GUI 修改阈值后，配置已更新到 self.config，
-        # 但 cv_detector 内部缓存的阈值字典需要刷新。
         if hasattr(self.cv_detector, 'load_templates'):
             self.cv_detector.load_templates()
             logger.info("模板元数据（含阈值）已重新加载，新配置生效")
-
-        # 注意：此处不再自动唤醒定时器，防止 Web 端轮询配置导致频繁触发。
-        # 静默时段检查应在调度器触发任务时进行。
 
     def _resolve_crop_name(self) -> str:
         """根据策略决定种植作物"""
@@ -320,6 +402,7 @@ class BotEngine(QObject):
         # 重置状态
         self._planted = False
         self._fertilized = False
+        self._bot_stop_requested = False
 
         # 初始化实例独立的目录（日志和截图）
         self._setup_instance_dirs()
@@ -365,20 +448,36 @@ class BotEngine(QObject):
         )
         self._init_strategies()
 
-        # 使用秒级间隔（配置值 * 1000 转毫秒）
-        farm_ms = self.config.schedule.farm_check_seconds * 1000
-        friend_ms = self.config.schedule.friend_check_seconds * 1000
-        self.scheduler.start(farm_ms, friend_ms)
         mode_text = "后台" if run_mode == RunMode.BACKGROUND else "前台"
         self.log_message.emit(f"Bot已启动 - 窗口: {window.title} | 模板: {tpl_count}个 | 模式: {mode_text}")
+
+        # 启动异步任务执行器（替代旧 TaskScheduler）
+        self._init_executor()
+
+        # 标记调度器为运行状态（GUI 依赖此状态）
+        self.scheduler.mark_running()
+        # 窗口存活监控：仅开启掉线重登时才需要定时检查
+        if self.config.safety.auto_remote_login:
+            self.scheduler.start_window_check()
+
+        # 启动时检查更新（异步，不阻塞）
+        self._check_update_async()
+
         return True
 
     def stop(self):
         """停止 Bot - 立即停止所有操作"""
         logger.info("停止请求：设置停止标志")
-        # 1. 设置所有策略的停止标志
+
+        # 0. 设置通用停止标志（任务级别）
+        self._bot_stop_requested = True
+
+        # 1. 设置所有策略的停止标志（必须在停 executor 之前，让运行中的任务能响应停止）
         for s in self._strategies:
             s._stop_requested = True
+
+        # 2. 停止异步执行器
+        self._stop_executor()
 
         # 2. 停止调度器（停止定时器）
         self.scheduler.stop()
@@ -409,25 +508,38 @@ class BotEngine(QObject):
         # 5. 重置策略停止标志（为下次启动做准备）
         for s in self._strategies:
             s._stop_requested = False
+        # 注意：_bot_stop_requested 不在此处重置，因为 executor 线程可能还在运行
+        # 它会在 start() 时重置
 
         self.log_message.emit("Bot 已停止")
 
     def pause(self):
         for s in self._strategies:
             s._stop_requested = True
+        if self._async_executor:
+            self._async_executor.pause()
         self.scheduler.pause()
 
     def resume(self):
         for s in self._strategies:
             s._stop_requested = False
+        if self._async_executor:
+            self._async_executor.resume()
         self.scheduler.resume()
 
     def run_once(self):
-        self._on_farm_check()
+        """手动触发农场巡查"""
+        if self._async_executor:
+            self._async_executor.task_call("main")
+        else:
+            self._on_farm_check()
 
     def run_friend_once(self):
         """手动触发好友巡查"""
-        self._on_friend_check()
+        if self._async_executor:
+            self._async_executor.task_call("friend")
+        else:
+            self._on_friend_check()
 
     def test_fertilize(self):
         """测试施肥流程"""
@@ -596,38 +708,143 @@ class BotEngine(QObject):
         self._worker.error.connect(self._on_task_error)
         self._worker.start()
 
+    # ============================================================
+    # 地块巡查
+    # ============================================================
+
+    def _check_land_triggers(self) -> dict:
+        """检查地块数据中的倒计时和播种需求，返回触发建议。
+
+        Returns:
+            {"need_harvest": bool, "need_plant": bool, "alert_plots": list[dict]}
+        """
+        triggers = {"need_harvest": False, "need_plant": False, "alert_plots": []}
+        plots = self.config.land.plots
+        if not isinstance(plots, list) or not plots:
+            return triggers
+
+        ci_cfg = self.config.cross_instance
+        threshold = ci_cfg.alert_threshold_seconds if ci_cfg.enabled else 300
+
+        for plot in plots:
+            if not isinstance(plot, dict):
+                continue
+
+            # 检查倒计时是否即将结束
+            cd = str(plot.get("maturity_countdown", "") or "").strip()
+            if cd and ":" in cd:
+                parts = cd.split(":")
+                try:
+                    total = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                    if 0 < total <= threshold:
+                        triggers["need_harvest"] = True
+                    # 跨实例通知：收集即将成熟的地块
+                    if 0 < total <= threshold and ci_cfg.enabled and ci_cfg.send_alerts:
+                        triggers["alert_plots"].append({
+                            "plot_id": plot.get("plot_id", ""),
+                            "maturity_seconds": total,
+                        })
+                except (ValueError, IndexError):
+                    pass
+
+            # 检查是否有需要播种的地块
+            if plot.get("need_planting"):
+                triggers["need_plant"] = True
+
+        if triggers["need_harvest"] or triggers["need_plant"]:
+            reasons = []
+            if triggers["need_harvest"]:
+                reasons.append("倒计时即将结束")
+            if triggers["need_plant"]:
+                reasons.append("有空地待播种")
+            logger.info(f"地块触发: {', '.join(reasons)}")
+
+        return triggers
+
+    def _run_task_land_scan(self, ctx: TaskContext) -> TaskResult:
+        """地块巡查：逐块点击+OCR采集，更新 config.land"""
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        land_scan = self._ensure_land_scan_task()
+        if land_scan is None:
+            return TaskResult(success=False, error="LandScanTask 未初始化（OCR 不可用）")
+
+        try:
+            success = land_scan.run(self)
+        except Exception as e:
+            logger.error(f"地块巡查异常: {e}")
+            return TaskResult(success=False, error=str(e))
+
+        # 巡查完成后检查地块触发条件
+        if success:
+            triggers = self._check_land_triggers()
+            # 跨实例通知：广播即将成熟的地块
+            alert_plots = triggers.get("alert_plots", [])
+            if alert_plots:
+                self._broadcast_steal_alerts(alert_plots)
+            if triggers["need_harvest"] or triggers["need_plant"]:
+                if self._async_executor and self._async_executor.is_task_enabled("main"):
+                    logger.info("地块巡查后触发农场任务")
+                    self._async_executor.task_call("main", force_call=False)
+                else:
+                    logger.debug("地块巡查: 检测到待处理地块，但 main 任务未启用，跳过触发")
+
+        return TaskResult(success=bool(success))
+
+    def _broadcast_steal_alerts(self, alert_plots: list[dict]) -> None:
+        """向配置的伙伴实例广播即将成熟的偷菜通知"""
+        if not self._cross_bus:
+            return
+        ci_cfg = self.config.cross_instance
+        if not ci_cfg.enabled or not ci_cfg.send_alerts:
+            return
+        if not alert_plots:
+            return
+
+        plot_ids = [p["plot_id"] for p in alert_plots if p.get("plot_id")]
+        earliest = min(p.get("maturity_seconds", 300) for p in alert_plots)
+
+        instance_name = getattr(self, '_instance_display_name', None) or self.instance_id
+
+        logger.info(
+            f"[大小号通讯📤] [{instance_name}] 检测到 {len(plot_ids)} 个地块即将成熟，"
+            f"向 {len(ci_cfg.partners)} 个配对实例广播通知"
+        )
+
+        for partner in ci_cfg.partners:
+            if not partner.enabled or not partner.instance_id or not partner.friend_name:
+                continue
+            alert = StealAlert(
+                source_instance_id=self.instance_id,
+                source_name=instance_name,
+                friend_name=partner.friend_name,
+                target_instance_id=partner.instance_id,
+                plot_ids=plot_ids,
+                earliest_maturity_seconds=earliest,
+            )
+            logger.info(
+                f"[大小号通讯📤] 通知 [{partner.instance_id}]: "
+                f"好友[{partner.friend_name}] | 地块: {','.join(plot_ids)} | "
+                f"最近成熟: {earliest}s"
+            )
+            self._cross_bus.post_alert(alert)
+
     def _on_farm_finished(self, result: dict):
-        """农场任务完成回调"""
+        """农场任务完成回调（BotWorker fallback 专用）"""
         if self.scheduler.state == BotState.IDLE:
             return
         self._is_busy = False
         self._record_actions(result)
 
-        next_sec = result.get("next_check_seconds", 0)
-        if next_sec > 0:
-            self.scheduler.set_farm_interval(next_sec * 1000)  # 转为毫秒
-
-        # 农场任务完成后，如果好友巡查时间已到（或从未执行过），立即触发
-        friend_cfg = self.config.features.friend
-        has_friend_feature = (friend_cfg.enable_steal or friend_cfg.enable_weed
-                              or friend_cfg.enable_water or friend_cfg.enable_bug)
-        if self.action_executor and has_friend_feature:
-            now = time.time()
-            next_friend = self.scheduler._next_friend_check
-            # next_friend == 0 表示从未执行过好友巡查，应立即触发
-            if next_friend == 0 or now >= next_friend:
-                logger.info("农场任务完成，触发好友巡查")
-                self._on_friend_check()
-
     def _on_friend_finished(self, result: dict):
-        """好友巡查完成回调"""
+        """好友巡查完成回调（BotWorker fallback 专用）"""
         if self.scheduler.state == BotState.IDLE:
             logger.debug("Bot 已停止，忽略好友巡查完成回调")
             return
         self._is_busy = False
         self._record_actions(result)
-        logger.info("好友巡查完成，立即触发农场检查")
-        self._request_farm_check.emit()
 
     def _record_actions(self, result: dict):
         """记录操作统计信息"""
@@ -653,6 +870,26 @@ class BotEngine(QObject):
     def _on_task_error(self, error_msg: str):
         self._is_busy = False
         self.log_message.emit(f"操作异常: {error_msg}")
+
+    def _check_update_async(self):
+        """异步检查 GitHub Release 更新"""
+        import threading
+        def _do_check():
+            try:
+                from utils.update_checker import check_github_latest_release
+                from utils.version import __version__
+                result = check_github_latest_release('BMP937/qq-farm-bot', __version__)
+                if result.ok and result.has_update:
+                    self.log_message.emit(
+                        f"发现新版本 {result.latest_version}！"
+                        f"下载: {result.download_url}")
+                    logger.info(f"更新检查: {result.message} | {result.download_url}")
+                else:
+                    logger.debug(f"更新检查: {result.message}")
+            except Exception as e:
+                logger.debug(f"更新检查失败: {e}")
+        thread = threading.Thread(target=_do_check, daemon=True)
+        thread.start()
 
     def _is_window_alive(self) -> bool:
         """检查游戏窗口是否存在（供调度器窗口监控调用）"""
@@ -735,34 +972,12 @@ class BotEngine(QObject):
         return cv_image, detections
 
     def _prepare_window(self) -> tuple | None:
-        window = self.window_manager._cached_window
-        if not window:
-            window = self.window_manager.refresh_window_info(
-                self.config.window_title_keyword,
-                auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path,
-            )
-        else:
-            window = self.window_manager.find_window(
-                self.config.window_title_keyword,
-                auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path,
-                select_rule=self.config.window_select_rule
-            )
-        if not window:
-            window = self.window_manager.refresh_window_info(
-                self.config.window_title_keyword,
-                auto_launch=True,
-                shortcut_path=self.config.planting.game_shortcut_path,
-            )
-        else:
-            # 刷新缓存窗口的最新位置
-            self.window_manager.find_window(
-                self.config.window_title_keyword,
-                select_rule=self.config.window_select_rule
-            )
-            window = self.window_manager._cached_window
-
+        window = self.window_manager.find_window(
+            self.config.window_title_keyword,
+            auto_launch=True,
+            shortcut_path=self.config.planting.game_shortcut_path,
+            select_rule=self.config.window_select_rule,
+        )
         if not window:
             return None
         # 后台模式不激活窗口（不抢焦点）
@@ -841,6 +1056,7 @@ class BotEngine(QObject):
 
     def check_farm(self) -> dict:
         result = {"success": False, "actions_done": [], "next_check_seconds": 5}
+        self._plant_done = False  # 重置播种标记，每次调度只播种一次
         
         # 检查静默时段
         if is_silent_time(self.config.silent_hours):
@@ -857,9 +1073,17 @@ class BotEngine(QObject):
         farm_features = {
             "auto_harvest", "auto_plant", "auto_weed", "auto_water",
             "auto_bug", "auto_fertilize", "auto_sell", "auto_upgrade",
-            "auto_task", "auto_bad",
+            "auto_task",
         }
         has_farm_work = any(features.get(f, False) for f in farm_features)
+
+        # 地块触发条件检查（提前，影响轻量检查判断）
+        # 仅在用户已开启对应功能时，通过地块触发激活执行
+        _early_triggers = self._check_land_triggers()
+        if _early_triggers["need_harvest"] and features.get("auto_harvest"):
+            has_farm_work = True
+        if _early_triggers["need_plant"] and features.get("auto_plant"):
+            has_farm_work = True
 
         rect = self._prepare_window()
         if not rect:
@@ -890,8 +1114,21 @@ class BotEngine(QObject):
         if not self.popup.stopped:
             self._clear_screen(rect)
 
+        # 地块触发时增加主循环轮数，确保操作有机会执行
+        has_land_trigger = (
+            (_early_triggers["need_harvest"] and features.get("auto_harvest"))
+            or (_early_triggers["need_plant"] and features.get("auto_plant"))
+        )
+        if has_land_trigger:
+            reasons = []
+            if _early_triggers["need_harvest"] and features.get("auto_harvest"):
+                reasons.append("倒计时即将结束")
+            if _early_triggers["need_plant"] and features.get("auto_plant"):
+                reasons.append("有空地待播种")
+            logger.info(f"地块触发：{', '.join(reasons)}")
+
         idle_rounds = 0
-        max_idle = 1  # ✅ 优化：降为 1，一轮无操作即退出（避免无效等待）
+        max_idle = 1 if not has_land_trigger else 3  # 触发时增加轮数，确保操作执行
         
         # ✅ 添加状态变化检测：避免重复相同检测
         prev_scene = None
@@ -899,65 +1136,30 @@ class BotEngine(QObject):
         consecutive_same_state = 0  # 连续相同状态轮数
         max_consecutive_same = 2  # 最多允许连续 2 轮相同状态
 
-        # 初始化任务执行器
-        executor = TaskExecutor()
+        # 策略调度列表（按优先级）
+        _FARM_OVERVIEW = Scene.FARM_OVERVIEW
+        _f = self.config.features  # 缩短引用
+        farm_tasks = [
+            ("Popup",   lambda: True,                       lambda s: s in (Scene.POPUP, Scene.INFO_PAGE, Scene.SHOP_PAGE), lambda ctx: self._task_popup(ctx)),
+            ("Harvest", lambda: _f.auto_harvest,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_harvest(ctx)),
+            ("Maintain",lambda: _f.auto_weed or _f.auto_water or _f.auto_bug, lambda s: s == _FARM_OVERVIEW, lambda ctx: self._task_maintain(ctx)),
+            ("Plant",   lambda: _f.auto_plant and not self._plant_done, lambda s: s == _FARM_OVERVIEW,                       lambda ctx: self._task_plant(ctx)),
+            ("Expand",  lambda: _f.auto_upgrade,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_expand(ctx)),
+            ("Upgrade", lambda: _f.auto_upgrade,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_upgrade(ctx)),
+            ("Task",    lambda: _f.auto_task,                 lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_task(ctx)),
+        ]
 
-        # 注册任务（按优先级）
-        # 注意：这里只注册一次，因为任务的 enabled_fn 等逻辑在内部会动态判断
-        
-        # P-1: 弹窗处理
-        executor.add_task(TaskItem(
-            name="Popup",
-            priority=-1,
-            enabled_fn=lambda: True,
-            check_fn=lambda ctx: ctx.get("scene") in (Scene.POPUP, Scene.INFO_PAGE, Scene.SHOP_PAGE),
-            run_fn=lambda ctx: self._task_popup(ctx)
-        ))
-
-        # P0: 收获
-        executor.add_task(TaskItem(
-            name="Harvest",
-            priority=0,
-            enabled_fn=lambda: self.config.features.auto_harvest,
-            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
-            run_fn=lambda ctx: self._task_harvest(ctx)
-        ))
-
-        # P1: 维护
-        executor.add_task(TaskItem(
-            name="Maintain",
-            priority=1,
-            enabled_fn=lambda: any([self.config.features.auto_weed, self.config.features.auto_water, self.config.features.auto_bug]),
-            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
-            run_fn=lambda ctx: self._task_maintain(ctx)
-        ))
-
-        # P2: 播种
-        executor.add_task(TaskItem(
-            name="Plant",
-            priority=2,
-            enabled_fn=lambda: self.config.features.auto_plant,
-            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
-            run_fn=lambda ctx: self._task_plant(ctx)
-        ))
-
-        # P3: 扩建
-        executor.add_task(TaskItem(
-            name="Expand",
-            priority=3,
-            enabled_fn=lambda: self.config.features.auto_upgrade,
-            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
-            run_fn=lambda ctx: self._task_expand(ctx)
-        ))
-
-        # P3.5: 任务/出售
-        executor.add_task(TaskItem(
-            name="Task",
-            priority=4,
-            enabled_fn=lambda: self.config.features.auto_task,
-            check_fn=lambda ctx: ctx.get("scene") == Scene.FARM_OVERVIEW,
-            run_fn=lambda ctx: self._task_task(ctx)
-        ))
+        def execute_farm_tasks(ctx: dict) -> bool:
+            """按优先级执行匹配的任务，返回是否有任务实际执行了操作"""
+            scene = ctx.get("scene")
+            for name, enabled_fn, check_fn, run_fn in farm_tasks:
+                try:
+                    if enabled_fn() and check_fn(scene):
+                        if run_fn(ctx):
+                            return True
+                except Exception as e:
+                    logger.debug(f'[check_farm] 任务 {name} 异常: {e}')
+            return False
 
         # 主循环
         for round_num in range(1, 51):
@@ -1055,7 +1257,7 @@ class BotEngine(QObject):
                 continue
 
             # 执行任务调度
-            if executor.execute(context):
+            if execute_farm_tasks(context):
                 idle_rounds = 0
             else:
                 idle_rounds += 1
@@ -1142,22 +1344,30 @@ class BotEngine(QObject):
     # --- 任务执行器回调方法 ---
 
     def _task_popup(self, context: dict) -> bool:
-        """处理弹窗"""
+        """处理弹窗 - 使用快速检测优化"""
         scene = context.get("scene")
-        detections = context.get("detections", [])
         rect = context.get("rect")
         
         if scene == Scene.POPUP:
-            return self.popup.handle_popup(detections) is not None
+            return self.popup.handle_popup_direct(rect) is not None
         elif scene == Scene.INFO_PAGE:
-            info_close = self.popup.find_any(detections, ["btn_close", "btn_info_close", "btn_rw_close"])
+            # 只检测关闭相关的按钮
+            cv_img, dets = self.popup.quick_detect(rect, ["btn_close", "btn_info_close", "btn_rw_close"],
+                                                     scales=[1.0, 0.9, 1.1])
+            if cv_img is None:
+                return False
+            info_close = self.popup.find_any(dets, ["btn_close", "btn_info_close", "btn_rw_close"])
             if info_close:
                 self.popup.click(info_close.x, info_close.y, "关闭个人信息页面")
                 return True
         elif scene in (Scene.SHOP_PAGE, Scene.BUY_CONFIRM, Scene.PLOT_MENU, Scene.LEVEL_UP):
-            return self.popup.handle_popup(detections) is not None
+            return self.popup.handle_popup_direct(rect) is not None
         elif scene == Scene.MALL_PAGE:
-            mall_back = self.popup.find_by_name(detections, "btn_shangcehng_fanhui")
+            # 只检测商城返回按钮
+            cv_img, dets = self.popup.quick_detect(rect, ["btn_shangcehng_fanhui"], scales=[1.0, 0.9, 1.1])
+            if cv_img is None:
+                return False
+            mall_back = self.popup.find_by_name(dets, "btn_shangcehng_fanhui")
             if mall_back:
                 self.popup.click(mall_back.x, mall_back.y, "关闭商城")
                 return True
@@ -1166,9 +1376,9 @@ class BotEngine(QObject):
         return False
 
     def _task_harvest(self, context: dict) -> bool:
-        """收获任务"""
-        detections = context.get("detections", [])
-        desc = self.harvest.try_harvest(detections)
+        """收获任务 - 使用快速检测优化"""
+        rect = context.get("rect")
+        desc = self.harvest.try_harvest_direct(rect)
         if desc:
             self._planted = False
             self._fertilized = False
@@ -1184,13 +1394,14 @@ class BotEngine(QObject):
         return False
 
     def _task_maintain(self, context: dict) -> bool:
-        """维护任务（除草/除虫/浇水）"""
-        detections = context.get("detections", [])
+        """维护任务（除草/除虫/浇水）- 使用快速检测优化"""
+        rect = context.get("rect")
         features = context.get("features", {})
-        return self.maintain.try_maintain(detections, features) is not None
+        return self.maintain.try_maintain_direct(rect, features) is not None
 
     def _task_plant(self, context: dict) -> bool:
-        """播种任务"""
+        """播种任务（每次 check_farm 只执行一次）"""
+        self._plant_done = True  # 标记已执行，本轮不再重复播种
         rect = context.get("rect")
         crop_name = self._resolve_crop_name()
         pa = self.plant.plant_all(rect, crop_name, auto_fertilize=self.config.features.auto_fertilize)
@@ -1206,12 +1417,31 @@ class BotEngine(QObject):
         detections = context.get("detections", [])
         return self.expand.try_expand(rect, detections) is not None
 
+    def _task_upgrade(self, context: dict) -> bool:
+        """自动升级任务"""
+        rect = context.get("rect")
+        detections = context.get("detections", [])
+        return self.expand.try_upgrade(rect, detections) is not None
+
     def _task_task(self, context: dict) -> bool:
         """任务/出售任务"""
         rect = context.get("rect")
         detections = context.get("detections", [])
         ta = self.task.try_task(rect, detections)
         return ta is not None and len(ta) > 0
+
+    def _task_gift(self, context: dict) -> bool:
+        """礼品领取任务"""
+        rect = context.get("rect")
+        detections = context.get("detections", [])
+        ga = self.gift.try_gift(rect, detections,
+                                auto_svip_gift=self.config.features.auto_svip_gift,
+                                auto_mall_gift=self.config.features.auto_mall_gift,
+                                auto_mail=self.config.features.auto_mail)
+        if ga:
+            self.log_message.emit(f"礼品领取: {', '.join(ga)}")
+            return True
+        return False
 
     def check_friends(self) -> dict:
         result = {"success": True, "actions_done": [], "next_check_seconds": 1800}
@@ -1240,6 +1470,10 @@ class BotEngine(QObject):
             return result
 
         # 调用 FriendStrategy 完整流程（传入独立开关和偷菜上限）
+        # 设置好友黑名单
+        self.friend.set_blacklist(friend_cfg.blacklist)
+        self.friend._instance_id = self.instance_id
+
         actions = self.friend.run_friend_round(
             rect,
             enable_steal=friend_cfg.enable_steal,
@@ -1254,3 +1488,440 @@ class BotEngine(QObject):
             self.log_message.emit(f"好友巡查完成: {', '.join(actions)}")
 
         return result
+
+    # ============================================================
+    # 定点偷菜（大小号通讯）
+    # ============================================================
+
+    def _run_task_steal(self, ctx: TaskContext) -> TaskResult:
+        """定点偷菜任务：由跨实例通知触发
+
+        通过 TaskItem.features["friend_name"] 获取目标好友昵称。
+        任务名格式: steal_{source_instance_id}
+        """
+        # 从执行器内部任务字典获取 friend_name
+        friend_name = ""
+        source_name = ""
+        if self._async_executor:
+            with self._async_executor._lock:
+                task_item = self._async_executor._tasks.get(ctx.task_name)
+                if task_item:
+                    friend_name = task_item.features.get("friend_name", "")
+                    source_name = task_item.features.get("source_name", "")
+
+        if not friend_name:
+            return TaskResult(success=False, error="未指定好友昵称")
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        if self._bot_stop_requested:
+            return TaskResult(success=False, error="已停止")
+
+        ci_cfg = self.config.cross_instance
+        if not ci_cfg.enabled or not ci_cfg.accept_steal:
+            logger.warning(
+                f"[大小号通讯🎯] 配置检查失败: engine={self.instance_id} | "
+                f"config_id={id(self.config)} | enabled={ci_cfg.enabled} | accept_steal={ci_cfg.accept_steal}"
+            )
+            return TaskResult(success=False, error="未启用接收偷菜")
+
+        logger.info(
+            f"[大小号通讯🎯] 开始定点偷菜: [{source_name}] → 好友[{friend_name}]"
+        )
+        self.log_message.emit(f"[大小号通讯🎯] 定点偷菜: [{source_name}] → 好友[{friend_name}]")
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        # 确保策略依赖已初始化
+        if not self.targeted_steal.action_executor:
+            self.targeted_steal.action_executor = self.action_executor
+        self.targeted_steal.set_capture_fn(self._fast_strategy_capture)
+        self.targeted_steal._stop_requested = False
+
+        result = self.targeted_steal.steal_from_friend(friend_name, rect)
+
+        if result["success"]:
+            logger.info(f"[大小号通讯🎯] 偷菜成功: [{source_name}] → 好友[{friend_name}]")
+            self.log_message.emit(f"[大小号通讯🎯] ✓ 偷菜成功: [{source_name}] → 好友[{friend_name}]")
+            return TaskResult(success=True)
+        else:
+            logger.warning(f"[大小号通讯🎯] 偷菜失败: [{source_name}] → 好友[{friend_name}] | {result['message']}")
+            self.log_message.emit(f"[大小号通讯🎯] ✗ 偷菜失败: [{source_name}] → 好友[{friend_name}] | {result['message']}")
+            return TaskResult(success=False, error=result["message"])
+
+    # ============================================================
+    # 异步任务执行器管理
+    # ============================================================
+
+    def _init_executor(self):
+        """初始化并启动异步任务执行器"""
+        self._stop_executor()
+        tasks = self._build_executor_tasks()
+        runners = self._collect_task_runners()
+
+        if not tasks or not runners:
+            logger.warning("无任务或 runner，跳过执行器初始化")
+            return
+
+        self._async_executor = AsyncTaskExecutor(
+            tasks=tasks,
+            runners=runners,
+            executor_cfg=self.config.executor,
+            on_snapshot=self._on_executor_snapshot,
+            on_task_done=self._on_executor_task_done,
+            on_task_error=self._on_executor_task_error,
+            cross_bus=self._cross_bus,
+            instance_id=self.instance_id,
+        )
+        self._async_executor.start()
+        logger.info(f"异步执行器已启动: {len(tasks)} 个任务, {len(runners)} 个 runner")
+
+    def _stop_executor(self):
+        """停止异步任务执行器"""
+        if self._async_executor:
+            self._async_executor.stop()
+            self._async_executor = None
+
+    def _collect_task_runners(self) -> dict:
+        """反射发现 _run_task_* 方法"""
+        runners = {}
+        for attr_name in dir(self):
+            if attr_name.startswith("_run_task_") and callable(getattr(self, attr_name)):
+                task_name = attr_name[len("_run_task_"):]
+                runners[task_name] = getattr(self, attr_name)
+        logger.debug(f"发现 {len(runners)} 个 task runner: {list(runners.keys())}")
+        return runners
+
+    def _build_executor_tasks(self) -> list[TaskItem]:
+        """从 config.tasks 构建 TaskItem 列表"""
+        items = []
+        for name, cfg in self.config.tasks.items():
+            items.append(build_task_item(name, cfg))
+        return items
+
+    def _sync_executor_tasks(self):
+        """热更新执行器任务配置"""
+        if self._async_executor:
+            self._async_executor.sync_tasks(self.config.tasks)
+
+    @staticmethod
+    def _task_display_name(task_name: str) -> str:
+        """获取任务中文显示名（移植自 copilot）"""
+        from gui.widgets.task_panel import DEFAULT_TASK_TITLES
+        return DEFAULT_TASK_TITLES.get(task_name, task_name)
+
+    def _on_executor_snapshot(self, snapshot: TaskSnapshot):
+        """执行器快照回调（移植自 copilot：立即推送 GUI 统计面板）"""
+        # 兼容旧 flat_snapshot 调用
+        self._task_snapshots = snapshot
+
+        # 立即更新 scheduler 的运行态指标（Qt 信号跨线程安全）
+        display_name = self._task_display_name(snapshot.running_task) if snapshot.running_task else "--"
+        next_name = "--"
+        next_run_text = "--"
+        if snapshot.pending_tasks:
+            next_name = self._task_display_name(snapshot.pending_tasks[0].name)
+            next_run_text = snapshot.pending_tasks[0].next_run.strftime("%H:%M:%S")
+        elif snapshot.waiting_tasks:
+            next_name = self._task_display_name(snapshot.waiting_tasks[0].name)
+            next_run_text = snapshot.waiting_tasks[0].next_run.strftime("%m-%d %H:%M:%S")
+
+        self.scheduler.update_runtime_metrics(
+            current_task=display_name,
+            next_task=next_name,
+            next_run=next_run_text,
+            running_tasks=1 if snapshot.running_task else 0,
+            pending_tasks=len(snapshot.pending_tasks),
+            waiting_tasks=len(snapshot.waiting_tasks),
+        )
+
+    def _on_executor_task_done(self, task_name: str, result: TaskResult):
+        """任务完成回调（移植自 copilot：持久化 next_run）"""
+        display_name = self._task_display_name(task_name)
+        status_text = "成功" if result.success else "失败"
+
+        # 持久化 next_run 到配置文件
+        self._persist_task_next_run(task_name)
+
+        # 格式化下次执行时间
+        next_run_text = "--"
+        if self._async_executor:
+            snap = self._async_executor.snapshot()
+            for t in snap.pending_tasks:
+                if t.name == task_name:
+                    next_run_text = t.next_run.strftime("%H:%M:%S")
+                    break
+            if next_run_text == "--":
+                for t in snap.waiting_tasks:
+                    if t.name == task_name:
+                        next_run_text = t.next_run.strftime("%m-%d %H:%M:%S")
+                        break
+
+        msg = f"[{display_name}] 任务完成: {status_text} | 下次执行: {next_run_text}"
+        if not result.success and result.error:
+            msg = f"{msg} | 错误: {result.error}"
+        logger.info(msg)
+
+    def _on_executor_task_error(self, task_name: str, error: str):
+        """任务失败回调"""
+        display_name = self._task_display_name(task_name)
+        logger.warning(f"[{display_name}] 任务失败: {error}")
+
+    def _persist_task_next_run(self, task_name: str):
+        """将任务下次执行时间回写到配置文件（移植自 copilot）"""
+        if not self._async_executor:
+            return
+        snap = self._async_executor.snapshot()
+        target_item = None
+        for t in snap.pending_tasks:
+            if t.name == task_name:
+                target_item = t
+                break
+        if target_item is None:
+            for t in snap.waiting_tasks:
+                if t.name == task_name:
+                    target_item = t
+                    break
+        if target_item is None:
+            return
+
+        cfg = self.config.tasks.get(task_name)
+        if cfg is None:
+            return
+        next_run_text = target_item.next_run.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        if str(getattr(cfg, "next_run", "") or "") == next_run_text:
+            return
+        cfg.next_run = next_run_text
+        try:
+            self.config.save()
+        except Exception as exc:
+            logger.debug(f"持久化 next_run 失败({task_name}): {exc}")
+
+    # ============================================================
+    # 异步 Task Runner 方法
+    # ============================================================
+
+    def _run_task_main(self, ctx: TaskContext) -> TaskResult:
+        """主农场任务：OCR个人信息→弹窗→收获→维护→播种→扩建→升级→礼品"""
+        # 静默时段检查
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(
+                success=True,
+                next_run_seconds=min(remaining, 300),
+            )
+
+        # OCR 刷新个人信息（等级/金币/点券/经验）
+        self._sync_head_profile_from_ocr()
+
+        # 使用 BotWorker 在 QThread 中执行（兼容现有信号机制）
+        result = self.check_farm()
+        return TaskResult(
+            success=result.get("success", False),
+        )
+
+    def _sync_head_profile_from_ocr(self):
+        """OCR 识别头部信息并回写 config.land.profile（移植自 copilot）。"""
+        if not self.config.planting.level_ocr_enabled:
+            return
+        head_ocr = self._ensure_head_info_ocr()
+        if head_ocr is None:
+            return
+
+        rect = self._prepare_window()
+        if not rect:
+            return
+        cv_img, _ = self._fast_capture_and_detect(rect)
+        if cv_img is None:
+            return
+
+        # 只识别窗口上三分之一区域，减少干扰提升性能
+        h, w = cv_img.shape[:2]
+        roi = (0, 0, w, h // 3)
+
+        try:
+            level, score, raw_text, extra_info = head_ocr.detect_head_info(cv_img, region=roi)
+        except Exception as e:
+            logger.debug(f"个人信息 OCR 失败: {e}")
+            return
+
+        if extra_info:
+            logger.debug(
+                f"个人信息 OCR | roi={roi} tokens={extra_info.get('tokens', [])} "
+                f"money={extra_info.get('money_candidates', [])}"
+            )
+
+        if not extra_info:
+            return
+
+        # 直接使用 OCR 识别结果
+        old_level = int(self.config.planting.player_level)
+        accepted_level = int(level) if isinstance(level, int) and level > 0 else old_level
+
+        # 回写 planting.player_level
+        level_changed = accepted_level != old_level
+        if level_changed:
+            self.config.planting.player_level = accepted_level
+
+        # 回写 land.profile（保留旧值：OCR 为空时不覆盖）
+        profile = self.config.land.profile
+        old_gold = str(getattr(profile, 'gold', '') or '').strip()
+        old_coupon = str(getattr(profile, 'coupon', '') or '').strip()
+        old_exp = str(getattr(profile, 'exp', '') or '').strip()
+
+        gold_candidate = str(extra_info.get('gold', '') or '').strip()
+        coupon_candidate = str(extra_info.get('coupon', '') or '').strip()
+        exp_candidate = str(extra_info.get('exp', '') or '').strip()
+
+        new_level = accepted_level
+        new_gold = gold_candidate or old_gold
+        new_coupon = coupon_candidate or old_coupon
+        new_exp = exp_candidate or old_exp
+
+        profile_changed = (
+            int(profile.level) != new_level
+            or old_gold != new_gold
+            or old_coupon != new_coupon
+            or old_exp != new_exp
+        )
+
+        if profile_changed:
+            profile.level = new_level
+            profile.gold = new_gold
+            profile.coupon = new_coupon
+            profile.exp = new_exp
+
+        if level_changed or profile_changed:
+            self.config.save()
+            if level_changed:
+                logger.info(
+                    f"等级已更新 | Lv{old_level} -> Lv{accepted_level} | "
+                    f"gold={new_gold or '-'} coupon={new_coupon or '-'} exp={new_exp or '-'}"
+                )
+            else:
+                logger.info(
+                    f"个人信息已更新 | Lv{accepted_level} | "
+                    f"gold={new_gold or '-'} coupon={new_coupon or '-'} exp={new_exp or '-'}"
+                )
+            # 广播配置更新，触发 GUI 刷新
+            self.config_updated.emit(self.config)
+
+    def _run_task_friend(self, ctx: TaskContext) -> TaskResult:
+        """好友巡查"""
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        result = self.check_friends()
+        return TaskResult(
+            success=result.get("success", False),
+        )
+
+    def _run_task_gift(self, ctx: TaskContext) -> TaskResult:
+        """礼品领取（daily 触发）"""
+        if not any([self.config.features.auto_svip_gift,
+                    self.config.features.auto_mall_gift,
+                    self.config.features.auto_mail]):
+            return TaskResult(success=True)
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        cv_image, detections = self._fast_capture_and_detect(rect)
+        if cv_image is None:
+            return TaskResult(success=False, error="截屏失败")
+
+        ga = self.gift.try_gift(rect, detections,
+                                auto_svip_gift=self.config.features.auto_svip_gift,
+                                auto_mall_gift=self.config.features.auto_mall_gift,
+                                auto_mail=self.config.features.auto_mail)
+        if ga:
+            self.log_message.emit(f"礼品领取: {', '.join(ga)}")
+            return TaskResult(success=True)
+        return TaskResult(success=True)
+
+    def _run_task_fertilize(self, ctx: TaskContext) -> TaskResult:
+        """定时施肥：对所有已播种地块施肥"""
+        if not self.config.features.auto_fertilize:
+            return TaskResult(success=True)
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        self.log_message.emit("定时施肥：开始对所有地块施肥...")
+        fa = self.plant.fertilize_all(rect, lands=None, is_test=True)
+        if fa:
+            self.log_message.emit(f"定时施肥完成: {', '.join(fa)}")
+            return TaskResult(success=True)
+        return TaskResult(success=True)
+
+    def _run_task_sell(self, ctx: TaskContext) -> TaskResult:
+        """仓库出售"""
+        if not self.config.features.auto_sell:
+            return TaskResult(success=True)
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        cv_image, detections = self._fast_capture_and_detect(rect)
+        if cv_image is None:
+            return TaskResult(success=False, error="截屏失败")
+
+        ta = self.task.try_task(rect, detections)
+        return TaskResult(success=True)
+
+    def _run_task_task(self, ctx: TaskContext) -> TaskResult:
+        """领取任务奖励"""
+        if not self.config.features.auto_task:
+            return TaskResult(success=True)
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        cv_image, detections = self._fast_capture_and_detect(rect)
+        if cv_image is None:
+            return TaskResult(success=False, error="截屏失败")
+
+        ta = self.task.try_task(rect, detections)
+        return TaskResult(success=ta is not None and len(ta) > 0)
+
+    def _run_task_share(self, ctx: TaskContext) -> TaskResult:
+        """分享任务（daily 触发）"""
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        # 分享按钮检测和点击
+        cv_image, detections = self._fast_capture_and_detect(rect)
+        if cv_image is None:
+            return TaskResult(success=False, error="截屏失败")
+
+        return TaskResult(success=True)

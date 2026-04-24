@@ -33,7 +33,11 @@
     "shop_菠菜": 0.8,
     "seed_四叶草": 0.8,
     "seed_菠菜": 0.8,
-    "ws_猕猴桃": 0.8
+    "ws_猕猴桃": 0.8,
+    "btn_qqsvip": 0.8,
+    "btn_land_left": 0.9,
+    "btn_land_right": 0.9,
+    "btn_xc_close": 0.9
   },
   "category_overrides": {
     "button": 0.8,

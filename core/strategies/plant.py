@@ -6,6 +6,7 @@ from models.farm_state import ActionType
 from core.cv_detector import CVDetector, DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
+from utils.land_grid import get_lands_from_land_anchor
 
 # 尝试导入 OCR 模块（可选依赖）
 try:
@@ -374,10 +375,6 @@ class PlantStrategy(BaseStrategy):
 
         all_actions = []
 
-        # 第零步：缩小视野（模拟双指缩放），提高空地识别准确度
-        logger.info(f"[播种] plant_all 开始，准备缩小视野，rect={rect}")
-        zoom_ok = self.pinch_zoom_out(rect, steps=3)
-        logger.info(f"[播种] 缩小视野结果: {zoom_ok}")
         if self.stopped:
             return all_actions
 
@@ -768,8 +765,6 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 return
             time.sleep(0.05)
-        # 缩小视野以提高空地识别准确度
-        self.pinch_zoom_out(rect, steps=3)
         if self.stopped:
             return
         cv_img, dets, _ = self.capture(rect)
@@ -1076,6 +1071,48 @@ class PlantStrategy(BaseStrategy):
         ps.set_capture_fn(self._capture_fn)
         ps.close_shop(rect)
 
+    def _detect_lands_by_anchor(self, cv_img) -> list[DetectResult]:
+        """通过锚点网格推算所有地块位置（降级方案）
+
+        检测 btn_land_right / btn_land_left 锚点按钮，
+        然后用 get_lands_from_land_anchor() 数学推算 24 格坐标。
+        返回 DetectResult 兼容格式列表。
+        """
+        anchors = self.cv_detector.detect_targeted(
+            cv_img, ['btn_land_right', 'btn_land_left'],
+            scales=[1.0, 0.9, 1.1],
+        )
+        right_anchor = None
+        left_anchor = None
+        for det in anchors:
+            if det.name == 'btn_land_right':
+                right_anchor = (int(det.x), int(det.y))
+            elif det.name == 'btn_land_left':
+                left_anchor = (int(det.x), int(det.y))
+
+        if not right_anchor and not left_anchor:
+            logger.warning("施肥流程：锚点检测失败，未找到 btn_land_right / btn_land_left")
+            return []
+
+        cells = get_lands_from_land_anchor(right_anchor, left_anchor, rows=4, cols=6)
+        if not cells:
+            logger.warning("施肥流程：锚点网格推算返回 0 个地块")
+            return []
+
+        # 转换为 DetectResult 兼容格式
+        results = []
+        for cell in cells:
+            results.append(DetectResult(
+                name=f"land_anchor_{cell.label}",
+                category="land",
+                x=cell.center[0],
+                y=cell.center[1],
+                w=0, h=0,
+                confidence=1.0,
+            ))
+        logger.info(f"施肥流程：锚点检测成功，推算 {len(results)} 个地块")
+        return results
+
     def fertilize_all(self, rect: tuple, lands: list = None, is_test: bool = False) -> list[str]:
         """对所有地块施用普通肥料
 
@@ -1099,8 +1136,6 @@ class PlantStrategy(BaseStrategy):
             logger.info(f"施肥流程：is_test={is_test}, lands={lands}")
             logger.info(f"施肥流程：_capture_fn={self._capture_fn is not None}, stopped={self.stopped}")
             logger.info(f"施肥流程：action_executor={self.action_executor is not None}")
-            # 缩小视野以提高空地识别准确度
-            self.pinch_zoom_out(rect, steps=3)
             if self.stopped:
                 return all_actions
             cv_img, dets, _ = self.capture(rect)
@@ -1112,8 +1147,11 @@ class PlantStrategy(BaseStrategy):
             land_dets = [d for d in dets if d.name.startswith("land_")]
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地（原始检测 {len(dets)} 个模板）")
             if not land_dets:
-                logger.info("施肥流程：未找到任何地块")
-                return all_actions
+                logger.info("施肥流程：land_ 模板匹配为 0，降级到锚点网格推算")
+                land_dets = self._detect_lands_by_anchor(cv_img)
+                if not land_dets:
+                    logger.info("施肥流程：锚点检测也失败，无法施肥")
+                    return all_actions
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，开始点击检测...")
             logger.info(f"施肥流程：stopped={self.stopped}, action_executor={self.action_executor is not None}")

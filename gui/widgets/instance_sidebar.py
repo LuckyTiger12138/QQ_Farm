@@ -27,6 +27,8 @@ class InstanceItem(QFrame):
     """单个实例项：状态指示灯 + 名称（可点击切换，右键菜单）"""
 
     selected = pyqtSignal(str)
+    start_requested = pyqtSignal(str)
+    stop_requested = pyqtSignal(str)
     clone_requested = pyqtSignal(str)
     rename_requested = pyqtSignal(str)
     delete_requested = pyqtSignal(str)
@@ -135,6 +137,14 @@ class InstanceItem(QFrame):
                 margin: 4px 8px;
             }}
         """)
+        
+        start_act = menu.addAction('开启')
+        start_act.triggered.connect(lambda: self.start_requested.emit(self._instance_id))
+        
+        stop_act = menu.addAction('停止')
+        stop_act.triggered.connect(lambda: self.stop_requested.emit(self._instance_id))
+        
+        menu.addSeparator()
         
         clone_act = menu.addAction('克隆')
         clone_act.triggered.connect(lambda: self.clone_requested.emit(self._instance_id))
@@ -314,6 +324,8 @@ class InstanceSidebar(QWidget):
                 state = str(item.get('state') or 'idle')
                 row = InstanceItem(iid, name, state)
                 row.selected.connect(self._on_row_selected)
+                row.start_requested.connect(self.instance_start_requested.emit)
+                row.stop_requested.connect(self.instance_stop_requested.emit)
                 row.clone_requested.connect(self.clone_requested.emit)
                 row.rename_requested.connect(self.rename_requested.emit)
                 row.delete_requested.connect(self.delete_requested.emit)

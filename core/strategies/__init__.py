@@ -6,3 +6,5 @@ from core.strategies.plant import PlantStrategy
 from core.strategies.expand import ExpandStrategy
 from core.strategies.task import TaskStrategy
 from core.strategies.friend import FriendStrategy
+from core.strategies.gift import GiftStrategy
+from core.strategies.targeted_steal import TargetedStealStrategy

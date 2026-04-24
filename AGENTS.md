@@ -1,199 +1,150 @@
 # AGENTS.md — QQ Farm Vision Bot
 
-> 基于 OpenCV 视觉识别的 QQ 经典农场自动化工具。纯 Python 项目，无构建步骤。
+基于 OpenCV 视觉识别的 QQ 经典农场（微信小程序）自动化工具。纯 Python，Windows only，`python main.py` 启动 PyQt6 GUI。
 
-## 项目概览
-
-- **技术栈**: Python 3.10+, PyQt6, OpenCV, MSS, PyAutoGUI, Pydantic, loguru
-- **平台**: Windows 10/11 仅
-- **运行方式**: `python main.py` 启动 PyQt6 GUI
-
-## 命令速查
+## Commands
 
 ```bash
-# 安装依赖
 pip install -r requirements.txt
-
-# 启动程序
-python main.py
-
-# 模板采集（首次使用必须）
-python tools/template_collector.py
-
-# 种子图片批量导入
-python tools/import_seeds.py
-
-# 构建 EXE
-pyinstaller build.spec
-
-# 测试脚本（均为独立脚本，需运行中的游戏窗口）
-python test_template_categories.py   # 列出已加载模板
-python test_land_count.py            # 土地数量检测
-python test_empty_land_detection.py  # 空地检测
-python test_plant_capture.py         # 播种流程测试
-python test_land_debug.py            # 土地调试
-python test_land_count2.py           # 土地数量检测（变体2）
-python test_empty_land_count.py      # 空地数量检测
-python test_land_detection.py        # 土地检测
-python test_polygon.png              # 多边形测试图片
+python main.py                        # 启动 GUI
+python tools/template_collector.py    # 模板采集（首次使用必须）
+python tools/import_seeds.py          # 种子图片批量导入
+pyinstaller build.spec                # 构建 EXE
 ```
 
-**无 pytest / unittest 框架** — 所有测试均为独立 Python 脚本，需要真实游戏窗口运行。
+**无 pytest** — 测试均为独立脚本（`test_*.py`），需真实游戏窗口运行，已被 .gitignore 排除。
 
-**热键**: F9 暂停/恢复，F10 停止。鼠标移到左上角紧急停止（pyautogui FAILSAFE）。
+**热键**: F9 暂停/恢复，F10 停止，F11 老板键（隐藏窗口）。鼠标移到左上角紧急停止（pyautogui FAILSAFE）。
 
-## 代码风格
+## Architecture
 
-### 导入顺序
-
-```python
-# 1. 标准库
-import sys
-import os
-import json
-import time
-from enum import Enum
-from dataclasses import dataclass, field
-
-# 2. 第三方库
-import cv2
-import numpy as np
-from loguru import logger
-from pydantic import BaseModel, Field
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
-
-# 3. 项目内部（绝对导入，从项目根开始）
-from models.config import AppConfig
-from core.cv_detector import CVDetector, DetectResult
-from core.strategies.base import BaseStrategy
-```
-
-- 使用**绝对导入**而非相对导入
-- 组间空一行
-- `from module import Class` 优先于 `import module`
-
-### 命名约定
-
-| 类型 | 约定 | 示例 |
-|------|------|------|
-| 类名 | PascalCase | `BotEngine`, `CVDetector`, `BaseStrategy` |
-| 函数/方法 | snake_case | `check_farm()`, `identify_scene()`, `setup_logger()` |
-| 变量 | snake_case | `task_type`, `detections`, `_stop_requested` |
-| 常量 | UPPER_SNAKE_CASE | `TEMPLATE_CATEGORIES`, `CATEGORY_DEFAULTS` |
-| 私有属性 | 前缀 `_` | `_templates`, `_loaded`, `_capture_fn` |
-| 文件名 | snake_case | `bot_engine.py`, `cv_detector.py`, `main_window.py` |
-
-### 类型注解
-
-- 使用 Python 3.10+ 原生类型语法（`list[str]`, `dict[str, float]`, `X | None`）
-- 函数参数和返回值必须标注类型
-- 使用 `pydantic.BaseModel` 定义配置数据结构
-- 使用 `dataclass` 定义简单数据传输对象（如 `DetectResult`）
-- 枚举使用 `str, Enum` 双重继承以支持 JSON 序列化
-
-### 文档字符串
-
-- 模块首行使用中文文档字符串：`"""模块功能简述"""`
-- 类定义后使用 docstring 说明职责
-- 复杂方法在代码块内用注释说明，不必写完整 docstring
-
-### 错误处理
-
-- 使用 `loguru.logger` 进行日志记录（`logger.info()`, `logger.warning()`, `logger.error()`）
-- 日志格式：`✓ 成功操作` / `✗ 失败操作: 原因`
-- BotWorker 线程顶层使用 `try/except` 捕获所有异常并通过 `error` 信号发出
-- 配置加载失败时回退到默认值，不崩溃
-- 图像操作注意中文路径：使用 `np.fromfile` + `cv2.imdecode` 而非 `cv2.imread`
-
-### 日志
-
-- 日志系统使用 `loguru`，同时输出到控制台、文件（按天轮转）和 GUI
-- 日志文件位于 `logs/` 目录，保留 7 天
-- GUI 通过 `LogSignal` 对象接收日志消息
-
-## 架构
-
-### 四层架构
+数据流：`截屏 (mss) → OpenCV 多尺度模板匹配 → 场景识别状态机 → 策略决策 → ActionExecutor → 循环`
 
 ```
-┌─────────────────────────────────────────────┐
-│  GUI 层 (PyQt6) — gui/                      │
-│  main_window.py / widgets/                  │
-├─────────────────────────────────────────────┤
-│  行为决策层 (core/strategies/)              │
-│  popup → harvest → maintain → plant →       │
-│  expand → task → friend                     │
-├─────────────────────────────────────────────┤
-│  图像识别层                                 │
-│  cv_detector.py (模板匹配)                  │
-│  scene_detector.py (场景识别)               │
-├─────────────────────────────────────────────┤
-│  窗口控制层                                 │
-│  window_manager.py + screen_capture.py      │
-├─────────────────────────────────────────────┤
-│  操作执行层                                 │
-│  action_executor.py (pyautogui 模拟点击)    │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│  GUI (PyQt6) + Web (FastAPI, 可选)           │
+│  main_window.py / widgets/                   │
+│  InstanceSidebar (多实例切换)                 │
+├──────────────────────────────────────────────┤
+│  策略层 (core/strategies/)                   │
+│  popup → harvest → maintain → plant →        │
+│  expand → task → friend → gift               │
+├──────────────────────────────────────────────┤
+│  图像识别层                                  │
+│  cv_detector.py (模板匹配, 多尺度 0.8x~1.3x) │
+│  scene_detector.py (场景识别状态机)          │
+├──────────────────────────────────────────────┤
+│  窗口控制 + 操作执行                         │
+│  window_manager.py + screen_capture.py       │
+│  action_executor.py (RunMode: 前台/后台)     │
+└──────────────────────────────────────────────┘
 ```
 
-### 线程模型
+### 多实例
 
-- **主线程**: PyQt6 GUI
-- **BotWorker (QThread)**: 执行 farm/friend/test_fertilize 任务
-- **TaskScheduler (QTimer)**: 定时触发农场检查和好友巡查
-- 线程间通过 Qt 信号（`pyqtSignal`）通信
+支持同时管理多个游戏窗口。每个实例有独立的 BotEngine、配置、日志、截图目录。
+
+- **InstanceManager** (`core/instance_manager.py`) — 管理元数据，存储在 `instances/profiles.json`
+- **InstanceSession** — 封装实例 id/name/state + 路径 + 配置
+- 实例目录: `instances/{id}/configs/config.json`, `instances/{id}/logs/`, `instances/{id}/screenshots/`
+- MainWindow 维护 `dict[str, BotEngine]` (`_engines`)
+- 无活动实例时回退到根目录 `config.json`（向后兼容）
+
+### 主控编排 (core/bot_engine.py)
+
+- **BotEngine** (QObject) — 初始化各层组件，每个实例一个
+- **BotWorker** (QThread) — 执行 farm/friend/test_fertilize 任务
+- **TaskScheduler** (QTimer) — 定时触发，含窗口存活监控
+- **TaskExecutor** (`core/task_executor.py`) — 基于优先级的异步任务调度
+- 主循环 `check_farm()` 最多 50 轮，3 轮空闲自动退出，每轮 sleep 0.3s
+- 静默时段 (`core/silent_hours.py`) 支持跨午夜（如 22:00-06:00），期间不执行操作
 
 ### 策略模式
 
-所有策略继承 `BaseStrategy`，共享 `cv_detector`、`action_executor`、`_capture_fn`。
+所有策略继承 `BaseStrategy`（`core/strategies/base.py`），共享 `cv_detector`、`action_executor`、`_capture_fn`。
 
-| 优先级 | 策略 | 类名 | 职责 |
+BaseStrategy 提供: `click(x, y, desc)`, `find_by_name()`, `find_by_prefix_first()`, `find_any()`, `stopped` 属性。每次操作前必须检查 `self.stopped`。
+
+| 优先级 | 文件 | 类名 | 职责 |
 |--------|------|------|------|
-| P-1 | `popup.py` | PopupStrategy | 关闭弹窗/商店/返回主界面 + 升级检测 |
+| P-1 | `popup.py` | PopupStrategy | 关闭弹窗/商店/商城 + 升级检测 |
 | P0 | `harvest.py` | HarvestStrategy | 一键收获 + 自动出售 |
 | P1 | `maintain.py` | MaintainStrategy | 除草/除虫/浇水 |
 | P2 | `plant.py` | PlantStrategy | 播种 + 购买种子 + 施肥 |
 | P3 | `expand.py` | ExpandStrategy | 扩建土地 |
 | P3.5 | `task.py` | TaskStrategy | 领取任务奖励 / 出售果实 |
 | P4 | `friend.py` | FriendStrategy | 好友巡查/帮忙/偷菜 |
+| P3.6 | `gift.py` | GiftStrategy | SVIP礼包 + 商城免费 + 邮件领取 |
 
-### 主循环
+### ActionExecutor 双模式
 
-`BotEngine.check_farm()` 最多 50 轮，3 轮空闲自动退出，每轮 sleep 0.3s。
+- `RunMode.FOREGROUND` — pyautogui，需要前台窗口，会移动鼠标
+- `RunMode.BACKGROUND` — PostMessageW，不抢占鼠标，推荐
 
-## 模板命名规范
+### 场景识别 (core/scene_detector.py)
+
+Scene 枚举: FARM_OVERVIEW, FRIEND_FARM, PLOT_MENU, SEED_SELECT, SHOP_PAGE, MALL_PAGE, WAREHOUSE, BUY_CONFIRM, POPUP, LEVEL_UP, FRIEND_LIST, INFO_PAGE, REMOTE_LOGIN, UNKNOWN
+
+`identify_scene()` 按优先级检测（REMOTE_LOGIN → INFO_PAGE → MALL_PAGE → ...）。
+
+### Web 服务 (web/server.py, 可选)
+
+FastAPI 控制面板：截图预览、启停控制、状态查看、日志、配置编辑。默认端口 8080。需 `fastapi+uvicorn`，通过回调函数与 BotEngine 交互。
+
+## 模板命名
+
+前缀决定类别，新增前缀需同步更新 `cv_detector.py` 中的 `TEMPLATE_CATEGORIES`。
 
 | 前缀 | 类别 | 示例 |
 |------|------|------|
 | `btn_` | button | `btn_harvest.png` |
-| `bth_` | button（特殊按钮） | `bth_feiliao_pt.png` |
+| `bth_` | 特殊按钮（如施肥） | `bth_fertilize.png` |
 | `icon_` | status_icon | `icon_mature.png` |
+| `friend_` | 好友列表标识 | `friend_list.png` |
 | `crop_` | crop | `crop_mature.png` |
-| `seed_` | seed | `seed_小麦.png` |
-| `shop_` | shop | `shop_小麦.png` |
+| `seed_` | 播种列表 | `seed_小麦.png` |
+| `shop_` | 商店卡片 | `shop_小麦.png` |
 | `land_` | land | `land_empty.png` |
-| `ui_` | ui_element | `ui_remote_login.png` |
+| `ui_` | ui_element | `ui_next_time.png` |
 
-新增前缀需同步更新 `cv_detector.py` 中的 `TEMPLATE_CATEGORIES` 字典。
+读取模板用 `np.fromfile` + `cv2.imdecode`（`cv2.imread` 不支持中文路径）。
 
-## 配置系统
+## 配置
 
-- 使用 Pydantic `BaseModel` 定义配置层级
-- 配置文件为 JSON 格式（`config.json`，自动生成，已在 .gitignore 中）
-- GUI 修改实时生效，无需手动保存
-- `AppConfig.load(path)` / `.save()` 进行文件读写
+Pydantic BaseModel 层级结构，`AppConfig.load(path)` / `.save()` 读写 JSON。GUI 修改实时生效。
+
+每个实例独立配置: `instances/{id}/configs/config.json`。根目录 `config.json` 为兼容默认。
+
+关键枚举: `PlantMode` (PREFERRED / BEST_EXP_RATE), `SellMode` (BATCH_ALL / SELECTIVE), `RunMode` (FOREGROUND / BACKGROUND)
+
+## 代码风格
+
+- **绝对导入**，`from module import Class` 优先
+- Python 3.10+ 原生类型: `list[str]`, `X | None`
+- 函数参数和返回值必须标注类型
+- 枚举用 `str, Enum` 双重继承
+- pydantic 定义配置结构，dataclass 定义简单 DTO
+- 日志用 `loguru`，格式: `✓ 成功` / `✗ 失败: 原因`
+- 模块首行中文 docstring
 
 ## 添加新功能
 
-1. 在 `core/strategies/` 下新建策略模块，继承 `BaseStrategy`
-2. 在 `core/bot_engine.py` 中：创建策略实例 → 加入 `self._strategies` → 在 `check_farm()` 中按优先级调用
-3. 如需新场景，在 `core/scene_detector.py` 的 `Scene` 枚举和 `identify_scene()` 中添加
-4. 如需新模板类别，在 `cv_detector.py` 的 `TEMPLATE_CATEGORIES` 中添加前缀映射
-5. 在 `gui/widgets/` 下添加对应 UI 面板（如需要）
+1. `core/strategies/` 新建策略，继承 `BaseStrategy`
+2. `core/bot_engine.py` — 创建实例 → 加入 `self._strategies` → 主循环中按优先级调用
+3. 新场景 → `scene_detector.py` 的 `Scene` 枚举 + `identify_scene()`
+4. 新模板类别 → `cv_detector.py` 的 `TEMPLATE_CATEGORIES`
+5. 对应 UI 面板 → `gui/widgets/`
 
-## 关键设计决策
+## Known Limitations
 
-- **纯视觉识别**: 不读取内存、不修改数据包、不调用游戏 API
-- **停止机制**: 所有策略共享 `_stop_requested` 标志，每次 click 前检查
-- **安全措施**: 随机点击偏移、操作间随机延迟、pyautogui FAILSAFE
-- **中文路径**: 使用 `np.fromfile` + `cv2.imdecode` 读取模板
+- 16:10 或非标准比例显示器坐标精度有损，建议 16:9
+- 仓库自动买种库存判断有 Bug，建议关闭让用户手动购买
+- 播种仅检测仓库第一排前 5 个格子，种子必须放在该位置
+
+## Gotchas
+
+- **OCR 依赖**: `rapidocr_onnxruntime` 用于商店买种识别，是可选依赖
+- **构建**: PyInstaller 打包时排除 `easyocr/torch/torchvision`（见 `build.spec`），打包后 `sys._MEIPASS` 为资源目录
+- **Git 双仓库**: origin → Gitee, github → GitHub。发行版发布在 GitHub Releases（Gitee 100MB 限制）
+- `QT_ENABLE_HIGHDPI_SCALING=0` — main.py 中强制禁用高 DPI 缩放
+- PyQt6 使用 Fusion 风格 + 强制浅色调色板，覆盖 Windows 暗色主题
