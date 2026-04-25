@@ -28,9 +28,8 @@ class PlantMode(str, Enum):
     LATEST_LEVEL = "latest_level"    # 当前等级下可种植的最高等级作物
 
 
-class SellMode(str, Enum):
-    BATCH_ALL = "batch_all"        # 批量全部出售
-    SELECTIVE = "selective"        # 选择性出售（只卖勾选的作物）
+class SellConfig(BaseModel):
+    """出售配置 — 仅支持批量全部出售"""
 
 
 class FriendConfig(BaseModel):
@@ -51,7 +50,6 @@ class FeaturesConfig(BaseModel):
     auto_water: bool = True
     auto_bug: bool = True
     auto_fertilize: bool = True
-    auto_sell: bool = False
     auto_task: bool = False
     auto_upgrade: bool = False
     auto_svip_gift: bool = False     # QQSVIP礼包领取
@@ -61,8 +59,7 @@ class FeaturesConfig(BaseModel):
 
 
 class SellConfig(BaseModel):
-    mode: SellMode = SellMode.BATCH_ALL
-    sell_crops: list[str] = []  # selective 模式下要出售的作物名称列表
+    """出售配置 — 仅支持批量全部出售"""
 
 
 class SafetyConfig(BaseModel):
@@ -253,9 +250,8 @@ class AppConfig(BaseModel):
             "auto_bug": f.auto_bug,
             "auto_expand": f.auto_upgrade,
             "auto_upgrade": f.auto_upgrade,
-            "auto_fertilize": f.auto_fertilize,
             "auto_buy_seed": f.auto_buy_seed,
-            "auto_sell": f.auto_sell,
+            "auto_fertilize": f.auto_fertilize,
             "auto_remote_login": self.safety.auto_remote_login,
         }
         if "main" in self.tasks:
@@ -281,7 +277,8 @@ class AppConfig(BaseModel):
         if "task" in self.tasks:
             self.tasks["task"].enabled = f.auto_task
         if "fertilize" in self.tasks:
-            self.tasks["fertilize"].features = {"auto_fertilize": f.auto_fertilize}
+            self.tasks["fertilize"].features = {}
+
 
     @staticmethod
     def get_default_tasks() -> dict[str, TaskScheduleItemConfig]:
@@ -290,6 +287,10 @@ class AppConfig(BaseModel):
             "main": TaskScheduleItemConfig(
                 enabled=True, priority=10, trigger=TaskTriggerType.INTERVAL,
                 interval_seconds=60, failure_interval_seconds=30,
+            ),
+            "profile": TaskScheduleItemConfig(
+                enabled=True, priority=8, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=300, failure_interval_seconds=60,
             ),
             "friend": TaskScheduleItemConfig(
                 enabled=True, priority=20, trigger=TaskTriggerType.INTERVAL,

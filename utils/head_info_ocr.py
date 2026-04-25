@@ -383,3 +383,50 @@ class HeadInfoOCR:
             **self._extract_other_info(raw_texts),
         }
         return level_value, best[4], best[5], extra_info
+
+    def detect_detail_exp(
+        self,
+        img_bgr: np.ndarray,
+        *,
+        region: tuple[int, int, int, int] | None = None,
+    ) -> str:
+        """从个人信息页截图中识别精确经验值（如 169409/257000）。
+
+        Args:
+            img_bgr: BGR 格式截图
+            region: OCR 区域 (x1, y1, x2, y2)
+
+        Returns:
+            精确经验字符串 "169409/257000"，失败返回空字符串
+        """
+        ocr = self._ensure_ocr()
+        if img_bgr is None or ocr is None:
+            return ""
+
+        items = ocr.detect(img_bgr, region=region, scale=1.5, alpha=1.15, beta=0.0)
+        if not items:
+            return ""
+
+        exp_pattern = re.compile(r'(\d{3,})/(\d{3,})')
+        candidates: list[tuple[int, int, str]] = []  # (current, max, text)
+
+        for item in items:
+            text = self._normalize_text(str(item.text or ""))
+            if not text:
+                continue
+            m = exp_pattern.search(text)
+            if m:
+                try:
+                    current = int(m.group(1))
+                    maximum = int(m.group(2))
+                except ValueError:
+                    continue
+                if current <= maximum:
+                    candidates.append((current, maximum, f"{current}/{maximum}"))
+
+        if not candidates:
+            return ""
+
+        # 优先取 current 值最大的（最可能是当前经验）
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][2]

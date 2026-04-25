@@ -9,7 +9,6 @@
     "auto_water": true,
     "auto_bug": true,
     "auto_fertilize": true,
-    "auto_sell": false,
     "auto_bad": false,
     "auto_task": false,
     "auto_upgrade": false,
@@ -51,10 +50,7 @@
     "planting_stable_seconds": 0.5,
     "planting_stable_timeout_seconds": 5.0
   },
-  "sell": {
-    "mode": "batch_all",
-    "sell_crops": []
-  },
+  "sell": {},
   "silent_hours": {
     "enabled": false,
     "start_hour": 2,

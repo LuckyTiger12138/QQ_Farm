@@ -6,6 +6,7 @@
 """
 
 import json
+import math
 import os
 
 
@@ -47,12 +48,17 @@ def _calc_grow_time_seconds(grow_phases: str, seasons: int) -> int:
     return total
 
 
+# 作物 seasons 查询表（name → seasons）
+_CROP_SEASONS: dict[str, int] = {}
+
+
 def _load_crops_from_plant_json() -> list[tuple]:
     """Build CROPS tuple list from configs/plants.json.
 
     Tuple format:
       (name, seed_id, land_level_need, grow_time_seconds, exp, fruit_count)
     """
+    global _CROP_SEASONS
     json_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'plants.json')
 
     if not os.path.exists(json_path):
@@ -62,6 +68,7 @@ def _load_crops_from_plant_json() -> list[tuple]:
         data = json.load(f)
 
     crops: list[tuple] = []
+    seasons_map: dict[str, int] = {}
     for item in data:
         name = str(item.get('name', '')).strip()
         if not name:
@@ -81,8 +88,10 @@ def _load_crops_from_plant_json() -> list[tuple]:
         fruit_count = int(fruit.get('count', 0))
 
         crops.append((name, seed_id, land_level_need, grow_time, exp, fruit_count))
+        seasons_map[name] = seasons
 
     crops.sort(key=lambda c: (c[2], c[1], c[0]))
+    _CROP_SEASONS = seasons_map
     return crops
 
 
@@ -159,3 +168,97 @@ def get_crop_display_info() -> list[str]:
         time_str = format_grow_time(grow_time)
         items.append(f"{name} (Lv{level}, {time_str}, {exp}经验)")
     return items
+
+
+def get_crop_seasons(name: str) -> int:
+    """获取作物的季节数（1=单季, 2=双季）。"""
+    return _CROP_SEASONS.get(name, 1)
+
+
+def parse_exp_string(exp_str: str) -> tuple[float, float]:
+    """解析 OCR 经验字符串为 (当前经验, 升级所需经验)。
+
+    支持格式:
+      "1234/5000"        → (1234, 5000)
+      "1.2万/3.4万"      → (12000, 34000)
+      "1.5亿/3亿"        → (150000000, 300000000)
+    """
+    raw = str(exp_str or '').strip()
+    if not raw or '/' not in raw:
+        return 0.0, 0.0
+
+    parts = raw.split('/', 1)
+
+    def _parse_number(s: str) -> float:
+        s = s.strip()
+        if not s:
+            return 0.0
+        multiplier = 1.0
+        if s.endswith('亿'):
+            multiplier = 1_0000_0000
+            s = s[:-1]
+        elif s.endswith('万'):
+            multiplier = 1_0000
+            s = s[:-1]
+        try:
+            return float(s) * multiplier
+        except ValueError:
+            return 0.0
+
+    return _parse_number(parts[0]), _parse_number(parts[1])
+
+
+def estimate_upgrade_hint(
+    exp_str: str,
+    crop_name: str,
+    plots: list[dict],
+) -> str:
+    """计算升级预估信息。
+
+    Args:
+        exp_str: OCR 识别的经验字符串，如 "1234/5000"
+        crop_name: 当前选定的作物名称
+        plots: 地块数据列表 (config.land.plots)
+
+    Returns:
+        预估字符串，如 "种 4 次 (竹笋, 单季, 24块地×476经验/季, 共45696经验, 预计16小时)"
+        数据不足时返回 "--"
+        已可升级时返回 "可升级"
+    """
+    current, needed = parse_exp_string(exp_str)
+    if needed <= 0:
+        return "--"
+
+    remaining = needed - current
+    if remaining <= 0:
+        return "可升级"
+
+    crop = get_crop_by_name(crop_name)
+    if not crop:
+        return "--"
+
+    name, _, _, grow_time, exp_per_harvest, _ = crop
+    if exp_per_harvest <= 0:
+        return "--"
+
+    active_plots = sum(
+        1 for p in (plots or [])
+        if isinstance(p, dict) and p.get('level', 'unbuilt') != 'unbuilt'
+    )
+    if active_plots <= 0:
+        return "--"
+
+    seasons = get_crop_seasons(name)
+    season_label = "双季" if seasons == 2 else "单季"
+
+    exp_per_round = exp_per_harvest * active_plots
+    cycles = math.ceil(remaining / exp_per_round)
+    total_exp = cycles * exp_per_round
+    total_seconds = cycles * grow_time
+    time_str = format_grow_time(total_seconds) if total_seconds > 0 else "--"
+
+    return (
+        f"种 {cycles} 次 ({name}, {season_label}, "
+        f"{active_plots}块地×{exp_per_harvest}经验/季, "
+        f"共{total_exp}经验, 预计{time_str})"
+    )

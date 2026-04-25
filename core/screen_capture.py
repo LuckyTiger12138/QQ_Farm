@@ -15,8 +15,28 @@ class ScreenCapture:
     def __init__(self, save_dir: str = "screenshots"):
         self._save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
-        # 每个实例独立的截图锁，防止同一实例内部并发
         self._lock = threading.Lock()
+        self._mss_local = threading.local()
+
+    def _get_mss_instance(self) -> mss.mss:
+        """获取当前线程绑定的 mss 句柄（复用，避免每次创建销毁）。"""
+        sct = getattr(self._mss_local, 'instance', None)
+        if sct is None:
+            sct = mss.mss()
+            self._mss_local.instance = sct
+        return sct
+
+    def close_mss(self) -> None:
+        """释放当前线程绑定的 mss 句柄。"""
+        sct = getattr(self._mss_local, 'instance', None)
+        if sct is None:
+            return
+        try:
+            sct.close()
+        except Exception:
+            pass
+        finally:
+            self._mss_local.instance = None
 
     def capture_region(self, rect: tuple[int, int, int, int]) -> Image.Image | None:
         """前台截取指定区域 (left, top, width, height)"""
@@ -28,12 +48,13 @@ class ScreenCapture:
             "height": height,
         }
         try:
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-                image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+            with self._lock:
+                screenshot = self._get_mss_instance().grab(monitor)
+            image = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
             return image
         except Exception as e:
             logger.error(f"截屏失败: {e}")
+            self.close_mss()
             return None
 
     def capture_window_print(self, hwnd: int) -> Image.Image | None:

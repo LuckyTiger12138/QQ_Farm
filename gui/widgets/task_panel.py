@@ -53,6 +53,7 @@ def _load_ui_labels() -> dict:
 # 默认任务名称映射
 DEFAULT_TASK_TITLES = {
     "main": "农场巡查",
+    "profile": "个人信息",
     "friend": "好友巡查",
     "land_scan": "地块巡查",
     "gift": "礼品领取",

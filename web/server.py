@@ -177,7 +177,6 @@ class WebServer:
                         sc = cfg.schedule
                         feat = cfg.features
                         planting = cfg.planting
-                        sell = cfg.sell
                         safety = cfg.safety
                         config_info = {
                             # 巡查间隔
@@ -195,7 +194,6 @@ class WebServer:
                             "auto_water": feat.auto_water,
                             "auto_weed": feat.auto_weed,
                             "auto_bug": feat.auto_bug,
-                            "auto_sell": feat.auto_sell,
                             "auto_task": feat.auto_task,
                             "auto_upgrade": feat.auto_upgrade,
                             # 好友操作
@@ -204,9 +202,6 @@ class WebServer:
                             "friend_water": fc.enable_water,
                             "friend_bug": fc.enable_bug,
                             "max_steal_per_round": fc.max_steal_per_round,
-                            # 出售策略
-                            "sell_mode": sell.mode.value,
-                            "sell_crops": sell.sell_crops,
                             # 安全设置
                             "run_mode": safety.run_mode.value,
                             "random_delay_min": safety.random_delay_min,
@@ -237,7 +232,6 @@ class WebServer:
                             fc = feat.get("friend", {})
                             sh = d.get("silent_hours", {})
                             planting = d.get("planting", {})
-                            sell = d.get("sell", {})
                             safety = d.get("safety", {})
                             config_info = {
                                 "farm_check_seconds": sc.get("farm_check_seconds", 120),
@@ -252,7 +246,6 @@ class WebServer:
                                 "auto_water": feat.get("auto_water", True),
                                 "auto_weed": feat.get("auto_weed", True),
                                 "auto_bug": feat.get("auto_bug", True),
-                                "auto_sell": feat.get("auto_sell", False),
                                 "auto_task": feat.get("auto_task", False),
                                 "auto_upgrade": feat.get("auto_upgrade", False),
                                 "friend_steal": fc.get("enable_steal", True),
@@ -260,8 +253,6 @@ class WebServer:
                                 "friend_water": fc.get("enable_water", True),
                                 "friend_bug": fc.get("enable_bug", True),
                                 "max_steal_per_round": fc.get("max_steal_per_round", 0),
-                                "sell_mode": sell.get("mode", "batch_all"),
-                                "sell_crops": sell.get("sell_crops", []),
                                 "run_mode": safety.get("run_mode", "background"),
                                 "random_delay_min": safety.get("random_delay_min", 0.1),
                                 "random_delay_max": safety.get("random_delay_max", 0.3),
@@ -339,7 +330,7 @@ class WebServer:
 
                     # 功能开关
                     for key in ["auto_harvest", "auto_plant", "auto_fertilize", "auto_buy_seed",
-                                "auto_water", "auto_weed", "auto_bug", "auto_sell",
+                                "auto_water", "auto_weed", "auto_bug",
                                 "auto_task", "auto_upgrade"]:
                         if key in body:
                             setattr(cfg.features, key, bool(body[key]))
@@ -351,12 +342,6 @@ class WebServer:
                     if "friend_water" in body: fc.enable_water = bool(body["friend_water"])
                     if "friend_bug" in body: fc.enable_bug = bool(body["friend_bug"])
                     if "max_steal_per_round" in body: fc.max_steal_per_round = int(body["max_steal_per_round"])
-
-                    # 出售策略
-                    if "sell_mode" in body:
-                        cfg.sell.mode = body["sell_mode"]
-                    if "sell_crops" in body:
-                        cfg.sell.sell_crops = body["sell_crops"]
 
                     # 安全设置
                     if "run_mode" in body:
@@ -616,8 +601,7 @@ function buildConfigForm(c){
     <div class="sw"><input type="checkbox" id="cf-buyseed" ${c.auto_buy_seed?'checked':''}><label>买种</label></div></div>
     <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-water" ${c.auto_water?'checked':''}><label>浇水</label></div>
     <div class="sw"><input type="checkbox" id="cf-weed" ${c.auto_weed?'checked':''}><label>除草</label></div>
-    <div class="sw"><input type="checkbox" id="cf-bug" ${c.auto_bug?'checked':''}><label>除虫</label></div>
-    <div class="sw"><input type="checkbox" id="cf-sell" ${c.auto_sell?'checked':''}><label>出售</label></div></div>
+    <div class="sw"><input type="checkbox" id="cf-bug" ${c.auto_bug?'checked':''}><label>除虫</label></div></div>
     <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-task" ${c.auto_task?'checked':''}><label>任务</label></div>
     <div class="sw"><input type="checkbox" id="cf-upgrade" ${c.auto_upgrade?'checked':''}><label>扩建</label></div></div>
   </div>
@@ -629,9 +613,7 @@ function buildConfigForm(c){
     <div class="cfg-row"><label>偷菜上限/轮</label><input type="number" id="cf-maxsteal" value="${c.max_steal_per_round||0}" min="0"></div>
   </div>
   <div class="config-section"><h3>📊 出售策略</h3>
-    <div class="cfg-row"><label>模式</label><select id="cf-sellmode" style="padding:4px;border-radius:6px;border:1px solid #ddd">
-      <option value="batch_all" ${c.sell_mode==='batch_all'?'selected':''}>批量全部</option>
-      <option value="selective" ${c.sell_mode==='selective'?'selected':''}>选择性</option></select></div>
+    <div class="cfg-row"><label>模式</label><span>批量全部出售</span></div>
   </div>
   <div class="config-section"><h3>🛡️ 安全设置</h3>
     <div class="cfg-row"><label>运行模式</label><select id="cf-runmode" style="padding:4px;border-radius:6px;border:1px solid #ddd">
@@ -673,10 +655,9 @@ async function saveConfig(){
     player_level:+val('cf-level'),plant_strategy:val('cf-strategy'),preferred_crop:val('cf-crop'),
     auto_harvest:chk('cf-harvest'),auto_plant:chk('cf-plant'),auto_fertilize:chk('cf-fertilize'),
     auto_buy_seed:chk('cf-buyseed'),auto_water:chk('cf-water'),auto_weed:chk('cf-weed'),
-    auto_bug:chk('cf-bug'),auto_sell:chk('cf-sell'),auto_task:chk('cf-task'),auto_upgrade:chk('cf-upgrade'),
+    auto_bug:chk('cf-bug'),auto_task:chk('cf-task'),auto_upgrade:chk('cf-upgrade'),
     friend_steal:chk('cf-steal'),friend_weed:chk('cf-fweed'),friend_water:chk('cf-fwater'),
     friend_bug:chk('cf-fbug'),max_steal_per_round:+val('cf-maxsteal'),
-    sell_mode:val('cf-sellmode'),
     run_mode:val('cf-runmode'),random_delay_min:+val('cf-dmin'),random_delay_max:+val('cf-dmax'),
     click_offset:+val('cf-offset'),
     silent_enabled:chk('cf-silent-on'),silent_start_hour:startH,silent_start_minute:startM,

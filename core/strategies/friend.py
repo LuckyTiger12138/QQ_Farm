@@ -111,6 +111,8 @@ class FriendStrategy(BaseStrategy):
         if self.stopped:
             return actions
         
+        self._last_rect = rect
+        
         enable_help = enable_weed or enable_water or enable_bug
         if not enable_steal and not enable_help:
             logger.info("好友流程: 未启用任何操作，跳过")
@@ -544,39 +546,80 @@ class FriendStrategy(BaseStrategy):
                  enable_weed: bool = True,
                  enable_water: bool = True,
                  enable_bug: bool = True) -> list[str]:
-        """基于已有检测结果执行帮忙
+        """统一帮好友维护：一次截图检测所有按钮，循环点击直到全部消失。
 
-        Args:
-            cv_img: 截图
-            dets: 检测结果
-            enable_weed: 是否帮忙除草
-            enable_water: 是否帮忙浇水
-            enable_bug: 是否帮忙除虫
+        对齐 copilot 优化：合并除草/除虫/浇水为统一循环，
+        共享确认计时器，减少截图和等待次数。
         """
         actions_done: list[str] = []
 
-        # 根据独立开关决定是否执行
-        help_actions = []
+        help_specs = []
         if enable_water:
-            help_actions.append(("btn_water", "帮好友浇水", ActionType.HELP_WATER))
+            help_specs.append(("btn_water", "帮好友浇水", ActionType.HELP_WATER))
         if enable_weed:
-            help_actions.append(("btn_weed", "帮好友除草", ActionType.HELP_WEED))
+            help_specs.append(("btn_weed", "帮好友除草", ActionType.HELP_WEED))
         if enable_bug:
-            help_actions.append(("btn_bug", "帮好友除虫", ActionType.HELP_BUG))
+            help_specs.append(("btn_bug", "帮好友除虫", ActionType.HELP_BUG))
+        if not help_specs:
+            return actions_done
 
-        for btn_name, desc, action_type in help_actions:
-            if self.stopped:
-                break
-            # ✅ 查找所有匹配按钮，优先点击 Y 坐标最小的（页面上方的一键操作按钮）
-            matching_buttons = [d for d in dets if d.name == btn_name]
-            if matching_buttons:
-                # 按 Y 坐标排序，点击最上面的
-                matching_buttons.sort(key=lambda d: (d.y, d.x))
-                btn = matching_buttons[0]
-                logger.info(f"帮忙流程：检测到 {btn_name} ({btn.x}, {btn.y})，选择最上方的按钮")
-                self.click(btn.x, btn.y, desc, action_type)
-                actions_done.append(desc)
-                time.sleep(0.2)
+        target_names = [s[0] for s in help_specs]
+
+        found_any = any(
+            any(d.name == name for d in dets) for name in target_names
+        )
+        if not found_any:
+            return actions_done
+
+        logger.debug("帮好友维护: 开始统一循环")
+
+        confirm_start: float = 0.0
+        confirm_timeout = 0.5
+        stable_rounds = 0
+        min_stable = 2
+
+        while not self.stopped:
+            rect_cap = getattr(self, '_last_rect', None)
+            if rect_cap:
+                cv_img, dets = self._quick_detect(rect_cap, target_names)
+            if cv_img is None:
+                time.sleep(0.15)
+                continue
+
+            clicked = False
+            for btn_name, desc, action_type in help_specs:
+                matching = [d for d in dets if d.name == btn_name]
+                if matching:
+                    matching.sort(key=lambda d: (d.y, d.x))
+                    btn = matching[0]
+                    self.click(btn.x, btn.y, desc, action_type)
+                    actions_done.append(desc)
+                    clicked = True
+                    break
+
+            if clicked:
+                confirm_start = 0.0
+                stable_rounds = 0
+                time.sleep(0.3)
+                cv_img = None
+                continue
+
+            any_left = any(
+                any(d.name == name for d in dets) for name in target_names
+            )
+            if not any_left:
+                if confirm_start == 0.0:
+                    confirm_start = time.monotonic()
+                stable_rounds += 1
+                elapsed = time.monotonic() - confirm_start
+                if elapsed >= confirm_timeout and stable_rounds >= min_stable:
+                    logger.debug("帮好友维护: 完成")
+                    return actions_done
+            else:
+                confirm_start = 0.0
+                stable_rounds = 0
+
+            time.sleep(0.15)
 
         return actions_done
 

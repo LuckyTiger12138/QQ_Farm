@@ -378,7 +378,6 @@ class FeaturePanel(QWidget):
         ("main", "auto_upgrade"):      ("features", "auto_upgrade"),
         ("main", "auto_fertilize"):    ("features", "auto_fertilize"),
         ("main", "auto_buy_seed"):     ("features", "auto_buy_seed"),
-        ("main", "auto_sell"):         ("features", "auto_sell"),
         ("main", "auto_remote_login"): ("safety",  "auto_remote_login"),
         ("friend", "auto_steal"):      ("friend",  "enable_steal"),
         ("friend", "auto_weed"):       ("friend",  "enable_weed"),

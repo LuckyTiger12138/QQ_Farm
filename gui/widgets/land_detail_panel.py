@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QShowEvent
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
 from gui.styles import Colors
 from gui.widgets.fluent_container import ElevatedCardWidget
 from models.config import AppConfig
+from models.game_data import estimate_upgrade_hint
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class LandCell(QFrame):
         super().__init__(parent)
         self.plot_id = plot_id
         self._countdown_seconds = 0
+        self._countdown_base_time = None
         self._need_upgrade = False
         self._need_planting = False
         self._init_ui()
@@ -161,8 +164,10 @@ class LandCell(QFrame):
         if match:
             h, m, s = int(match.group(1)), int(match.group(2)), int(match.group(3))
             self._countdown_seconds = h * 3600 + m * 60 + s
+            self._countdown_base_time = datetime.now()
         else:
             self._countdown_seconds = 0
+            self._countdown_base_time = None
 
         idx = self._state_combo.findData(state)
         if idx < 0:
@@ -178,9 +183,12 @@ class LandCell(QFrame):
     def get_data(self) -> dict:
         state = str(self._state_combo.currentData() or 'unbuilt')
         cd = ''
-        if self._countdown_seconds > 0:
-            h = min(99, self._countdown_seconds // 3600)
-            r = self._countdown_seconds % 3600
+        # 使用时间差计算剩余秒数，与 tick_countdown 保持一致
+        if self._countdown_seconds > 0 and self._countdown_base_time is not None:
+            elapsed = int((datetime.now() - self._countdown_base_time).total_seconds())
+            remaining = max(0, self._countdown_seconds - elapsed)
+            h = min(99, remaining // 3600)
+            r = remaining % 3600
             m, s = r // 60, r % 60
             cd = f'{h:02d}:{m:02d}:{s:02d}'
         return {
@@ -194,11 +202,15 @@ class LandCell(QFrame):
     def tick_countdown(self) -> bool:
         if self._countdown_seconds <= 0:
             return False
-        self._countdown_seconds = max(0, self._countdown_seconds - 1)
-        h = min(99, self._countdown_seconds // 3600)
-        r = self._countdown_seconds % 3600
+        if self._countdown_base_time is None:
+            return False
+        # 基于时间差计算剩余秒数，避免纯递减导致的漂移
+        elapsed = int((datetime.now() - self._countdown_base_time).total_seconds())
+        remaining = max(0, self._countdown_seconds - elapsed)
+        h = min(99, remaining // 3600)
+        r = remaining % 3600
         m, s = r // 60, r % 60
-        self._countdown_view.setText(f'{h:02d}:{m:02d}:{s:02d}' if self._countdown_seconds > 0 else '--:--:--')
+        self._countdown_view.setText(f'{h:02d}:{m:02d}:{s:02d}' if remaining > 0 else '--:--:--')
         return True
 
     def set_editable(self, editable: bool):
@@ -313,6 +325,19 @@ class LandDetailPanel(QWidget):
             self._profile_labels[field_key] = val
             profile_grid.addLayout(item)
         profile_layout.addLayout(profile_grid)
+
+        # 升级预估 — 独立一行
+        hint_row = QHBoxLayout()
+        hint_lbl = QLabel("升级预估:")
+        hint_lbl.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 12px; background: transparent;")
+        hint_row.addWidget(hint_lbl)
+        hint_val = QLabel("--")
+        hint_val.setStyleSheet(f"color: {Colors.PRIMARY}; font-weight: 700; font-size: 12px; background: transparent;")
+        hint_val.setWordWrap(True)
+        hint_row.addWidget(hint_val, 1)
+        self._profile_labels['upgrade_hint'] = hint_val
+        profile_layout.addLayout(hint_row)
+
         root.addWidget(profile_card)
 
         # 地块网格卡片
@@ -399,6 +424,22 @@ class LandDetailPanel(QWidget):
         self._profile_labels['gold'].setText(str(profile.gold).strip() or '--')
         self._profile_labels['coupon'].setText(str(profile.coupon).strip() or '--')
         self._profile_labels['exp'].setText(str(profile.exp).strip() or '--')
+
+        # 升级预估
+        from models.config import PlantMode
+        from models.game_data import get_latest_crop_for_level, get_best_crop_for_level
+        planting = self.config.planting
+        if planting.strategy == PlantMode.BEST_EXP_RATE:
+            best = get_best_crop_for_level(planting.player_level)
+            crop_name = best[0] if best else planting.preferred_crop
+        elif planting.strategy == PlantMode.LATEST_LEVEL:
+            latest = get_latest_crop_for_level(planting.player_level)
+            crop_name = latest[0] if latest else planting.preferred_crop
+        else:
+            crop_name = planting.preferred_crop
+        hint = estimate_upgrade_hint(profile.exp, crop_name, self.config.land.plots)
+        self._profile_labels['upgrade_hint'].setText(hint)
+
         self.set_land_data(self.config.land.plots)
 
     def set_land_data(self, items: list[dict]):
@@ -417,6 +458,12 @@ class LandDetailPanel(QWidget):
         return [self._cells[pid].get_data() for pid in self._plot_ids_visual_order() if pid in self._cells]
 
     def set_config(self, config: AppConfig):
+        cfg_path = str(getattr(config, '_config_path', '') or '').strip()
+        if cfg_path:
+            try:
+                config = AppConfig.load(cfg_path)
+            except Exception:
+                pass
         self.config = config
         self._set_edit_mode(False)
         self._load_from_config()

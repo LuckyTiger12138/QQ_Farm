@@ -75,6 +75,10 @@ LAND_SCAN_CLICK_RETRY_OFFSETS = [(0, -15), (0, 15), (-15, 0), (15, 0), (-10, -10
 LAND_SCAN_GOTO_MAIN_X = 290
 LAND_SCAN_GOTO_MAIN_Y = 100
 
+LAND_SCAN_ANCHOR_STABLE_SECONDS = 0.5
+LAND_SCAN_ANCHOR_STABLE_REQUIRED_HITS = 3
+LAND_SCAN_ANCHOR_MAX_WAIT = 5.0
+
 
 class LandScanTask:
     """地块巡查：两阶段滑动扫描 → 锚点网格 → 逐块点击 OCR。
@@ -126,7 +130,7 @@ class LandScanTask:
                 if self._stopped(bot_engine):
                     return False
                 self._swipe(bot_engine, LAND_SCAN_SWIPE_H_P1, LAND_SCAN_SWIPE_H_P2)
-                time.sleep(0.5)
+            self._wait_anchor_stable(bot_engine, rect, anchor_name='btn_land_right')
 
             cells_left = self._collect_land_cells(bot_engine, rect)
             if not cells_left:
@@ -140,11 +144,11 @@ class LandScanTask:
                 )
 
             # ── 阶段 2：右滑 → 扫描左侧物理列 ──
-            for _ in range(2):
+            for _ in range(3):
                 if self._stopped(bot_engine):
                     return False
                 self._swipe(bot_engine, LAND_SCAN_SWIPE_H_P2, LAND_SCAN_SWIPE_H_P1)
-                time.sleep(0.5)
+            self._wait_anchor_stable(bot_engine, rect, anchor_name='btn_land_left')
 
             if self._stopped(bot_engine):
                 return False
@@ -327,6 +331,7 @@ class LandScanTask:
             for cell in col_cells:
                 if self._stopped(bot_engine):
                     return scanned
+                self._run_pre_scan_maintain(bot_engine, rect)
                 updated, is_unbuilt = self._click_and_ocr_cell(
                     bot_engine, rect, cell, from_side=from_side,
                 )
@@ -355,6 +360,86 @@ class LandScanTask:
         if from_side.strip().lower() == 'left':
             return list(reversed(rtl_cols))[:max(0, column_count)]
         return rtl_cols[:max(0, column_count)]
+
+    def _run_pre_scan_maintain(self, bot_engine, rect: tuple) -> None:
+        """点击地块前先做一键收获与三项维护，减少弹窗噪声。"""
+        try:
+            harvest = getattr(bot_engine, 'harvest', None)
+            if harvest and not harvest.stopped:
+                harvest.try_harvest_direct(rect)
+        except Exception:
+            pass
+        try:
+            maintain = getattr(bot_engine, 'maintain', None)
+            if maintain and not maintain.stopped:
+                features = bot_engine.config.features.model_dump()
+                maintain.try_maintain_direct(rect, features)
+        except Exception:
+            pass
+
+    def _wait_anchor_stable(
+        self, bot_engine, rect: tuple, *, anchor_name: str,
+    ) -> bool:
+        """滑动后等待锚点位置稳定，同坐标保持指定秒数后继续。
+
+        对齐 copilot 的 _wait_anchor_position_stable：滑动后不使用固定 sleep，
+        而是持续检测锚点位置，当位置不再变化时才继续。
+        """
+        stable_limit = LAND_SCAN_ANCHOR_STABLE_SECONDS
+        required_hits = LAND_SCAN_ANCHOR_STABLE_REQUIRED_HITS
+        max_wait = LAND_SCAN_ANCHOR_MAX_WAIT
+
+        deadline = time.monotonic() + max_wait
+        last_pos: tuple[int, int] | None = None
+        stable_start: float = 0.0
+        stable_count = 0
+
+        while time.monotonic() < deadline:
+            if self._stopped(bot_engine):
+                return False
+
+            cv_img = bot_engine._capture_only(rect)
+            if cv_img is None:
+                time.sleep(0.1)
+                continue
+
+            detections = bot_engine.cv_detector.detect_targeted(
+                cv_img, [anchor_name], scales=[1.0, 0.9, 1.1],
+            )
+
+            current_pos: tuple[int, int] | None = None
+            for det in detections:
+                if det.name == anchor_name:
+                    current_pos = (int(det.x), int(det.y))
+                    break
+
+            if current_pos is None:
+                last_pos = None
+                stable_start = 0.0
+                stable_count = 0
+                time.sleep(0.1)
+                continue
+
+            if current_pos != last_pos:
+                last_pos = current_pos
+                stable_start = time.monotonic()
+                stable_count = 0
+                time.sleep(0.1)
+                continue
+
+            stable_count += 1
+            elapsed = time.monotonic() - stable_start if stable_start else 0.0
+            if elapsed >= stable_limit and stable_count >= required_hits:
+                logger.trace(
+                    f'地块巡查: 锚点 {anchor_name} 位置稳定 '
+                    f'pos={current_pos} 稳定={elapsed:.2f}s'
+                )
+                return True
+
+            time.sleep(0.1)
+
+        logger.debug(f'地块巡查: 等待锚点 {anchor_name} 稳定超时')
+        return False
 
     # ================================================================
     # 滑动复位

@@ -9,7 +9,6 @@
     "auto_water": true,
     "auto_bug": true,
     "auto_fertilize": true,
-    "auto_sell": false,
     "auto_bad": false,
     "auto_task": false,
     "auto_upgrade": false,
@@ -46,10 +45,7 @@
     "window_width": 581,
     "window_height": 1054
   },
-  "sell": {
-    "mode": "batch_all",
-    "sell_crops": []
-  },
+  "sell": {},
   "silent_hours": {
     "enabled": false,
     "start_hour": 3,

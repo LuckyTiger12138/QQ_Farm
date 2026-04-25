@@ -24,7 +24,7 @@ class PlantStrategy(BaseStrategy):
     def __init__(self, cv_detector: CVDetector):
         super().__init__(cv_detector)
         self.auto_buy_seed = False  # 是否自动购买种子
-        self.auto_fertilize = False  # 是否自动施肥
+        self.auto_fertilize = False  # 是否自动施肥（播种后）
         self._purchase_count = 0  # 本轮播种购买次数
         self._max_purchase_per_round = 1  # 每轮最多购买次数
         
@@ -365,7 +365,7 @@ class PlantStrategy(BaseStrategy):
         Args:
             rect: 窗口区域
             crop_name: 作物名称
-            auto_fertilize: 是否自动施肥
+            auto_fertilize: 是否播种后自动施肥
 
         Returns:
             操作列表，如果施肥则包含施肥操作
@@ -517,19 +517,14 @@ class PlantStrategy(BaseStrategy):
                         self.click(info_close[0].x, info_close[0].y, "关闭个人信息页面")
                         time.sleep(0.3)
 
-        logger.info(f"播种流程：验证完成，准备检查施肥")
         # 播种完成后，如果开启了自动施肥，立即对所有土地施肥
-        logger.info(f"播种完成检查施肥：auto_fertilize={auto_fertilize}, self.auto_fertilize={self.auto_fertilize}, planted_count={planted_count}")
         if auto_fertilize and self.auto_fertilize and planted_count > 0:
             logger.info("播种完成，开始对所有土地施肥...")
-            # 传入 is_test=True 让它检测所有土地并施肥
             fert_actions = self.fertilize_all(rect, lands=None, is_test=True)
             if fert_actions:
                 all_actions.extend(fert_actions)
             else:
                 logger.info("施肥流程未执行任何操作")
-        else:
-            logger.info("施肥条件不满足，跳过施肥")
 
         return all_actions
 
@@ -1139,19 +1134,15 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 return all_actions
             cv_img, dets, _ = self.capture(rect)
-            logger.info(f"施肥流程：capture 返回 cv_img={cv_img is not None}, dets={len(dets) if dets else 0}")
+            logger.info(f"施肥流程：capture 返回 cv_img={cv_img is not None}")
             if cv_img is None:
                 logger.warning("施肥流程：截屏失败")
                 return all_actions
 
-            land_dets = [d for d in dets if d.name.startswith("land_")]
-            logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地（原始检测 {len(dets)} 个模板）")
+            land_dets = self._detect_lands_by_anchor(cv_img)
             if not land_dets:
-                logger.info("施肥流程：land_ 模板匹配为 0，降级到锚点网格推算")
-                land_dets = self._detect_lands_by_anchor(cv_img)
-                if not land_dets:
-                    logger.info("施肥流程：锚点检测也失败，无法施肥")
-                    return all_actions
+                logger.info("施肥流程：锚点网格推算失败，无法施肥")
+                return all_actions
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，开始点击检测...")
             logger.info(f"施肥流程：stopped={self.stopped}, action_executor={self.action_executor is not None}")

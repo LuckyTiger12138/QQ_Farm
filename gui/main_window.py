@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         # 页面 1: 地块详情页
         self._land_panel = LandDetailPanel(self.config)
         self._land_panel.refresh_requested.connect(self._on_land_refresh_requested)
+        self._land_panel.config_changed.connect(self._on_config_changed)
         self._stack.addWidget(self._land_panel)
 
         # 页面 2: 任务调度页
@@ -273,7 +274,7 @@ class MainWindow(QMainWindow):
         get_log_signal().new_log.connect(self._log_panel.append_log)
         self._settings_panel.config_changed.connect(self._on_config_changed)
         self._settings_panel.web_server_toggled.connect(self._on_web_server_toggled)
-        self.engine.config_updated.connect(self._on_config_updated)
+        self.engine.config_updated.connect(lambda cfg: self._on_config_updated_filtered(self._current_instance_id, cfg))
 
     # ── 导航切换 ────────────────────────────────────────────
 
@@ -372,7 +373,8 @@ class MainWindow(QMainWindow):
 
     def _on_config_updated(self, config: AppConfig):
         """引擎配置更新时同步 GUI（如地块巡查完成、Web 端修改配置）"""
-        self.config = config
+        if config != self.config:
+            return
         self._settings_panel.config = config
         self._settings_panel._loading += 1
         self._settings_panel._load_config()
@@ -380,10 +382,29 @@ class MainWindow(QMainWindow):
         # 刷新地块详情面板
         self._land_panel.set_config(config)
 
+    def _on_config_updated_filtered(self, instance_id: str, config: AppConfig):
+        """带实例ID过滤的配置更新处理"""
+        if instance_id != self._current_instance_id:
+            return
+        self._on_config_updated(config)
+
     def _on_land_refresh_requested(self):
         """地块详情页「立即刷新」按钮：触发 OCR 识别个人信息"""
         try:
-            self.engine._sync_head_profile_from_ocr()
+            # 确保 action_executor 已设置
+            if not self.engine.action_executor:
+                from loguru import logger
+                logger.debug("地块刷新: action_executor 为 None，尝试初始化")
+                if not self.engine.start():
+                    logger.warning("地块刷新: start() 失败")
+                    return
+
+            rect = self.engine._prepare_window()
+            if rect:
+                self.engine._sync_head_profile_from_ocr(rect)
+                self.engine._sync_detail_exp(rect)
+            else:
+                self.engine._sync_head_profile_from_ocr()
         except Exception:
             pass
 
@@ -585,9 +606,9 @@ class MainWindow(QMainWindow):
             new_engine.screenshot_updated.connect(lambda img, iid=instance_id: self._on_screenshot_updated(iid, img))
             new_engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
             new_engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
-            new_engine.stats_updated.connect(self._status_panel.update_stats)
-            new_engine.stats_updated.connect(self._on_stats_for_task_panel)
-            new_engine.config_updated.connect(self._on_config_updated)
+            new_engine.stats_updated.connect(lambda stats, iid=instance_id: self._status_panel.update_stats(stats) if iid == self._current_instance_id else None)
+            new_engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_stats_for_task_panel(stats) if iid == self._current_instance_id else None)
+            new_engine.config_updated.connect(lambda cfg, iid=instance_id: self._on_config_updated_filtered(iid, cfg))
             logger.info(f"已创建实例 {instance_id} 的 BotEngine，window_select_rule={session.config.window_select_rule}")
         else:
             new_engine = self._engines[instance_id]
@@ -664,9 +685,9 @@ class MainWindow(QMainWindow):
             engine.screenshot_updated.connect(lambda img, iid=instance_id: self._on_screenshot_updated(iid, img))
             engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
             engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
-            engine.stats_updated.connect(self._status_panel.update_stats)
-            engine.stats_updated.connect(self._on_stats_for_task_panel)
-            engine.config_updated.connect(self._on_config_updated)
+            engine.stats_updated.connect(lambda stats, iid=instance_id: self._status_panel.update_stats(stats) if iid == self._current_instance_id else None)
+            engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_stats_for_task_panel(stats) if iid == self._current_instance_id else None)
+            engine.config_updated.connect(lambda cfg, iid=instance_id: self._on_config_updated_filtered(iid, cfg))
         return self._engines[instance_id]
 
     def _on_create_instance(self):
@@ -783,10 +804,12 @@ class MainWindow(QMainWindow):
             return
         engine = self._get_or_create_engine(session)
         # 启动前同步更新设置面板的配置引用，确保后续保存写入该实例的配置文件
-        self._settings_panel.config = session.config
-        self._settings_panel._loading += 1
-        self._settings_panel._load_config()
-        self._settings_panel._loading -= 1
+        # 仅当启动的是当前显示的实例时才更新设置面板
+        if instance_id == self._current_instance_id:
+            self._settings_panel.config = session.config
+            self._settings_panel._loading += 1
+            self._settings_panel._load_config()
+            self._settings_panel._loading -= 1
         if engine.start():
             self._instance_sidebar.update_instance_state(instance_id, 'running')
             logger.info(f"实例 {session.name} 已启动")

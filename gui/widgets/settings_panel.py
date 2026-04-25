@@ -32,7 +32,7 @@ from qfluentwidgets import (
 
 from gui.styles import Colors
 from gui.widgets.fluent_container import StableElevatedCardWidget, TransparentCardContainer
-from models.config import AppConfig, PlantMode, RunMode, SellMode, WindowPosition, CrossInstancePartnerConfig
+from models.config import AppConfig, PlantMode, RunMode, WindowPosition, CrossInstancePartnerConfig
 from models.game_data import CROPS, format_grow_time, get_best_crop_for_level, get_crop_names
 
 
@@ -82,8 +82,6 @@ class SettingsPanel(QWidget):
         self.level = SpinBox(plant_card)
         self.level.setRange(1, 100)
         level_layout.addWidget(self.level)
-        self.level_ocr = CheckBox("OCR同步", plant_card)
-        level_layout.addWidget(self.level_ocr)
         level_layout.addStretch()
         plant_form.addRow(self._field_label("等级", plant_card), level_row)
 
@@ -157,27 +155,6 @@ class SettingsPanel(QWidget):
         self.browse_btn.setFixedWidth(70)
         shortcut_layout.addWidget(self.browse_btn)
         env_form.addRow(self._field_label("游戏路径", env_card), shortcut_row)
-
-        # ── 出售卡片 ──
-        sell_card, sell_form = self._build_group_card(content, "出售策略", "settingsSellCard")
-        layout.addWidget(sell_card)
-
-        self.sell_mode = ComboBox(sell_card)
-        self.sell_mode.addItem("批量全部出售", userData=SellMode.BATCH_ALL.value)
-        self.sell_mode.addItem("选择性出售", userData=SellMode.SELECTIVE.value)
-        sell_form.addRow(self._field_label("出售模式", sell_card), self.sell_mode)
-
-        self._sell_crop_cbs: dict[str, CheckBox] = {}
-        sell_crops_row = QWidget(sell_card)
-        sell_crops_layout = QVBoxLayout(sell_crops_row)
-        sell_crops_layout.setContentsMargins(0, 0, 0, 0)
-        sell_crops_layout.setSpacing(4)
-        for name, _, req_level, _, _, _ in CROPS:
-            cb = CheckBox(f"{name} (Lv{req_level})", sell_crops_row)
-            self._sell_crop_cbs[name] = cb
-            sell_crops_layout.addWidget(cb)
-        self.sell_crops_container = sell_crops_row
-        sell_form.addRow(self._field_label("出售作物", sell_card), sell_crops_row)
 
         # ── Web 服务卡片 ──
         web_card, web_form = self._build_group_card(content, "Web 服务", "settingsWebCard")
@@ -403,7 +380,6 @@ class SettingsPanel(QWidget):
         self.level.valueChanged.connect(self._update_auto_crop_label)
         self.strategy.currentIndexChanged.connect(self._on_strategy_changed)
         self.crop.currentIndexChanged.connect(self._auto_save)
-        self.level_ocr.toggled.connect(self._auto_save)
         self.warehouse_first.toggled.connect(self._auto_save)
         self.skip_event_crops.toggled.connect(self._auto_save)
         # 窗口
@@ -418,10 +394,6 @@ class SettingsPanel(QWidget):
         self.silent_enabled.toggled.connect(self._auto_save)
         self.silent_start.timeChanged.connect(self._auto_save)
         self.silent_end.timeChanged.connect(self._auto_save)
-        # 出售
-        self.sell_mode.currentIndexChanged.connect(self._on_sell_mode_changed)
-        for cb in self._sell_crop_cbs.values():
-            cb.toggled.connect(self._auto_save)
         # Web
         self.web_toggle_btn.clicked.connect(self._on_web_toggle)
         self.web_host.editingFinished.connect(self._auto_save)
@@ -452,7 +424,6 @@ class SettingsPanel(QWidget):
             c = self.config
             # 种植
             c.planting.player_level = int(self.level.value())
-            c.planting.level_ocr_enabled = bool(self.level_ocr.isChecked())
             c.planting.strategy = PlantMode(str(self.strategy.currentData() or PlantMode.PREFERRED.value))
             c.planting.preferred_crop = str(self.crop.currentData() or c.planting.preferred_crop)
             c.planting.warehouse_first = bool(self.warehouse_first.isChecked())
@@ -471,9 +442,6 @@ class SettingsPanel(QWidget):
             c.silent_hours.start_minute = self.silent_start.time().minute()
             c.silent_hours.end_hour = self.silent_end.time().hour()
             c.silent_hours.end_minute = self.silent_end.time().minute()
-            # 出售
-            c.sell.mode = SellMode(str(self.sell_mode.currentData() or SellMode.BATCH_ALL.value))
-            c.sell.sell_crops = [name for name, cb in self._sell_crop_cbs.items() if cb.isChecked()]
             # Web
             c.web.host = str(self.web_host.text() or "0.0.0.0").strip()
             c.web.port = int(self.web_port.value())
@@ -542,12 +510,6 @@ class SettingsPanel(QWidget):
                 self.auto_crop_label.setText(f"{name} ({format_grow_time(grow_time)}, {exp}exp, {rate:.4f}/s)")
             else:
                 self.auto_crop_label.setText("无可用作物")
-
-    # ── 出售模式联动 ────────────────────────────────────────
-
-    def _on_sell_mode_changed(self, index: int):
-        is_selective = str(self.sell_mode.currentData() or "") == SellMode.SELECTIVE.value
-        self.sell_crops_container.setVisible(is_selective)
 
     # ── Web 服务 ────────────────────────────────────────────
 
@@ -679,7 +641,6 @@ class SettingsPanel(QWidget):
         c = self.config
         # 种植
         self.level.setValue(int(c.planting.player_level))
-        self.level_ocr.setChecked(bool(c.planting.level_ocr_enabled))
         self._set_combo_data(self.strategy, c.planting.strategy.value)
         self._on_strategy_changed()
         self._on_level_changed(c.planting.player_level)
@@ -699,11 +660,6 @@ class SettingsPanel(QWidget):
         self.silent_enabled.setChecked(c.silent_hours.enabled)
         self.silent_start.setTime(QTime(c.silent_hours.start_hour, c.silent_hours.start_minute))
         self.silent_end.setTime(QTime(c.silent_hours.end_hour, c.silent_hours.end_minute))
-        # 出售
-        self._set_combo_data(self.sell_mode, c.sell.mode.value)
-        self._on_sell_mode_changed(0)
-        for name, cb in self._sell_crop_cbs.items():
-            cb.setChecked(name in c.sell.sell_crops)
         # Web
         self._update_web_ui(c.web.enabled)
         self.web_host.setText(str(c.web.host or "0.0.0.0"))

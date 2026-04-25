@@ -2,6 +2,7 @@
   "feature_panel": {
     "task_titles": {
       "main": "农场巡查",
+      "profile": "个人信息",
       "friend": "好友巡查",
       "land_scan": "地块巡查",
       "gift": "礼品领取",
@@ -18,7 +19,6 @@
       "auto_bug": "除虫",
       "auto_expand": "土地扩建",
       "auto_upgrade": "土地升级",
-      "auto_sell": "自动出售",
       "auto_task": "任务奖励",
       "auto_fertilize": "施肥",
       "auto_buy_seed": "自动买种",
@@ -39,6 +39,7 @@
   "task_panel": {
     "task_titles": {
       "main": "农场巡查",
+      "profile": "个人信息",
       "friend": "好友巡查",
       "land_scan": "地块巡查",
       "gift": "礼品领取",

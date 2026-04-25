@@ -15,6 +15,7 @@
   P4  社交:     friend    — 好友巡查/帮忙/偷菜/同意好友
 """
 import os
+import re
 import sys
 import time
 import cv2
@@ -87,7 +88,7 @@ SCENE_TEMPLATES = [
     # 农场操作按钮
     "btn_harvest", "btn_weed", "btn_bug", "btn_water",
     "btn_expand", "btn_friend_help", "btn_task",
-    "btn_steal", "btn_visit_first",
+    "btn_steal", "btn_visit_first", "btn_batch_sell", "btn_sell",
     "friend_check", "btn_friend_apply", "btn_friend_agreed",
     "ui_goto_friend",
     "icon_steal_in_friend_detail",
@@ -253,7 +254,6 @@ class BotEngine(QObject):
             stopped_fn=lambda: self._bot_stop_requested,
         )
         self.gift.navigator = self._navigator
-        self.task.sell_config = self.config.sell
         self.plant.auto_buy_seed = self.config.features.auto_buy_seed
         self.plant.auto_fertilize = self.config.features.auto_fertilize
         # 好友策略配置
@@ -283,9 +283,7 @@ class BotEngine(QObject):
             f"auto_harvest={config.features.auto_harvest} | cross_instance.enabled={config.cross_instance.enabled}"
         )
         self.config = config
-        self.task.sell_config = config.sell
         self.plant.auto_buy_seed = config.features.auto_buy_seed
-        self.plant.auto_fertilize = self.config.features.auto_fertilize
         self.config_updated.emit(config)  # 通知 GUI 刷新
 
         # ✅ 同步任务执行器配置（间隔/启用状态等）
@@ -1072,7 +1070,7 @@ class BotEngine(QObject):
         # 判断是否有农场操作需求（排除好友功能）
         farm_features = {
             "auto_harvest", "auto_plant", "auto_weed", "auto_water",
-            "auto_bug", "auto_fertilize", "auto_sell", "auto_upgrade",
+            "auto_bug", "auto_fertilize", "auto_upgrade",
             "auto_task",
         }
         has_farm_work = any(features.get(f, False) for f in farm_features)
@@ -1394,7 +1392,7 @@ class BotEngine(QObject):
         return False
 
     def _task_maintain(self, context: dict) -> bool:
-        """维护任务（除草/除虫/浇水）- 使用快速检测优化"""
+        """维护任务（除草/除虫/浇水）- 统一循环，共享确认计时器"""
         rect = context.get("rect")
         features = context.get("features", {})
         return self.maintain.try_maintain_direct(rect, features) is not None
@@ -1706,7 +1704,7 @@ class BotEngine(QObject):
     # ============================================================
 
     def _run_task_main(self, ctx: TaskContext) -> TaskResult:
-        """主农场任务：OCR个人信息→弹窗→收获→维护→播种→扩建→升级→礼品"""
+        """主农场任务：弹窗→收获→维护→播种→扩建→升级→礼品"""
         # 静默时段检查
         if is_silent_time(self.config.silent_hours):
             remaining = get_silent_remaining_seconds(self.config.silent_hours)
@@ -1715,26 +1713,23 @@ class BotEngine(QObject):
                 next_run_seconds=min(remaining, 300),
             )
 
-        # OCR 刷新个人信息（等级/金币/点券/经验）
-        self._sync_head_profile_from_ocr()
-
         # 使用 BotWorker 在 QThread 中执行（兼容现有信号机制）
         result = self.check_farm()
         return TaskResult(
             success=result.get("success", False),
         )
 
-    def _sync_head_profile_from_ocr(self):
+    def _sync_head_profile_from_ocr(self, rect: tuple | None = None):
         """OCR 识别头部信息并回写 config.land.profile（移植自 copilot）。"""
-        if not self.config.planting.level_ocr_enabled:
-            return
         head_ocr = self._ensure_head_info_ocr()
         if head_ocr is None:
             return
 
-        rect = self._prepare_window()
-        if not rect:
-            return
+        if rect is None:
+            rect = self._prepare_window()
+            if not rect:
+                return
+
         cv_img, _ = self._fast_capture_and_detect(rect)
         if cv_img is None:
             return
@@ -1777,6 +1772,20 @@ class BotEngine(QObject):
         coupon_candidate = str(extra_info.get('coupon', '') or '').strip()
         exp_candidate = str(extra_info.get('exp', '') or '').strip()
 
+        # 校验 OCR 结果格式，过滤脏数据（如终端文字混入）
+        gold_re = re.compile(r'^\d+(?:\.\d+)?(?:万|亿)?$')
+        exp_re = re.compile(r'^\d+(?:\.\d+)?(?:万|亿)?/\d+(?:\.\d+)?(?:万|亿)?$')
+        coupon_re = re.compile(r'^\d+$')
+        if gold_candidate and not gold_re.match(gold_candidate):
+            logger.debug(f"金币格式异常，丢弃: '{gold_candidate}'")
+            gold_candidate = ''
+        if exp_candidate and not exp_re.match(exp_candidate):
+            logger.debug(f"经验格式异常，丢弃: '{exp_candidate}'")
+            exp_candidate = ''
+        if coupon_candidate and not coupon_re.match(coupon_candidate):
+            logger.debug(f"点券格式异常，丢弃: '{coupon_candidate}'")
+            coupon_candidate = ''
+
         new_level = accepted_level
         new_gold = gold_candidate or old_gold
         new_coupon = coupon_candidate or old_coupon
@@ -1809,6 +1818,171 @@ class BotEngine(QObject):
                 )
             # 广播配置更新，触发 GUI 刷新
             self.config_updated.emit(self.config)
+
+    def _run_task_profile(self, ctx: TaskContext) -> TaskResult:
+        """个人信息 OCR 任务：主界面识别 + 打开详情页获取精确经验。"""
+        if not self.config.tasks.get("profile", TaskScheduleItemConfig()).enabled:
+            return TaskResult(success=True)
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        # 确保 action_executor 已设置
+        if not self.action_executor:
+            logger.warning("_run_task_profile: action_executor 为 None，跳过")
+            return TaskResult(success=False, error="action_executor 未初始化")
+        for s in self._strategies:
+            if not s.action_executor:
+                s.action_executor = self.action_executor
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        try:
+            # 第一步：主界面 OCR（等级/金币/点券/模糊经验）
+            self._sync_head_profile_from_ocr(rect)
+
+            # 第二步：打开个人信息页获取精确经验
+            self._sync_detail_exp(rect)
+
+            return TaskResult(success=True)
+        except Exception as e:
+            logger.error(f"个人信息 OCR 任务异常: {e}")
+            return TaskResult(success=False, error=str(e))
+
+    def _sync_detail_exp(self, rect: tuple):
+        """点击主界面经验文字打开个人信息页，OCR 获取精确经验值。"""
+        if self._bot_stop_requested:
+            return
+        # 确保 action_executor 已设置（可能从 GUI 直接调用）
+        if not self.action_executor:
+            logger.debug("_sync_detail_exp: action_executor 为 None，尝试初始化")
+            if not self.start():
+                logger.warning("_sync_detail_exp: start() 失败")
+                return
+        head_ocr = self._ensure_head_info_ocr()
+        if head_ocr is None:
+            return
+
+        # 清屏：关闭残留弹窗
+        self._clear_screen(rect)
+
+        # 截屏，上 1/3 区域 OCR 定位经验文字
+        cv_img, _ = self._fast_capture_and_detect(rect)
+        if cv_img is None:
+            return
+        h, w = cv_img.shape[:2]
+        roi = (0, 0, w, h // 3)
+
+        ocr = head_ocr._ensure_ocr()
+        if ocr is None:
+            return
+        items = ocr.detect(cv_img, region=roi, scale=1.5, alpha=1.15, beta=0.0)
+        if not items:
+            logger.debug("主界面 OCR 无结果，跳过精确经验识别")
+            return
+
+        exp_pattern = re.compile(r'\d+(?:\.\d+)?(?:万|亿)?/\d+(?:\.\d+)?(?:万|亿)?')
+        concat_exp_pattern = re.compile(r'\d+(?:\.\d+)?(?:万|亿)\d+(?:\.\d+)?(?:万|亿)')
+        exp_item = None
+        for item in items:
+            text = str(item.text or "").replace(" ", "")
+            if exp_pattern.search(text):
+                exp_item = item
+                break
+            if concat_exp_pattern.search(text) and exp_item is None:
+                exp_item = item
+
+        if exp_item is None:
+            logger.debug("未找到经验文字，跳过精确经验识别")
+            return
+
+        # 点击经验文字位置（窗口相对坐标）
+        xs = [p[0] for p in exp_item.box]
+        ys = [p[1] for p in exp_item.box]
+        exp_cx = int(sum(xs) / len(xs))
+        exp_cy = int(sum(ys) / len(ys))
+        logger.debug(f"点击经验文字: coords=({exp_cx},{exp_cy}) text='{exp_item.text}'")
+        if self.action_executor:
+            from models.farm_state import Action, ActionType
+            action = Action(type=ActionType.NAVIGATE,
+                            click_position={"x": exp_cx, "y": exp_cy},
+                            priority=0, description="点击经验文字打开个人信息页")
+            result = self.action_executor.execute_action(action)
+            logger.debug(f"点击结果: {result.success}")
+        else:
+            logger.warning("action_executor 为 None，无法点击")
+        time.sleep(0.6)
+
+        if self._bot_stop_requested:
+            return
+
+        # 检测个人信息页关闭按钮或标识，确认页面已打开（只检测需要的模板）
+        cv_img = self._capture_only(rect)
+        if cv_img is None:
+            return
+        info_templates = ["btn_info_close", "btn_info", "btn_close"]
+        dets = self.cv_detector.detect_targeted(cv_img, names=info_templates, scales=[1.0, 0.9, 1.1])
+
+        det_names = [d.name for d in dets]
+        info_close = any(d.name == "btn_info_close" for d in dets)
+        info_icon = any(d.name == "btn_info" for d in dets)
+        generic_close = any(d.name == "btn_close" for d in dets)
+        logger.debug(f"个人信息页检测: info_close={info_close} "
+                     f"info_icon={info_icon} "
+                     f"generic_close={generic_close} "
+                     f"detected={det_names}")
+        if not info_close and not info_icon and not generic_close:
+            logger.debug("个人信息页未打开（未检测到关闭按钮或标识），跳过精确经验识别")
+            return
+
+        # OCR 精确经验（上 1/3 区域）
+        h2, w2 = cv_img.shape[:2]
+        roi = (0, 0, w2, h2 // 3)
+        try:
+            exp_text = head_ocr.detect_detail_exp(cv_img, region=roi)
+        except Exception as e:
+            logger.debug(f"精确经验 OCR 失败: {e}")
+            exp_text = ""
+
+        if exp_text:
+            old_exp = str(self.config.land.profile.exp or "").strip()
+            if exp_text != old_exp:
+                self.config.land.profile.exp = exp_text
+                self.config.save()
+                logger.info(f"精确经验已更新 | {old_exp or '-'} → {exp_text}")
+                self.config_updated.emit(self.config)
+
+        # 关闭个人信息页（复用已有检测结果，直接用 action_executor 避免 popup 引用问题）
+        close_btn = self.popup.find_any(dets, ["btn_info_close", "btn_close"])
+        if close_btn:
+            if self.action_executor:
+                from models.farm_state import Action, ActionType
+                action = Action(type=ActionType.NAVIGATE,
+                                click_position={"x": close_btn.x, "y": close_btn.y},
+                                priority=0, description="关闭个人信息页")
+                self.action_executor.execute_action(action)
+                logger.info("✓ 关闭个人信息页")
+        else:
+            logger.debug("未找到关闭按钮，点击空白处关闭个人信息页")
+            if self.action_executor:
+                w, h = rect[2], rect[3]
+                from models.farm_state import Action, ActionType
+                action = Action(type=ActionType.NAVIGATE,
+                                click_position={"x": w // 2, "y": int(h * 0.05)},
+                                priority=0, description="点击空白处关闭")
+                self.action_executor.execute_action(action)
+
+    def _close_info_page(self, rect: tuple):
+        """关闭个人信息页（兜底检测多种关闭按钮）。"""
+        cv_img, dets = self.popup.quick_detect(rect, ["btn_info_close", "btn_close"])
+        close_btn = self.popup.find_any(dets, ["btn_info_close", "btn_close"])
+        if close_btn:
+            self.popup.click(close_btn.x, close_btn.y, "关闭个人信息页")
+        else:
+            logger.debug("未找到关闭按钮，尝试点击空白处关闭个人信息页")
+            self.popup.click_blank(rect)
 
     def _run_task_friend(self, ctx: TaskContext) -> TaskResult:
         """好友巡查"""
@@ -1851,8 +2025,7 @@ class BotEngine(QObject):
 
     def _run_task_fertilize(self, ctx: TaskContext) -> TaskResult:
         """定时施肥：对所有已播种地块施肥"""
-        if not self.config.features.auto_fertilize:
-            return TaskResult(success=True)
+        # 由任务调度 fertilize.enabled 控制是否执行
 
         if is_silent_time(self.config.silent_hours):
             remaining = get_silent_remaining_seconds(self.config.silent_hours)
@@ -1870,9 +2043,8 @@ class BotEngine(QObject):
         return TaskResult(success=True)
 
     def _run_task_sell(self, ctx: TaskContext) -> TaskResult:
-        """仓库出售"""
-        if not self.config.features.auto_sell:
-            return TaskResult(success=True)
+        """仓库出售（移植自 copilot：支持直接仓库导航，不依赖任务条）"""
+        # 由任务调度 sell.enabled 控制是否执行，无需二次检查
 
         if is_silent_time(self.config.silent_hours):
             remaining = get_silent_remaining_seconds(self.config.silent_hours)
@@ -1882,11 +2054,27 @@ class BotEngine(QObject):
         if not rect:
             return TaskResult(success=False, error="窗口未找到")
 
+        # 优先尝试直接仓库导航（copilot 模式）
         cv_image, detections = self._fast_capture_and_detect(rect)
         if cv_image is None:
             return TaskResult(success=False, error="截屏失败")
 
-        ta = self.task.try_task(rect, detections)
+        names = {d.name for d in detections}
+
+        # 场景判断：有仓库按钮可直接进入仓库
+        if "btn_warehouse" in names:
+            result = self.task.try_sell_direct(rect)
+            if result:
+                self.log_message.emit(f"自动出售完成: {', '.join(result)}")
+                return TaskResult(success=True)
+
+        # 回退到任务条路径
+        if "btn_task" in names:
+            result = self.task.try_task(rect, detections)
+            if result:
+                self.log_message.emit(f"自动出售完成: {', '.join(result)}")
+            return TaskResult(success=True)
+
         return TaskResult(success=True)
 
     def _run_task_task(self, ctx: TaskContext) -> TaskResult:

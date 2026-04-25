@@ -17,6 +17,7 @@ class BaseStrategy:
         self._capture_fn = None
         self._stop_requested = False
         self.navigator = None
+        self._click_last: dict[str, float] = {}  # 按钮名 → 上次点击时间，防重复点击
 
     def set_capture_fn(self, fn):
         self._capture_fn = fn
@@ -78,6 +79,42 @@ class BaseStrategy:
         else:
             logger.warning(f"✗ {desc}: {result.message}")
         return result.success
+
+    def _click_interval_ok(self, key: str, interval: float) -> bool:
+        """检查按钮点击间隔是否满足，防重复点击（移植自 copilot appear_then_click 模式）"""
+        import time
+        last = self._click_last.get(key, 0.0)
+        return (time.time() - last) >= interval
+
+    def _click_interval_hit(self, key: str) -> None:
+        """记录按钮点击时间"""
+        import time
+        self._click_last[key] = time.time()
+
+    def click_with_interval(self, detections: list[DetectResult], name: str,
+                            desc: str = "", interval: float = 1.0,
+                            action_type: str = ActionType.NAVIGATE) -> bool:
+        """检测到目标后点击，带间隔防重复（移植自 copilot appear_then_click）
+
+        Args:
+            detections: 当前帧检测结果
+            name: 模板名称
+            desc: 操作描述
+            interval: 最小点击间隔（秒）
+            action_type: 动作类型
+
+        Returns:
+            是否成功点击
+        """
+        if not self._click_interval_ok(name, interval):
+            return False
+        target = self.find_by_name(detections, name)
+        if not target:
+            return False
+        ok = self.click(target.x, target.y, desc or name, action_type)
+        if ok:
+            self._click_interval_hit(name)
+        return ok
 
     def find_by_name(self, detections: list[DetectResult], name: str) -> DetectResult | None:
         for d in detections:
