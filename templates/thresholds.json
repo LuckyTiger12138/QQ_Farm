@@ -37,7 +37,8 @@
     "btn_qqsvip": 0.8,
     "btn_land_left": 0.9,
     "btn_land_right": 0.9,
-    "btn_xc_close": 0.9
+    "btn_xc_close": 0.9,
+    "seed_杨桃": 0.83
   },
   "category_overrides": {
     "button": 0.8,
