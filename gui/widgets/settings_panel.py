@@ -379,6 +379,7 @@ class SettingsPanel(QWidget):
         self.level.valueChanged.connect(self._on_level_changed)
         self.level.valueChanged.connect(self._update_auto_crop_label)
         self.strategy.currentIndexChanged.connect(self._on_strategy_changed)
+        self.strategy.currentIndexChanged.connect(self._auto_save)
         self.crop.currentIndexChanged.connect(self._auto_save)
         self.warehouse_first.toggled.connect(self._auto_save)
         self.skip_event_crops.toggled.connect(self._auto_save)
@@ -475,7 +476,7 @@ class SettingsPanel(QWidget):
         self.crop.clear()
         for name, _, req_level, grow_time, exp, _ in CROPS:
             time_str = format_grow_time(grow_time)
-            if req_level <= level:
+            if req_level <= level or req_level >= 999:
                 self.crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
             else:
                 self.crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)

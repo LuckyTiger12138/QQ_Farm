@@ -5287,6 +5287,170 @@
       "exp_alter": 2266,
       "fruit_root": 2,
       "fruit_alter": 72
+    },
+    {
+      "id": 3000001,
+      "name": "红云飞片",
+      "mutant": "",
+      "fruit": {
+        "id": 40501,
+        "count": 50
+      },
+      "seed_id": 30001,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000001",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000002,
+      "name": "石竹花",
+      "mutant": "",
+      "fruit": {
+        "id": 40502,
+        "count": 50
+      },
+      "seed_id": 30002,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000002",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000003,
+      "name": "针垫花",
+      "mutant": "",
+      "fruit": {
+        "id": 40503,
+        "count": 50
+      },
+      "seed_id": 30003,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000003",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000004,
+      "name": "艾草",
+      "mutant": "",
+      "fruit": {
+        "id": 40504,
+        "count": 24
+      },
+      "seed_id": 30004,
+      "land_level_need": 999,
+      "seasons": 2,
+      "grow_phases": "种子:4800;发芽:4800;小叶子:4800;大叶子:7200;初熟:7200;成熟:0;",
+      "exp": 1455,
+      "size": 0,
+      "offsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1,
+        "y": 1
+      },
+      "harvestOffsetPosition": {
+        "x": -35,
+        "y": 40
+      },
+      "harvestRandom": false,
+      "harvestAllSpineRes": "",
+      "harvestAllOffsetPosition": "",
+      "all_state_spine": "",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 0
+      },
+      "rare_plant_light_pos": "",
+      "exp_root": 1.6,
+      "exp_alter": 425,
+      "fruit_root": 2,
+      "fruit_alter": 18
     }
   ]
   
