@@ -53,7 +53,7 @@ class FeaturesConfig(BaseModel):
     auto_task: bool = False
     auto_upgrade: bool = False
     auto_svip_gift: bool = False     # QQSVIP礼包领取
-    auto_mall_gift: bool = False     # 商城免费领取
+    auto_mall_gift: bool = True      # 商城免费领取
     auto_mail: bool = False          # 邮件领取
     friend: FriendConfig = Field(default_factory=FriendConfig)  # 好友操作配置
 
@@ -290,15 +290,15 @@ class AppConfig(BaseModel):
             ),
             "profile": TaskScheduleItemConfig(
                 enabled=True, priority=8, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=300, failure_interval_seconds=60,
+                interval_seconds=1800, failure_interval_seconds=60,
             ),
             "friend": TaskScheduleItemConfig(
                 enabled=True, priority=20, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=1800, failure_interval_seconds=300,
+                interval_seconds=120, failure_interval_seconds=300,
             ),
             "land_scan": TaskScheduleItemConfig(
                 enabled=True, priority=15, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=300, failure_interval_seconds=120,
+                interval_seconds=1800, failure_interval_seconds=120,
             ),
             "gift": TaskScheduleItemConfig(
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,
@@ -314,7 +314,7 @@ class AppConfig(BaseModel):
             ),
             "fertilize": TaskScheduleItemConfig(
                 enabled=False, priority=25, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=7200, failure_interval_seconds=600,
+                interval_seconds=1800, failure_interval_seconds=600,
             ),
             "share": TaskScheduleItemConfig(
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,

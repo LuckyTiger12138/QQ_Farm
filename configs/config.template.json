@@ -13,7 +13,7 @@
     "auto_task": false,
     "auto_upgrade": false,
     "auto_svip_gift": false,
-    "auto_mall_gift": false,
+    "auto_mall_gift": true,
     "auto_mail": false
   },
   "safety": {
@@ -88,7 +88,7 @@
       "enabled": true,
       "priority": 20,
       "trigger": "interval",
-      "interval_seconds": 1800,
+      "interval_seconds": 120,
       "enabled_time_range": "00:00:00-23:59:59",
       "daily_time": "00:01",
       "next_run": "",
