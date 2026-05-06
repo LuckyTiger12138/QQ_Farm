@@ -12,7 +12,7 @@
     "auto_bad": false,
     "auto_task": false,
     "auto_upgrade": false,
-    "auto_svip_gift": false,
+    "auto_svip_gift": true,
     "auto_mall_gift": true,
     "auto_mail": false
   },
@@ -33,19 +33,19 @@
     "capture_interval_seconds": 0.3
   },
   "schedule": {
-    "farm_check_seconds": 120,
-    "friend_check_seconds": 300,
+    "farm_check_seconds": 60,
+    "friend_check_seconds": 120,
     "task_check_minutes": 60
   },
   "planting": {
-    "strategy": "preferred",
+    "strategy": "best_exp_rate",
     "preferred_crop": "椰子",
     "player_level": 69,
     "window_width": 581,
     "window_height": 1054,
-    "warehouse_first": true,
+    "warehouse_first": false,
     "skip_event_crops": false,
-    "level_ocr_enabled": true,
+    "level_ocr_enabled": false,
     "window_platform": "qq",
     "planting_stable_seconds": 0.5,
     "planting_stable_timeout_seconds": 5.0
@@ -53,7 +53,7 @@
   "sell": {},
   "silent_hours": {
     "enabled": false,
-    "start_hour": 2,
+    "start_hour": 3,
     "start_minute": 0,
     "end_hour": 6,
     "end_minute": 0

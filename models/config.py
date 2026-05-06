@@ -52,7 +52,7 @@ class FeaturesConfig(BaseModel):
     auto_fertilize: bool = True
     auto_task: bool = False
     auto_upgrade: bool = False
-    auto_svip_gift: bool = False     # QQSVIP礼包领取
+    auto_svip_gift: bool = True      # QQSVIP礼包领取
     auto_mall_gift: bool = True      # 商城免费领取
     auto_mail: bool = False          # 邮件领取
     friend: FriendConfig = Field(default_factory=FriendConfig)  # 好友操作配置
@@ -81,14 +81,14 @@ class ScreenshotConfig(BaseModel):
 
 
 class ScheduleConfig(BaseModel):
-    farm_check_seconds: int = 120    # 农场巡查间隔（秒）
-    friend_check_seconds: int = 300  # 好友巡查间隔（秒）
+    farm_check_seconds: int = 60     # 农场巡查间隔（秒）
+    friend_check_seconds: int = 120  # 好友巡查间隔（秒）
     task_check_minutes: int = 60     # 任务检查间隔（分钟）
 
 
 class SilentHoursConfig(BaseModel):
     enabled: bool = False
-    start_hour: int = 2     # 0-23
+    start_hour: int = 3     # 0-23
     start_minute: int = 0   # 0-59
     end_hour: int = 6       # 0-23
     end_minute: int = 0     # 0-59
@@ -151,15 +151,15 @@ def resolve_task_min_interval_seconds(executor_cfg: ExecutorConfig) -> int:
 
 
 class PlantingConfig(BaseModel):
-    strategy: PlantMode = PlantMode.PREFERRED
+    strategy: PlantMode = PlantMode.BEST_EXP_RATE
     preferred_crop: str = "椰子"  # strategy=preferred 时使用
     player_level: int = 69
     window_width: int = 581
     window_height: int = 1054
     game_shortcut_path: str = ""  # 游戏快捷方式路径，用于自动启动
-    warehouse_first: bool = True          # 仓库优先播种
+    warehouse_first: bool = False         # 仓库优先播种
     skip_event_crops: bool = False        # 跳过活动作物
-    level_ocr_enabled: bool = True        # 等级OCR开关
+    level_ocr_enabled: bool = False       # 等级OCR开关
     window_platform: str = "qq"           # qq/wechat
     planting_stable_seconds: float = 0.5  # 播种画面稳定等待时间
     planting_stable_timeout_seconds: float = 5.0  # 播种稳定超时
@@ -174,9 +174,9 @@ class CrossInstancePartnerConfig(BaseModel):
 
 class CrossInstanceConfig(BaseModel):
     """大小号通讯功能配置"""
-    enabled: bool = False                  # 总开关
+    enabled: bool = True                   # 总开关
     send_alerts: bool = True               # 是否发送成熟通知
-    accept_steal: bool = True              # 是否接收偷菜任务
+    accept_steal: bool = False             # 是否接收偷菜任务
     alert_threshold_seconds: int = 300     # 成熟阈值（默认5分钟）
     partners: list[CrossInstancePartnerConfig] = Field(default_factory=list)
 
@@ -294,11 +294,11 @@ class AppConfig(BaseModel):
             ),
             "friend": TaskScheduleItemConfig(
                 enabled=True, priority=20, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=120, failure_interval_seconds=300,
+                interval_seconds=60, failure_interval_seconds=300,
             ),
             "land_scan": TaskScheduleItemConfig(
-                enabled=True, priority=15, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=1800, failure_interval_seconds=120,
+                enabled=True, priority=20, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=1200, failure_interval_seconds=120,
             ),
             "gift": TaskScheduleItemConfig(
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,

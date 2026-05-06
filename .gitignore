@@ -21,6 +21,7 @@ env/
 *.swo
 
 # 运行时生成
+config.json
 config.example.json.bak
 logs/
 screenshots/
