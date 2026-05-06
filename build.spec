@@ -7,6 +7,8 @@ a = Analysis(
         ('templates', 'templates'),
         ('gui/icons', 'gui/icons'),
         ('configs', 'configs'),
+        ('C:/Users/FuXing/AppData/Local/Programs/Python/Python312/Lib/site-packages/rapidocr_onnxruntime/config.yaml', 'rapidocr_onnxruntime'),
+        ('C:/Users/FuXing/AppData/Local/Programs/Python/Python312/Lib/site-packages/rapidocr_onnxruntime/models', 'rapidocr_onnxruntime/models'),
     ],
     hiddenimports=['PyQt6.sip'],
     hookspath=[],
