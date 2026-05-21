@@ -6,16 +6,12 @@ from pydantic import BaseModel
 class ActionType(str, Enum):
     HARVEST = "harvest"
     PLANT = "plant"
-    WATER = "water"
-    WEED = "weed"
-    BUG = "bug"
+    MAINTAIN = "maintain"
     FERTILIZE = "fertilize"
     REMOVE = "remove"
     SELL = "sell"
     STEAL = "steal"
-    HELP_WATER = "help_water"
-    HELP_WEED = "help_weed"
-    HELP_BUG = "help_bug"
+    HELP_MAINTAIN = "help_maintain"
     CLOSE_POPUP = "close_popup"
     NAVIGATE = "navigate"
 

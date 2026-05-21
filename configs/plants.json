@@ -5451,6 +5451,170 @@
       "exp_alter": 425,
       "fruit_root": 2,
       "fruit_alter": 18
+    },
+    {
+      "id": 3000005,
+      "name": "孔雀草",
+      "mutant": "",
+      "fruit": {
+        "id": 40505,
+        "count": 50
+      },
+      "seed_id": 30005,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000005",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000006,
+      "name": "欧石楠",
+      "mutant": "",
+      "fruit": {
+        "id": 40506,
+        "count": 50
+      },
+      "seed_id": 30006,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000006",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000007,
+      "name": "黄金果",
+      "mutant": "",
+      "fruit": {
+        "id": 40507,
+        "count": 50
+      },
+      "seed_id": 30007,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000007",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000008,
+      "name": "卡特兰",
+      "mutant": "",
+      "fruit": {
+        "id": 40508,
+        "count": 50
+      },
+      "seed_id": 30008,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000008",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
     }
   ]
   

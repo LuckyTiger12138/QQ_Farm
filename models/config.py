@@ -34,9 +34,7 @@ class SellConfig(BaseModel):
 
 class FriendConfig(BaseModel):
     enable_steal: bool = True       # 是否偷菜
-    enable_weed: bool = True        # 是否帮忙除草
-    enable_water: bool = True       # 是否帮忙浇水
-    enable_bug: bool = True         # 是否帮忙除虫
+    enable_maintain: bool = True    # 帮好友一键务农
     max_steal_per_round: int = 0    # 每轮偷菜次数上限（0=无限制）
     blacklist: list[str] = []       # 好友黑名单（前缀匹配）
     enable_accept_request: bool = True  # 自动同意好友请求
@@ -46,9 +44,7 @@ class FeaturesConfig(BaseModel):
     auto_harvest: bool = True
     auto_plant: bool = True
     auto_buy_seed: bool = True
-    auto_weed: bool = True
-    auto_water: bool = True
-    auto_bug: bool = True
+    auto_maintain: bool = True
     auto_fertilize: bool = True
     auto_task: bool = False
     auto_upgrade: bool = False
@@ -245,9 +241,7 @@ class AppConfig(BaseModel):
         main_features = {
             "auto_harvest": f.auto_harvest,
             "auto_plant": f.auto_plant,
-            "auto_weed": f.auto_weed,
-            "auto_water": f.auto_water,
-            "auto_bug": f.auto_bug,
+            "auto_maintain": f.auto_maintain,
             "auto_expand": f.auto_upgrade,
             "auto_upgrade": f.auto_upgrade,
             "auto_buy_seed": f.auto_buy_seed,
@@ -259,9 +253,7 @@ class AppConfig(BaseModel):
 
         friend_features = {
             "auto_steal": f.friend.enable_steal,
-            "auto_weed": f.friend.enable_weed,
-            "auto_water": f.friend.enable_water,
-            "auto_bug": f.friend.enable_bug,
+            "auto_maintain": f.friend.enable_maintain,
             "blacklist": f.friend.blacklist,
         }
         if "friend" in self.tasks:

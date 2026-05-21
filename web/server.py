@@ -191,16 +191,12 @@ class WebServer:
                             "auto_plant": feat.auto_plant,
                             "auto_fertilize": feat.auto_fertilize,
                             "auto_buy_seed": feat.auto_buy_seed,
-                            "auto_water": feat.auto_water,
-                            "auto_weed": feat.auto_weed,
-                            "auto_bug": feat.auto_bug,
+                            "auto_maintain": feat.auto_maintain,
                             "auto_task": feat.auto_task,
                             "auto_upgrade": feat.auto_upgrade,
                             # 好友操作
                             "friend_steal": fc.enable_steal,
-                            "friend_weed": fc.enable_weed,
-                            "friend_water": fc.enable_water,
-                            "friend_bug": fc.enable_bug,
+                            "friend_maintain": fc.enable_maintain,
                             "max_steal_per_round": fc.max_steal_per_round,
                             # 安全设置
                             "run_mode": safety.run_mode.value,
@@ -243,15 +239,11 @@ class WebServer:
                                 "auto_plant": feat.get("auto_plant", True),
                                 "auto_fertilize": feat.get("auto_fertilize", True),
                                 "auto_buy_seed": feat.get("auto_buy_seed", True),
-                                "auto_water": feat.get("auto_water", True),
-                                "auto_weed": feat.get("auto_weed", True),
-                                "auto_bug": feat.get("auto_bug", True),
+                                "auto_maintain": feat.get("auto_maintain", True),
                                 "auto_task": feat.get("auto_task", False),
                                 "auto_upgrade": feat.get("auto_upgrade", False),
                                 "friend_steal": fc.get("enable_steal", True),
-                                "friend_weed": fc.get("enable_weed", True),
-                                "friend_water": fc.get("enable_water", True),
-                                "friend_bug": fc.get("enable_bug", True),
+                                "friend_maintain": fc.get("enable_maintain", True),
                                 "max_steal_per_round": fc.get("max_steal_per_round", 0),
                                 "run_mode": safety.get("run_mode", "background"),
                                 "random_delay_min": safety.get("random_delay_min", 0.1),
@@ -330,7 +322,7 @@ class WebServer:
 
                     # 功能开关
                     for key in ["auto_harvest", "auto_plant", "auto_fertilize", "auto_buy_seed",
-                                "auto_water", "auto_weed", "auto_bug",
+                                "auto_maintain",
                                 "auto_task", "auto_upgrade"]:
                         if key in body:
                             setattr(cfg.features, key, bool(body[key]))
@@ -338,9 +330,7 @@ class WebServer:
                     # 好友操作
                     fc = cfg.features.friend
                     if "friend_steal" in body: fc.enable_steal = bool(body["friend_steal"])
-                    if "friend_weed" in body: fc.enable_weed = bool(body["friend_weed"])
-                    if "friend_water" in body: fc.enable_water = bool(body["friend_water"])
-                    if "friend_bug" in body: fc.enable_bug = bool(body["friend_bug"])
+                    if "friend_maintain" in body: fc.enable_maintain = bool(body["friend_maintain"])
                     if "max_steal_per_round" in body: fc.max_steal_per_round = int(body["max_steal_per_round"])
 
                     # 安全设置
@@ -599,17 +589,13 @@ function buildConfigForm(c){
     <div class="sw"><input type="checkbox" id="cf-plant" ${c.auto_plant?'checked':''}><label>播种</label></div>
     <div class="sw"><input type="checkbox" id="cf-fertilize" ${c.auto_fertilize?'checked':''}><label>施肥</label></div>
     <div class="sw"><input type="checkbox" id="cf-buyseed" ${c.auto_buy_seed?'checked':''}><label>买种</label></div></div>
-    <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-water" ${c.auto_water?'checked':''}><label>浇水</label></div>
-    <div class="sw"><input type="checkbox" id="cf-weed" ${c.auto_weed?'checked':''}><label>除草</label></div>
-    <div class="sw"><input type="checkbox" id="cf-bug" ${c.auto_bug?'checked':''}><label>除虫</label></div></div>
+    <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-maintain" ${c.auto_maintain?'checked':''}><label>一键务农</label></div></div>
     <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-task" ${c.auto_task?'checked':''}><label>任务</label></div>
     <div class="sw"><input type="checkbox" id="cf-upgrade" ${c.auto_upgrade?'checked':''}><label>扩建</label></div></div>
   </div>
   <div class="config-section"><h3>👥 好友操作</h3>
     <div class="cfg-row"><div class="sw"><input type="checkbox" id="cf-steal" ${c.friend_steal?'checked':''}><label>偷菜</label></div>
-    <div class="sw"><input type="checkbox" id="cf-fweed" ${c.friend_weed?'checked':''}><label>帮忙除草</label></div>
-    <div class="sw"><input type="checkbox" id="cf-fwater" ${c.friend_water?'checked':''}><label>帮忙浇水</label></div>
-    <div class="sw"><input type="checkbox" id="cf-fbug" ${c.friend_bug?'checked':''}><label>帮忙除虫</label></div></div>
+    <div class="sw"><input type="checkbox" id="cf-fmaintain" ${c.friend_maintain?'checked':''}><label>一键务农</label></div></div>
     <div class="cfg-row"><label>偷菜上限/轮</label><input type="number" id="cf-maxsteal" value="${c.max_steal_per_round||0}" min="0"></div>
   </div>
   <div class="config-section"><h3>📊 出售策略</h3>
@@ -654,10 +640,9 @@ async function saveConfig(){
     farm_check_seconds:+val('cf-farm'),friend_check_seconds:+val('cf-friend'),
     player_level:+val('cf-level'),plant_strategy:val('cf-strategy'),preferred_crop:val('cf-crop'),
     auto_harvest:chk('cf-harvest'),auto_plant:chk('cf-plant'),auto_fertilize:chk('cf-fertilize'),
-    auto_buy_seed:chk('cf-buyseed'),auto_water:chk('cf-water'),auto_weed:chk('cf-weed'),
-    auto_bug:chk('cf-bug'),auto_task:chk('cf-task'),auto_upgrade:chk('cf-upgrade'),
-    friend_steal:chk('cf-steal'),friend_weed:chk('cf-fweed'),friend_water:chk('cf-fwater'),
-    friend_bug:chk('cf-fbug'),max_steal_per_round:+val('cf-maxsteal'),
+    auto_buy_seed:chk('cf-buyseed'),auto_maintain:chk('cf-maintain'),
+    auto_task:chk('cf-task'),auto_upgrade:chk('cf-upgrade'),
+    friend_steal:chk('cf-steal'),friend_maintain:chk('cf-fmaintain'),max_steal_per_round:+val('cf-maxsteal'),
     run_mode:val('cf-runmode'),random_delay_min:+val('cf-dmin'),random_delay_max:+val('cf-dmax'),
     click_offset:+val('cf-offset'),
     silent_enabled:chk('cf-silent-on'),silent_start_hour:startH,silent_start_minute:startM,

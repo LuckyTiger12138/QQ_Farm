@@ -48,12 +48,10 @@ FRIEND_BLACKLIST_MIN_PREFIX_LEN = 1
 # 一次截图检测的全部好友相关模板
 _ALL_FRIEND_TEMPLATES = [
     # 操作按钮
-    "btn_water", "btn_weed", "btn_bug", "btn_steal",
+    "btn_一键务农", "btn_steal",
     # 底部好友列表 icon
     "icon_steal_in_friend_detail",
-    "icon_water_in_friend_detail",
-    "icon_weed_in_friend_detail",
-    "icon_bug_in_friend_detail",
+    "icon_maintain_in_friend_detail",
     # 导航
     "btn_home", "btn_close", "btn_rw_close",
     # 场景判断
@@ -93,18 +91,14 @@ class FriendStrategy(BaseStrategy):
 
     def run_friend_round(self, rect: tuple,
                          enable_steal: bool = True,
-                         enable_weed: bool = True,
-                         enable_water: bool = True,
-                         enable_bug: bool = True,
+                         enable_maintain: bool = True,
                          max_steal: int = 0) -> list[str]:
         """执行好友巡查回合
         
         Args:
             rect: 游戏窗口矩形
             enable_steal: 是否偷菜
-            enable_weed: 是否帮忙除草
-            enable_water: 是否帮忙浇水
-            enable_bug: 是否帮忙除虫
+            enable_maintain: 是否帮好友一键务农
             max_steal: 每轮偷菜次数上限（0=无限制）
         """
         actions: list[str] = []
@@ -113,12 +107,11 @@ class FriendStrategy(BaseStrategy):
         
         self._last_rect = rect
         
-        enable_help = enable_weed or enable_water or enable_bug
-        if not enable_steal and not enable_help:
+        if not enable_steal and not enable_maintain:
             logger.info("好友流程: 未启用任何操作，跳过")
             return actions
 
-        logger.info(f"好友流程: 开始 | 偷菜={enable_steal}(上限{max_steal or '无'}) 除草={enable_weed} 浇水={enable_water} 除虫={enable_bug}")
+        logger.info(f"好友流程: 开始 | 偷菜={enable_steal}(上限{max_steal or '无'}) 务农={enable_maintain}")
 
         # 1. 进入好友列表
         if not self._enter_friend_list(rect):
@@ -129,7 +122,7 @@ class FriendStrategy(BaseStrategy):
         self.accept_friend_requests(rect)
 
         # 2. 进入第一个好友农场（传入开关参数，智能检测可操作目标）
-        if not self._enter_friend_detail(rect, enable_steal, enable_weed, enable_water, enable_bug):
+        if not self._enter_friend_detail(rect, enable_steal, enable_maintain):
             logger.info("好友流程: 未找到可访问的好友，结束")
             self._back_to_home(rect)
             return actions
@@ -158,9 +151,9 @@ class FriendStrategy(BaseStrategy):
                         steal_count += 1
                         has_action_this_round = True
 
-            # 帮忙（根据独立开关）
-            if enable_help:
-                helped = self._do_help(cv_img, dets, enable_weed, enable_water, enable_bug)
+            # 帮忙（一键务农）
+            if enable_maintain:
+                helped = self._do_help(cv_img, dets)
                 if helped:
                     help_count += len(helped)
                     has_action_this_round = True
@@ -177,9 +170,7 @@ class FriendStrategy(BaseStrategy):
             # 切换下一位好友（含滑动）
             if not self._goto_next_friend(cv_img, dets, rect,
                                           enable_steal and (max_steal == 0 or steal_count < max_steal),
-                                          enable_weed,
-                                          enable_water,
-                                          enable_bug):
+                                          enable_maintain):
                 break
 
         # 4. 回家
@@ -278,81 +269,54 @@ class FriendStrategy(BaseStrategy):
 
     def _collect_operable_friend_icons(self, cv_img, dets: list[DetectResult],
                                         enable_steal: bool = True,
-                                        enable_weed: bool = True,
-                                        enable_water: bool = True,
-                                        enable_bug: bool = True) -> dict:
-        """在好友列表页收集所有可操作的目标（参考 qq-farm-copilot 实现）
-
-        在好友列表页就检测所有可操作的 icon，避免无效拜访。
+                                        enable_maintain: bool = True) -> dict:
+        """在好友列表页收集所有可操作的目标
 
         Args:
             cv_img: 当前截图
             dets: 检测结果
             enable_steal: 是否偷菜
-            enable_weed: 是否帮忙除草
-            enable_water: 是否帮忙浇水
-            enable_bug: 是否帮忙除虫
+            enable_maintain: 是否一键务农
 
         Returns:
             dict: {
                 'steal': [可偷菜的好友列表],
-                'help': [可帮忙的好友列表],
+                'help_maintain': [可务农的好友列表],
                 'total': 总可操作目标数
             }
         """
         h, w = cv_img.shape[:2]
 
-        # 定义好友列表页的 icon 检测区域（参考参考项目：x: 105-410, y: 260-800）
-        # 根据你的窗口尺寸调整
-        x_min = int(w * 0.18)   # ~105
-        x_max = int(w * 0.71)   # ~410
-        y_min = int(h * 0.25)   # ~260
-        y_max = int(h * 0.76)   # ~800
+        x_min = int(w * 0.18)
+        x_max = int(w * 0.71)
+        y_min = int(h * 0.25)
+        y_max = int(h * 0.76)
 
         result = {
             'steal': [],
-            'help_water': [],  # 浇水
-            'help_weed': [],   # 除草
-            'help_bug': [],    # 除虫
+            'help_maintain': [],
         }
 
-        # 收集偷菜目标
         if enable_steal:
             for d in dets:
                 if d.name == "icon_steal_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
                     result['steal'].append(d)
 
-        # 收集帮忙目标（浇水）
-        if enable_water:
+        if enable_maintain:
             for d in dets:
-                if d.name == "icon_water_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
-                    result['help_water'].append(d)
+                if d.name == "icon_maintain_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
+                    result['help_maintain'].append(d)
 
-        # 收集帮忙目标（除草）
-        if enable_weed:
-            for d in dets:
-                if d.name == "icon_weed_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
-                    result['help_weed'].append(d)
-
-        # 收集帮忙目标（除虫）
-        if enable_bug:
-            for d in dets:
-                if d.name == "icon_bug_in_friend_detail" and x_min <= d.x <= x_max and y_min <= d.y <= y_max:
-                    result['help_bug'].append(d)
-
-        total = len(result['steal']) + len(result['help_water']) + len(result['help_weed']) + len(result['help_bug'])
+        total = len(result['steal']) + len(result['help_maintain'])
         result['total'] = total
 
-        logger.debug(f"好友列表检测: 偷菜={len(result['steal'])} 浇水={len(result['help_water'])} "
-                     f"除草={len(result['help_weed'])} 除虫={len(result['help_bug'])} 总计={total}")
+        logger.debug(f"好友列表检测: 偷菜={len(result['steal'])} 务农={len(result['help_maintain'])} 总计={total}")
 
         return result
 
     def _enter_friend_detail(self, rect: tuple,
                               enable_steal: bool = True,
-                              enable_weed: bool = True,
-                              enable_water: bool = True,
-                              enable_bug: bool = True) -> bool:
+                              enable_maintain: bool = True) -> bool:
         """从好友列表进入好友农场（智能检测优先）
 
         参考 qq-farm-copilot 的实现：
@@ -367,9 +331,7 @@ class FriendStrategy(BaseStrategy):
             cv_img, dets = self._quick_detect(rect, [
                 "btn_visit_first", "btn_home",
                 "icon_steal_in_friend_detail",
-                "icon_water_in_friend_detail",
-                "icon_weed_in_friend_detail",
-                "icon_bug_in_friend_detail",
+                "icon_maintain_in_friend_detail",
             ])
             if cv_img is None:
                 time.sleep(0.3)
@@ -384,28 +346,22 @@ class FriendStrategy(BaseStrategy):
             operable = self._collect_operable_friend_icons(
                 cv_img, dets,
                 enable_steal=enable_steal,
-                enable_weed=enable_weed,
-                enable_water=enable_water,
-                enable_bug=enable_bug
+                enable_maintain=enable_maintain
             )
 
             if operable['total'] > 0:
-                # ✅ 有可操作目标，点击对应行的拜访按钮
                 logger.info(f"好友流程：检测到 {operable['total']} 个可操作目标，开始拜访")
 
-                # 找到第一个可操作目标的 Y 坐标
                 first_target = None
-                for key in ['steal', 'help_water', 'help_weed', 'help_bug']:
+                for key in ['steal', 'help_maintain']:
                     if operable[key]:
                         first_target = operable[key][0]
                         break
-
                 # 找到所有拜访按钮，按 Y 坐标匹配同一行
                 visit_buttons = [d for d in dets if d.name == "btn_visit_first"]
                 btn = None
                 if first_target and visit_buttons:
                     target_y = first_target.y
-                    # 找与可操作目标 Y 坐标最接近的拜访按钮（同一行）
                     visit_buttons.sort(key=lambda d: abs(d.y - target_y))
                     btn = visit_buttons[0]
                     logger.info(f"好友流程：目标icon Y={target_y}, 匹配拜访按钮 Y={btn.y}")
@@ -436,7 +392,6 @@ class FriendStrategy(BaseStrategy):
                         return True
                     time.sleep(0.3)
             else:
-                # ❌ 无可操作目标，不点拜访，直接返回
                 logger.info("好友流程：列表页无可操作目标，跳过拜访")
                 return False
 
@@ -542,36 +497,17 @@ class FriendStrategy(BaseStrategy):
 
     # ── 帮忙 ────────────────────────────────────────────────────
 
-    def _do_help(self, cv_img, dets: list[DetectResult],
-                 enable_weed: bool = True,
-                 enable_water: bool = True,
-                 enable_bug: bool = True) -> list[str]:
-        """统一帮好友维护：一次截图检测所有按钮，循环点击直到全部消失。
-
-        对齐 copilot 优化：合并除草/除虫/浇水为统一循环，
-        共享确认计时器，减少截图和等待次数。
-        """
+    def _do_help(self, cv_img, dets: list[DetectResult]) -> list[str]:
+        """帮好友一键务农：检测并点击 btn_一键务农，等待消失确认。"""
         actions_done: list[str] = []
 
-        help_specs = []
-        if enable_water:
-            help_specs.append(("btn_water", "帮好友浇水", ActionType.HELP_WATER))
-        if enable_weed:
-            help_specs.append(("btn_weed", "帮好友除草", ActionType.HELP_WEED))
-        if enable_bug:
-            help_specs.append(("btn_bug", "帮好友除虫", ActionType.HELP_BUG))
-        if not help_specs:
-            return actions_done
+        _MAINTAIN_BTN = "btn_一键务农"
 
-        target_names = [s[0] for s in help_specs]
-
-        found_any = any(
-            any(d.name == name for d in dets) for name in target_names
-        )
+        found_any = any(d.name == _MAINTAIN_BTN for d in dets)
         if not found_any:
             return actions_done
 
-        logger.debug("帮好友维护: 开始统一循环")
+        logger.debug("帮好友务农: 开始")
 
         confirm_start: float = 0.0
         confirm_timeout = 0.5
@@ -581,43 +517,30 @@ class FriendStrategy(BaseStrategy):
         while not self.stopped:
             rect_cap = getattr(self, '_last_rect', None)
             if rect_cap:
-                cv_img, dets = self._quick_detect(rect_cap, target_names)
+                cv_img, dets = self._quick_detect(rect_cap, [_MAINTAIN_BTN])
             if cv_img is None:
                 time.sleep(0.15)
                 continue
 
-            clicked = False
-            for btn_name, desc, action_type in help_specs:
-                matching = [d for d in dets if d.name == btn_name]
-                if matching:
-                    matching.sort(key=lambda d: (d.y, d.x))
-                    btn = matching[0]
-                    self.click(btn.x, btn.y, desc, action_type)
-                    actions_done.append(desc)
-                    clicked = True
-                    break
-
-            if clicked:
+            matching = [d for d in dets if d.name == _MAINTAIN_BTN]
+            if matching:
+                matching.sort(key=lambda d: (d.y, d.x))
+                btn = matching[0]
+                self.click(btn.x, btn.y, "帮好友务农", ActionType.HELP_MAINTAIN)
+                actions_done.append("帮好友务农")
                 confirm_start = 0.0
                 stable_rounds = 0
                 time.sleep(0.3)
                 cv_img = None
                 continue
 
-            any_left = any(
-                any(d.name == name for d in dets) for name in target_names
-            )
-            if not any_left:
-                if confirm_start == 0.0:
-                    confirm_start = time.monotonic()
-                stable_rounds += 1
-                elapsed = time.monotonic() - confirm_start
-                if elapsed >= confirm_timeout and stable_rounds >= min_stable:
-                    logger.debug("帮好友维护: 完成")
-                    return actions_done
-            else:
-                confirm_start = 0.0
-                stable_rounds = 0
+            if confirm_start == 0.0:
+                confirm_start = time.monotonic()
+            stable_rounds += 1
+            elapsed = time.monotonic() - confirm_start
+            if elapsed >= confirm_timeout and stable_rounds >= min_stable:
+                logger.debug("帮好友务农: 完成")
+                return actions_done
 
             time.sleep(0.15)
 
@@ -628,9 +551,7 @@ class FriendStrategy(BaseStrategy):
     def _goto_next_friend(self, cv_img, dets: list[DetectResult],
                           rect: tuple,
                           enable_steal: bool = False,
-                          enable_weed: bool = False,
-                          enable_water: bool = False,
-                          enable_bug: bool = False) -> bool:
+                          enable_maintain: bool = False) -> bool:
         """切换到下一位可操作的好友，无结果时滑动翻页
 
         改进版：
@@ -641,16 +562,11 @@ class FriendStrategy(BaseStrategy):
         if self.stopped:
             return False
 
-        # 根据启用的操作构建需要检测的 icon 名称
         icon_names = []
         if enable_steal:
             icon_names.append("icon_steal_in_friend_detail")
-        if enable_water:
-            icon_names.append("icon_water_in_friend_detail")
-        if enable_weed:
-            icon_names.append("icon_weed_in_friend_detail")
-        if enable_bug:
-            icon_names.append("icon_bug_in_friend_detail")
+        if enable_maintain:
+            icon_names.append("icon_maintain_in_friend_detail")
 
         if not icon_names:
             logger.debug("未启用任何好友操作，跳过切换")

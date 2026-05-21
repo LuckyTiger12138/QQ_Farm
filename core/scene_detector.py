@@ -70,8 +70,8 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
 
     farm_indicators = {
         "crop_mature", "crop_dead", "crop_growing",
-        "icon_mature", "icon_weed", "icon_bug", "icon_water",
-        "btn_shop", "btn_harvest", "btn_weed", "btn_bug", "btn_water",
+        "icon_mature", "btn_一键务农",
+        "btn_shop", "btn_harvest",
         "btn_friend_help", "btn_expand",
         "ui_goto_friend", "btn_warehouse", "btn_haoyou",
     }

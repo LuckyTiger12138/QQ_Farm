@@ -689,7 +689,7 @@ class BotEngine(QObject):
     def _on_friend_check(self):
         # 检查是否开启了好友巡查功能
         friend_cfg = self.config.features.friend
-        if not (friend_cfg.enable_steal or friend_cfg.enable_weed or friend_cfg.enable_water or friend_cfg.enable_bug):
+        if not (friend_cfg.enable_steal or friend_cfg.enable_maintain):
             return  # 功能未开启，直接返回，不打日志
 
         if self._is_busy:
@@ -1039,8 +1039,7 @@ class BotEngine(QObject):
     def _record_stat(self, action_type: str):
         type_map = {
             ActionType.HARVEST: "harvest", ActionType.PLANT: "plant",
-            ActionType.WATER: "water", ActionType.WEED: "weed",
-            ActionType.BUG: "bug", ActionType.STEAL: "steal",
+            ActionType.MAINTAIN: "maintain", ActionType.STEAL: "steal",
             ActionType.SELL: "sell",
         }
         stat_key = type_map.get(action_type)
@@ -1069,8 +1068,8 @@ class BotEngine(QObject):
 
         # 判断是否有农场操作需求（排除好友功能）
         farm_features = {
-            "auto_harvest", "auto_plant", "auto_weed", "auto_water",
-            "auto_bug", "auto_fertilize", "auto_upgrade",
+            "auto_harvest", "auto_plant", "auto_maintain",
+            "auto_fertilize", "auto_upgrade",
             "auto_task",
         }
         has_farm_work = any(features.get(f, False) for f in farm_features)
@@ -1140,7 +1139,7 @@ class BotEngine(QObject):
         farm_tasks = [
             ("Popup",   lambda: True,                       lambda s: s in (Scene.POPUP, Scene.INFO_PAGE, Scene.SHOP_PAGE), lambda ctx: self._task_popup(ctx)),
             ("Harvest", lambda: _f.auto_harvest,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_harvest(ctx)),
-            ("Maintain",lambda: _f.auto_weed or _f.auto_water or _f.auto_bug, lambda s: s == _FARM_OVERVIEW, lambda ctx: self._task_maintain(ctx)),
+            ("Maintain",lambda: _f.auto_maintain,                    lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_maintain(ctx)),
             ("Plant",   lambda: _f.auto_plant and not self._plant_done, lambda s: s == _FARM_OVERVIEW,                       lambda ctx: self._task_plant(ctx)),
             ("Expand",  lambda: _f.auto_upgrade,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_expand(ctx)),
             ("Upgrade", lambda: _f.auto_upgrade,             lambda s: s == _FARM_OVERVIEW,                                 lambda ctx: self._task_upgrade(ctx)),
@@ -1457,8 +1456,7 @@ class BotEngine(QObject):
         friend_cfg = features.friend
 
         # 新配置：4个独立开关全关则跳过
-        if not friend_cfg.enable_steal and not friend_cfg.enable_weed \
-           and not friend_cfg.enable_water and not friend_cfg.enable_bug:
+        if not friend_cfg.enable_steal and not friend_cfg.enable_maintain:
             logger.info("好友巡查: 未启用任何操作，跳过")
             return result
 
@@ -1475,9 +1473,7 @@ class BotEngine(QObject):
         actions = self.friend.run_friend_round(
             rect,
             enable_steal=friend_cfg.enable_steal,
-            enable_weed=friend_cfg.enable_weed,
-            enable_water=friend_cfg.enable_water,
-            enable_bug=friend_cfg.enable_bug,
+            enable_maintain=friend_cfg.enable_maintain,
             max_steal=friend_cfg.max_steal_per_round,
         )
         result["actions_done"] = actions
