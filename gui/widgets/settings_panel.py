@@ -80,7 +80,7 @@ class SettingsPanel(QWidget):
         level_layout.setContentsMargins(0, 0, 0, 0)
         level_layout.setSpacing(8)
         self.level = SpinBox(plant_card)
-        self.level.setRange(1, 100)
+        self.level.setRange(1, 999)
         level_layout.addWidget(self.level)
         level_layout.addStretch()
         plant_form.addRow(self._field_label("等级", plant_card), level_row)
