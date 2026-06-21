@@ -52,6 +52,8 @@ _ALL_FRIEND_TEMPLATES = [
     # 底部好友列表 icon
     "icon_steal_in_friend_detail",
     "icon_maintain_in_friend_detail",
+    # 成熟图标（特殊作物偷菜用）
+    "icon_mature",
     # 导航
     "btn_home", "btn_close", "btn_rw_close",
     # 场景判断
@@ -403,28 +405,37 @@ class FriendStrategy(BaseStrategy):
         """基于已有检测结果执行偷菜（参考 qq-farm-copilot 确认机制）
 
         流程：
-        1. 检测偷菜按钮（优先点击页面上方的一键摘取按钮）
-        2. 点击按钮
-        3. 循环检测确认按钮消失（确认偷菜成功）
+        1. 检测偷菜按钮 btn_steal（优先点击页面上方的一键摘取按钮）— 普通作物
+        2. 检测成熟图标 icon_mature（逐个点击）— 特殊作物
+        3. 兜底：icon_steal_in_friend_detail + 固定坐标
         """
-        # ✅ 查找所有 btn_steal，优先点击 Y 坐标最小的（页面顶部的一键摘取按钮）
+        stole = False
+
+        # 1. btn_steal（普通作物一键摘取）
         steal_buttons = [d for d in dets if d.name == "btn_steal"]
         if steal_buttons:
-            # 按 Y 坐标排序，点击最上面的（一键摘取按钮在页面上方）
             steal_buttons.sort(key=lambda d: (d.y, d.x))
             btn = steal_buttons[0]
             logger.info(f"偷菜流程：检测到 btn_steal ({btn.x}, {btn.y}, 置信度: {btn.confidence:.0%})，选择最上方的按钮")
             self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
-            
-            # ✅ 确认机制：循环检测直到按钮消失
             if rect:
-                success = self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
-                if success:
-                    pass
-                return success
+                self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+            stole = True
+
+        # 2. icon_mature（特殊作物，无 btn_steal 的成熟作物）
+        mature_icons = [d for d in dets if d.name == "icon_mature"]
+        if mature_icons:
+            for icon in mature_icons:
+                if self.stopped:
+                    break
+                self.click(icon.x, icon.y, "偷特殊作物", ActionType.STEAL)
+                time.sleep(0.3)
+            stole = True
+
+        if stole:
             return True
 
-        # 没有 btn_steal，尝试 icon 确认 + 固定坐标
+        # 3. 兜底：icon_steal_in_friend_detail + 固定坐标
         if any(d.name == "icon_steal_in_friend_detail" for d in dets):
             h, w = cv_img.shape[:2]
             fx, fy = _scale_pos(STEAL_BTN_POS, h, w)
