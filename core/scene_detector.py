@@ -63,7 +63,7 @@ def identify_scene(detections: list[DetectResult], detector: CVDetector,
     if any(n.startswith("seed_") for n in names):
         return Scene.SEED_SELECT
 
-    if {"btn_close", "btn_claim", "btn_confirm", "btn_cancel"} & names:
+    if {"btn_close", "btn_claim", "btn_confirm", "btn_cancel", "btn_dw_back"} & names:
         if "icon_levelup" in names:
             return Scene.LEVEL_UP
         return Scene.POPUP

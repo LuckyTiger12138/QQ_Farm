@@ -14,6 +14,7 @@ POPUP_TEMPLATES = [
     "btn_confirm",    # 确认
     "btn_close",      # 关闭
     "btn_cancel",     # 取消
+    "btn_dw_back",    # 端午节活动返回
 ]
 
 
@@ -33,7 +34,7 @@ class PopupStrategy(BaseStrategy):
         if share_btn:
             return self._share_and_cancel(share_btn)
 
-        for btn_name in ["btn_claim", "btn_confirm", "btn_close", "btn_cancel"]:
+        for btn_name in ["btn_claim", "btn_confirm", "btn_close", "btn_cancel", "btn_dw_back"]:
             if self.stopped:
                 return None
             det = self.find_by_name(detections, btn_name)
@@ -72,6 +73,7 @@ class PopupStrategy(BaseStrategy):
             ("btn_confirm", "确认"),
             ("btn_close", "关闭"),
             ("btn_cancel", "取消"),
+            ("btn_dw_back", "端午节返回"),
         ]:
             det = self.find_by_name(dets, btn_name)
             if det:

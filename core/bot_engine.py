@@ -81,7 +81,7 @@ SCENE_TEMPLATES = [
     # 弹窗指标
     "btn_close", "btn_info", "btn_info_close", "btn_buy_confirm", "btn_buy_max",
     "btn_shop_close", "btn_shop", "btn_claim", "btn_rw_close",
-    "btn_share", "btn_confirm", "btn_cancel",
+    "btn_share", "btn_confirm", "btn_cancel", "btn_dw_back",
     # 场景指标
     "btn_home", "btn_zhongzi", "btn_warehouse",
     "btn_plant", "btn_remove", "btn_fertilize",
@@ -2062,7 +2062,7 @@ class BotEngine(QObject):
             result = self.task.try_sell_direct(rect)
             if result:
                 self.log_message.emit(f"自动出售完成: {', '.join(result)}")
-                return TaskResult(success=True)
+            return TaskResult(success=True)
 
         # 回退到任务条路径
         if "btn_task" in names:
@@ -2107,5 +2107,46 @@ class BotEngine(QObject):
         cv_image, detections = self._fast_capture_and_detect(rect)
         if cv_image is None:
             return TaskResult(success=False, error="截屏失败")
+
+        return TaskResult(success=True)
+
+    def _run_task_keepalive(self, ctx: TaskContext) -> TaskResult:
+        """保活任务：检测锚点 → 点击 → 小幅滑动，防止游戏超时下线"""
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        cv_img = self._capture_only(rect)
+        if cv_img is None:
+            return TaskResult(success=False, error="截屏失败")
+
+        detections = self.cv_detector.detect_targeted(
+            cv_img, ['btn_land_right', 'btn_land_left'],
+            scales=[1.0, 0.9, 1.1],
+        )
+
+        anchor = None
+        for det in detections:
+            if det.name in ('btn_land_right', 'btn_land_left'):
+                anchor = det
+                break
+
+        if anchor:
+            ax, ay = self.action_executor.relative_to_absolute(
+                int(anchor.x), int(anchor.y))
+            self.action_executor.click(ax, ay)
+            logger.info(
+                f"保活: 点击锚点 {anchor.name} "
+                f"({anchor.x:.0f},{anchor.y:.0f})"
+            )
+            time.sleep(0.3)
+
+        w, h = rect[2], rect[3]
+        sx1, sy = int(w * 0.45), int(h * 0.38)
+        sx2 = int(w * 0.53)
+        ax1, ay1 = self.action_executor.relative_to_absolute(sx1, sy)
+        ax2, ay2 = self.action_executor.relative_to_absolute(sx2, sy)
+        self.action_executor.drag(
+            ax1, ay1, ax2 - ax1, ay2 - ay1, duration=0.3, steps=10)
 
         return TaskResult(success=True)

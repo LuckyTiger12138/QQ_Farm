@@ -312,6 +312,10 @@ class AppConfig(BaseModel):
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,
                 daily_time="00:10",
             ),
+            "keepalive": TaskScheduleItemConfig(
+                enabled=True, priority=5, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=600, failure_interval_seconds=120,
+            ),
         }
 
     def save(self, path: str | None = None):

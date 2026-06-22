@@ -61,6 +61,7 @@ DEFAULT_TASK_TITLES = {
     "task": "任务奖励",
     "fertilize": "定时施肥",
     "share": "每日分享",
+    "keepalive": "保活",
 }
 
 
