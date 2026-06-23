@@ -135,49 +135,52 @@ class FriendStrategy(BaseStrategy):
         help_count = 0
         consecutive_no_action = 0  # ✅ 连续无操作计数器
         max_consecutive_no_action = 5  # ✅ 最大连续无操作次数
-        
-        for i in range(MAX_FRIENDS_PER_ROUND):
-            if self.stopped:
-                break
 
-            # 一次截图 + 全量检测
-            cv_img, dets = self._friend_detect(rect)
-            if cv_img is None:
-                break
-
-            has_action_this_round = False
-            
-            # 偷菜（检查次数限制）
-            if enable_steal:
-                if max_steal == 0 or steal_count < max_steal:
-                    if self._do_steal(cv_img, dets, rect):  # ✅ 传入 rect 参数
-                        steal_count += 1
-                        has_action_this_round = True
-
-            # 帮忙（一键务农）
-            if enable_maintain:
-                helped = self._do_help(cv_img, dets)
-                if helped:
-                    help_count += len(helped)
-                    has_action_this_round = True
-
-            # ✅ 如果本轮有操作，重置连续无操作计数
-            if has_action_this_round:
-                consecutive_no_action = 0
-            else:
-                consecutive_no_action += 1
-                if consecutive_no_action >= max_consecutive_no_action:
-                    logger.info(f"连续 {max_consecutive_no_action} 个好友无操作，结束巡查")
+        try:
+            for i in range(MAX_FRIENDS_PER_ROUND):
+                if self.stopped:
                     break
 
-            # 切换下一位好友（含滑动）
-            if not self._goto_next_friend(cv_img, dets, rect,
-                                          enable_steal and (max_steal == 0 or steal_count < max_steal),
-                                          enable_maintain):
-                break
+                # 一次截图 + 全量检测
+                cv_img, dets = self._friend_detect(rect)
+                if cv_img is None:
+                    break
 
-        # 4. 回家
-        self._back_to_home(rect)
+                has_action_this_round = False
+
+                # 偷菜（检查次数限制）
+                if enable_steal:
+                    if max_steal == 0 or steal_count < max_steal:
+                        if self._do_steal(cv_img, dets, rect):
+                            steal_count += 1
+                            has_action_this_round = True
+
+                # 帮忙（一键务农）
+                if enable_maintain:
+                    helped = self._do_help(cv_img, dets)
+                    if helped:
+                        help_count += len(helped)
+                        has_action_this_round = True
+
+                # ✅ 如果本轮有操作，重置连续无操作计数
+                if has_action_this_round:
+                    consecutive_no_action = 0
+                else:
+                    consecutive_no_action += 1
+                    if consecutive_no_action >= max_consecutive_no_action:
+                        logger.info(f"连续 {max_consecutive_no_action} 个好友无操作，结束巡查")
+                        break
+
+                # 切换下一位好友（含滑动）
+                if not self._goto_next_friend(cv_img, dets, rect,
+                                              enable_steal and (max_steal == 0 or steal_count < max_steal),
+                                              enable_maintain):
+                    break
+        except Exception as e:
+            logger.error(f"好友巡查异常: {e}，强制回家")
+        finally:
+            # 4. 回家（无论是否异常都执行）
+            self._back_to_home(rect)
 
         compact = []
         if steal_count > 0:
@@ -727,7 +730,7 @@ class FriendStrategy(BaseStrategy):
                 return False
 
             cv_img, dets = self._quick_detect(rect,
-                ["btn_home", "btn_close", "btn_rw_close",
+                ["btn_home", "btn_close", "btn_rw_close", "btn_dw_back",
                  "btn_shop", "btn_warehouse", "ui_goto_friend"])
             if cv_img is None:
                 time.sleep(0.3)
@@ -738,7 +741,7 @@ class FriendStrategy(BaseStrategy):
                 logger.info("已返回主页")
                 return True
 
-            home_btn = self._find_any_name(dets, ["btn_home", "btn_close", "btn_rw_close"])
+            home_btn = self._find_any_name(dets, ["btn_home", "btn_close", "btn_rw_close", "btn_dw_back"])
             if home_btn:
                 self.click(home_btn.x, home_btn.y, f"返回({home_btn.name})")
             else:

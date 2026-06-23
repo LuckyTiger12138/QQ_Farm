@@ -24,6 +24,8 @@ class WindowInfo:
 
 
 class WindowManager:
+    _all_claimed_hwnds: set[int] = set()  # 类级共享：所有实例已占用的窗口句柄
+
     def __init__(self):
         self._cached_window: WindowInfo | None = None
         self._pinned_hwnd: int | None = None  # 锁定的窗口句柄，防止多实例串台
@@ -205,30 +207,33 @@ class WindowManager:
                 if valid_window:
                     return valid_window
                 else:
-                    logger.warning(f"已锁定窗口 (hwnd={self._pinned_hwnd}) 已丢失，重新查找...")
-                    self._pinned_hwnd = None  # 清除锁定
+                    lost = self._pinned_hwnd
+                    logger.warning(f"已锁定窗口 (hwnd={lost}) 已丢失，重新查找...")
+                    self._pinned_hwnd = None
+                    self._all_claimed_hwnds.discard(lost)
 
             # 2. 列出所有匹配窗口
             windows = self._list_all_windows(title_keyword)
 
-            # 2.5 多实例模式：select_account_keyword 非空时按索引判断是否需要启动新实例
-            existing_game_hwnds: set[int] = set()
-            if select_account_keyword and not self._pinned_hwnd:
-                if str(select_rule or '').strip().lower() in {'', 'auto'}:
-                    # auto + 多实例：无法确定正确的窗口索引，始终启动新实例
-                    expected_index = len(windows)
-                else:
-                    expected_index = self._resolve_select_index(select_rule, len(windows))
-                if expected_index >= len(windows):
-                    existing_game_hwnds = {
-                        int(getattr(w, '_hWnd', 0) or 0) for w in windows
-                    }
-                    if existing_game_hwnds:
+            # 记录所有已有窗口（用于启动后排除旧窗口，必须在过滤前计算）
+            existing_game_hwnds: set[int] = {
+                int(getattr(w, '_hWnd', 0) or 0) for w in windows
+            }
+
+            # 2.5 多实例模式：过滤掉已被其他实例占用的窗口
+            if not self._pinned_hwnd:
+                claimed_by_others = self._all_claimed_hwnds - {self._pinned_hwnd}
+                if claimed_by_others:
+                    before = len(windows)
+                    windows = [
+                        w for w in windows
+                        if int(getattr(w, '_hWnd', 0) or 0) not in claimed_by_others
+                    ]
+                    if len(windows) < before:
                         logger.info(
-                            f"多实例模式：期望第{expected_index + 1}个窗口，"
-                            f"实际{len(existing_game_hwnds)}个，启动新实例"
+                            f"多实例模式：过滤掉 {before - len(windows)} 个"
+                            f"已被其他实例占用的窗口，剩余 {len(windows)} 个"
                         )
-                        windows = []
 
             if not windows:
                 # 如果还是没找到且启用了自动启动
@@ -269,6 +274,7 @@ class WindowManager:
             w = windows[target_index]
             # 锁定选中的窗口句柄
             self._pinned_hwnd = int(getattr(w, '_hWnd', 0) or 0)
+            self._all_claimed_hwnds.add(self._pinned_hwnd)
             return self._create_window_info(w)
 
         except Exception as e:

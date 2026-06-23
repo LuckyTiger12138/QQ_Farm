@@ -1360,33 +1360,47 @@ class TemplateDetailPanel(QFrame):
 
     def _on_capture_test_image(self):
         try:
-            from core.window_manager import WindowManager
             from core.screen_capture import ScreenCapture
-            wm = WindowManager()
             sc = ScreenCapture()
-            # 从 TemplatePanel 实时获取当前实例的窗口关键字和选择规则
             keyword = "QQ经典农场"
             select_rule = "auto"
+            hwnd = None
             p = self.parent()
             while p:
                 if isinstance(p, TemplatePanel):
                     keyword = p._current_window_keyword()
                     select_rule = p._current_window_select_rule()
+                    hwnd = p._current_window_hwnd()
                     break
                 p = p.parent()
-            logger.info(f"[模板详情] 测试截图，关键字: '{keyword}', 选择规则: '{select_rule}'")
-            window = wm.find_window(keyword, select_rule=select_rule)
-            if not window:
-                self._test_info.setText(f"未找到包含 '{keyword}' 的窗口")
-                return
-            wm.activate_window()
-            import time as _t
-            _t.sleep(0.5)
-            rect = (window.left, window.top, window.width, window.height)
-            pil_img = sc.capture_region(rect)
-            if pil_img is None:
-                self._test_info.setText("截屏失败")
-                return
+
+            # 优先使用已绑定的 hwnd 直接截图
+            if hwnd:
+                import ctypes, ctypes.wintypes
+                logger.info(f"[模板详情] 测试截图，使用已绑定 hwnd={hwnd}")
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                w_rect = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+                pil_img = sc.capture(w_rect, hwnd=hwnd)
+                if pil_img is None:
+                    self._test_info.setText("截屏失败")
+                    return
+            else:
+                from core.window_manager import WindowManager
+                logger.info(f"[模板详情] 测试截图，关键字: '{keyword}', 选择规则: '{select_rule}'")
+                wm = WindowManager()
+                window = wm.find_window(keyword, select_rule=select_rule)
+                if not window:
+                    self._test_info.setText(f"未找到包含 '{keyword}' 的窗口")
+                    return
+                wm.activate_window()
+                import time as _t
+                _t.sleep(0.5)
+                rect = (window.left, window.top, window.width, window.height)
+                pil_img = sc.capture_region(rect)
+                if pil_img is None:
+                    self._test_info.setText("截屏失败")
+                    return
             rgb = np.array(pil_img.convert("RGB"))
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             self._test_bgr = bgr
@@ -1890,18 +1904,35 @@ class CaptureWorker(QThread):
     captured = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, keyword: str = "QQ经典农场", select_rule: str = "auto"):
+    def __init__(self, keyword: str = "QQ经典农场", select_rule: str = "auto", hwnd: int | None = None):
         super().__init__()
         self._keyword = keyword
         self._select_rule = select_rule
+        self._hwnd = hwnd
 
     def run(self):
         try:
+            from core.screen_capture import ScreenCapture
+            sc = ScreenCapture()
+
+            # 优先使用已绑定的 hwnd 直接截图（多实例精确捕获）
+            if self._hwnd:
+                import ctypes, ctypes.wintypes
+                logger.info(f"[模板截图] 使用已绑定 hwnd={self._hwnd} 直接截图")
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(self._hwnd, ctypes.byref(rect))
+                w_rect = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+                image = sc.capture(w_rect, hwnd=self._hwnd)
+                if image:
+                    self.captured.emit(image)
+                    return
+                self.error.emit(f"窗口 (hwnd={self._hwnd}) 截图失败")
+                return
+
+            # 兜底：通过关键字 + 选择规则查找窗口
             logger.info(f"[模板截图] CaptureWorker 使用关键字: '{self._keyword}', 选择规则: '{self._select_rule}'")
             from core.window_manager import WindowManager
-            from core.screen_capture import ScreenCapture
             wm = WindowManager()
-            sc = ScreenCapture()
             window = wm.find_window(self._keyword, select_rule=self._select_rule)
             if not window:
                 self.error.emit(f"未找到包含 '{self._keyword}' 的窗口")
@@ -2247,6 +2278,7 @@ class TemplatePanel(QWidget):
         self._window_keyword: str = "QQ经典农场"  # 由 MainWindow 切换实例时更新
         self._get_window_keyword = None  # callable，由 MainWindow 设置，实时获取当前配置的关键字
         self._get_window_select_rule = None  # callable，实时获取窗口选择规则
+        self._get_window_hwnd = None  # callable，实时获取运行中实例的窗口句柄
         self._cards: list[TemplateCard] = []
         self._worker: CaptureWorker | None = None
         self._items: list[tuple[str, str, float]] = []
@@ -2899,12 +2931,19 @@ class TemplatePanel(QWidget):
             return self._get_window_select_rule()
         return "auto"
 
+    def _current_window_hwnd(self) -> int | None:
+        """获取当前实例运行中已绑定的窗口句柄"""
+        if self._get_window_hwnd:
+            return self._get_window_hwnd()
+        return None
+
     def _on_capture(self):
         self._btn_capture.setEnabled(False)
         kw = self._current_window_keyword()
         rule = self._current_window_select_rule()
-        logger.info(f"[模板面板] 截屏采集，关键字: '{kw}', 选择规则: '{rule}'")
-        self._worker = CaptureWorker(kw, rule)
+        hwnd = self._current_window_hwnd()
+        logger.info(f"[模板面板] 截屏采集，关键字: '{kw}', 选择规则: '{rule}', hwnd: {hwnd}")
+        self._worker = CaptureWorker(kw, rule, hwnd=hwnd)
         self._worker.captured.connect(self._on_captured)
         self._worker.error.connect(self._on_cap_err)
         self._worker.finished.connect(self._clean_worker)
@@ -2931,9 +2970,10 @@ class TemplatePanel(QWidget):
         self._replace_target_path = self._detail._filepath
         kw = self._current_window_keyword()
         rule = self._current_window_select_rule()
-        logger.info(f"[模板面板] 截屏替换，关键字: '{kw}', 选择规则: '{rule}'，目标: {self._replace_target_name}")
+        hwnd = self._current_window_hwnd()
+        logger.info(f"[模板面板] 截屏替换，关键字: '{kw}', 选择规则: '{rule}'，目标: {self._replace_target_name}, hwnd: {hwnd}")
         self._btn_capture.setEnabled(False)
-        self._worker = CaptureWorker(kw, rule)
+        self._worker = CaptureWorker(kw, rule, hwnd=hwnd)
         self._worker.captured.connect(self._on_capture_replace_ready)
         self._worker.error.connect(self._on_cap_err)
         self._worker.finished.connect(self._clean_worker)

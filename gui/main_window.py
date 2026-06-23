@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         # 设置回调：实时读取当前活跃实例的窗口关键字和选择规则
         self._template_panel._get_window_keyword = self._get_active_window_keyword
         self._template_panel._get_window_select_rule = self._get_active_window_select_rule
+        self._template_panel._get_window_hwnd = self._get_active_window_hwnd
         self._stack.addWidget(self._template_panel)
 
         # 页面 6: 全局设置页
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
     # ── 控制按钮 ────────────────────────────────────────────
 
     def _on_start(self):
+        self._refresh_claimed_hwnds()
         if self.engine.start():
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
@@ -571,6 +573,27 @@ class MainWindow(QMainWindow):
             logger.warning(f"[MainWindow] 获取窗口选择规则失败: {e}")
         return self.config.window_select_rule or "auto"
 
+    def _get_active_window_hwnd(self) -> int | None:
+        """获取当前活跃实例运行中已绑定的窗口句柄"""
+        engine = self._engines.get(self._current_instance_id)
+        if engine and engine.window_manager:
+            return engine.window_manager.get_window_handle()
+        return None
+
+    def _refresh_claimed_hwnds(self):
+        """重建所有引擎已占用的窗口句柄集合（启动引擎前调用，防止多实例窗口抢占）"""
+        from core.window_manager import WindowManager
+        WindowManager._all_claimed_hwnds.clear()
+        for eid, engine in self._engines.items():
+            hwnd = engine.window_manager._pinned_hwnd
+            if hwnd:
+                WindowManager._all_claimed_hwnds.add(hwnd)
+        if WindowManager._all_claimed_hwnds:
+            logger.info(
+                f"[多实例] 已占用窗口: "
+                f"{dict(zip(self._engines.keys(), [e.window_manager._pinned_hwnd for e in self._engines.values()]))}"
+            )
+
     def _on_instance_selected(self, instance_id: str):
         """用户点击实例，切换到该实例（仅切换 UI，不停止其他实例）"""
         if not self.instance_manager:
@@ -803,6 +826,7 @@ class MainWindow(QMainWindow):
         if not session:
             return
         engine = self._get_or_create_engine(session)
+        self._refresh_claimed_hwnds()
         # 启动前同步更新设置面板的配置引用，确保后续保存写入该实例的配置文件
         # 仅当启动的是当前显示的实例时才更新设置面板
         if instance_id == self._current_instance_id:
@@ -855,6 +879,7 @@ class MainWindow(QMainWindow):
 
     def _on_start_all(self):
         """启动所有实例"""
+        self._refresh_claimed_hwnds()
         sessions = self.instance_manager.iter_sessions()
         started = 0
         for session in sessions:
