@@ -153,6 +153,7 @@ class PlantingConfig(BaseModel):
     window_width: int = 581
     window_height: int = 1054
     game_shortcut_path: str = ""  # 游戏快捷方式路径，用于自动启动
+    select_account_keyword: str = ""  # 选择账号窗口匹配关键词（QQ号），如 "1234560000"
     warehouse_first: bool = False         # 仓库优先播种
     skip_event_crops: bool = False        # 跳过活动作物
     level_ocr_enabled: bool = False       # 等级OCR开关
@@ -322,7 +323,6 @@ class AppConfig(BaseModel):
         p = path or self._config_path or "config.json"
         from loguru import logger
         logger.info(f"🔒 AppConfig.save: id={id(self)} → {p} | features.auto_harvest={self.features.auto_harvest}")
-        # 排除 machine-specific 配置（不同电脑路径不同）
-        data = self.model_dump(exclude={"planting": {"game_shortcut_path"}})
+        data = self.model_dump()
         with open(p, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

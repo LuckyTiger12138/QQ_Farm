@@ -27,6 +27,7 @@ class WindowManager:
     def __init__(self):
         self._cached_window: WindowInfo | None = None
         self._pinned_hwnd: int | None = None  # 锁定的窗口句柄，防止多实例串台
+        self._select_account_handled: set[int] = set()  # 已处理过的选择账号窗口 hwnd
 
     def launch_game(self, shortcut_path: str) -> bool:
         """通过快捷方式启动游戏"""
@@ -40,6 +41,138 @@ class WindowManager:
         except Exception as e:
             logger.error(f"启动游戏失败：{e}")
             return False
+
+    # ============================================================
+    # 选择账号窗口检测与处理
+    # ============================================================
+
+    def _get_qq_hwnds(self) -> set[int]:
+        """获取当前标题为 QQ 的窗口 hwnd 集合（轻量，不遍历全部窗口）"""
+        hwnds: set[int] = set()
+        try:
+            for w in gw.getWindowsWithTitle("QQ"):
+                hwnd = int(getattr(w, '_hWnd', 0) or 0)
+                if hwnd > 0:
+                    hwnds.add(hwnd)
+        except Exception:
+            pass
+        return hwnds
+
+    def _handle_select_account(self, existing_hwnds: set[int], keyword: str) -> bool:
+        """检测选择账号窗口并处理：OCR 匹配关键词 → 点击账号 → 点击确定
+
+        Args:
+            existing_hwnds: 启动前已存在的 QQ 窗口 hwnd 集合
+            keyword: 要匹配的 QQ 号关键词
+
+        Returns:
+            bool: 是否找到并处理了选择账号窗口
+        """
+        if not keyword:
+            return False
+
+        target = None
+        try:
+            for w in gw.getWindowsWithTitle("QQ"):
+                hwnd = int(getattr(w, '_hWnd', 0) or 0)
+                if hwnd <= 0 or hwnd in existing_hwnds or hwnd in self._select_account_handled:
+                    continue
+                fw = int(getattr(w, 'width', 0) or 0)
+                fh = int(getattr(w, 'height', 0) or 0)
+                if 200 < fw < 500 and 200 < fh < 500:
+                    target = w
+                    break
+        except Exception:
+            return False
+
+        if target is None:
+            return False
+
+        hwnd = int(getattr(target, '_hWnd', 0) or 0)
+        logger.info(f"检测到选择账号窗口: hwnd={hwnd} {target.width}x{target.height}")
+        self._select_account_handled.add(hwnd)
+
+        from core.screen_capture import ScreenCapture
+        sc = ScreenCapture()
+        img = sc.capture((0, 0, 0, 0), hwnd=hwnd)
+        if img is None:
+            logger.warning("选择账号窗口截图失败")
+            return False
+
+        try:
+            from utils.ocr_utils import OCRTool
+            import cv2
+            import numpy as np
+        except ImportError:
+            logger.warning("OCR 依赖不可用，无法自动选择账号")
+            return False
+
+        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        ocr = OCRTool.get_instance()
+        items = ocr.detect(cv_img)
+        logger.debug(f"选择账号窗口 OCR: {[item.text for item in items]}")
+
+        # 激活窗口到前台（Electron 窗口必须前台才能接收点击）
+        ctypes.windll.user32.ShowWindow(hwnd, 9)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+        time.sleep(0.5)
+
+        for item in items:
+            if keyword in item.text:
+                tw = int(getattr(target, 'width', 0) or 0)
+                cx = int(tw * 0.12)
+                cy = int(sum(p[1] for p in item.box) / 4)
+                abs_x = int(target.left) + cx
+                abs_y = int(target.top) + cy
+                logger.info(f"选择账号: 匹配 '{keyword}' → 点击 ({abs_x}, {abs_y})")
+                self._click_screen(abs_x, abs_y)
+                time.sleep(1.0)
+
+                self._click_confirm(hwnd, target)
+                return True
+
+        logger.warning(f"选择账号: 未找到包含 '{keyword}' 的账号")
+        return False
+
+    def _click_confirm(self, hwnd: int, target) -> None:
+        """点击选择账号窗口的确定按钮"""
+        from core.screen_capture import ScreenCapture
+        sc = ScreenCapture()
+        img = sc.capture((0, 0, 0, 0), hwnd=hwnd)
+        if img is not None:
+            try:
+                from utils.ocr_utils import OCRTool
+                import cv2
+                import numpy as np
+                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                ocr = OCRTool.get_instance()
+                items = ocr.detect(cv_img)
+                for item in items:
+                    if "确定" in item.text or "进入" in item.text:
+                        cx = int(sum(p[0] for p in item.box) / 4)
+                        cy = int(sum(p[1] for p in item.box) / 4)
+                        abs_x = int(target.left) + cx
+                        abs_y = int(target.top) + cy
+                        logger.info(f"点击确定: ({abs_x}, {abs_y})")
+                        self._click_screen(abs_x, abs_y)
+                        return
+            except Exception as e:
+                logger.debug(f"确定按钮 OCR 失败: {e}")
+
+        fx = int(target.left) + int(target.width * 0.5)
+        fy = int(target.top) + int(target.height * 0.85)
+        logger.info(f"点击确定(兜底坐标): ({fx}, {fy})")
+        self._click_screen(fx, fy)
+
+    def _click_screen(self, x: int, y: int) -> None:
+        """在屏幕绝对坐标处模拟左键点击"""
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        ctypes.windll.user32.SetCursorPos(x, y)
+        time.sleep(0.05)
+        ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.05)
+        ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def _verify_and_pin_window(self, hwnd: int, title_keyword: str) -> WindowInfo | None:
         """验证已锁定的句柄是否依然有效"""
@@ -55,7 +188,7 @@ class WindowManager:
             logger.error(f"验证 hwnd {hwnd} 失败: {e}")
         return None
 
-    def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto") -> WindowInfo | None:
+    def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto", select_account_keyword: str = "") -> WindowInfo | None:
         """通过标题关键词和选择规则查找窗口，可选自动启动游戏
 
         Args:
@@ -63,6 +196,7 @@ class WindowManager:
             auto_launch: 未找到时是否自动启动
             shortcut_path: 游戏快捷方式路径
             select_rule: 窗口选择规则 ('auto' 或 'index:N')
+            select_account_keyword: 选择账号窗口匹配关键词（QQ号）
         """
         try:
             # 1. 优先复用已锁定的窗口（防止窗口移动后排序变化导致选错）
@@ -76,9 +210,24 @@ class WindowManager:
 
             # 2. 列出所有匹配窗口
             windows = self._list_all_windows(title_keyword)
+
+            # 2.5 多实例模式：select_account_keyword 非空时不复用其他实例的窗口
+            existing_game_hwnds: set[int] = set()
+            if select_account_keyword and not self._pinned_hwnd:
+                existing_game_hwnds = {
+                    int(getattr(w, '_hWnd', 0) or 0) for w in windows
+                }
+                if existing_game_hwnds:
+                    logger.info(
+                        f"多实例模式：已有 {len(existing_game_hwnds)} 个游戏窗口"
+                        f"（其他实例），启动新实例"
+                    )
+                    windows = []
+
             if not windows:
                 # 如果还是没找到且启用了自动启动
                 if auto_launch and shortcut_path:
+                    existing_qq_hwnds = self._get_qq_hwnds()
                     logger.info(f"未找到窗口 '{title_keyword}'，尝试启动游戏...")
                     if self.launch_game(shortcut_path):
                         # 等待游戏启动（最多 30 秒）
@@ -86,7 +235,15 @@ class WindowManager:
                         for i in range(60):
                             time.sleep(0.5)
                             QCoreApplication.processEvents()
+                            if select_account_keyword:
+                                self._handle_select_account(existing_qq_hwnds, select_account_keyword)
                             windows = self._list_all_windows(title_keyword)
+                            if existing_game_hwnds:
+                                windows = [
+                                    w for w in windows
+                                    if int(getattr(w, '_hWnd', 0) or 0)
+                                    not in existing_game_hwnds
+                                ]
                             if windows:
                                 break
                         else:

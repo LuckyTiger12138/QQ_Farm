@@ -156,6 +156,10 @@ class SettingsPanel(QWidget):
         shortcut_layout.addWidget(self.browse_btn)
         env_form.addRow(self._field_label("游戏路径", env_card), shortcut_row)
 
+        self.select_account_keyword = LineEdit(env_card)
+        self.select_account_keyword.setPlaceholderText("多开时选择账号的QQ号，如 123456000")
+        env_form.addRow(self._field_label("选择账号", env_card), self.select_account_keyword)
+
         # ── Web 服务卡片 ──
         web_card, web_form = self._build_group_card(content, "Web 服务", "settingsWebCard")
         layout.addWidget(web_card)
@@ -390,6 +394,7 @@ class SettingsPanel(QWidget):
         self.run_mode.currentIndexChanged.connect(self._auto_save)
         self.window_position.currentIndexChanged.connect(self._auto_save)
         self.game_shortcut.editingFinished.connect(self._auto_save)
+        self.select_account_keyword.editingFinished.connect(self._auto_save)
         self.browse_btn.clicked.connect(self._on_browse_shortcut)
         # 静默时段
         self.silent_enabled.toggled.connect(self._auto_save)
@@ -437,6 +442,7 @@ class SettingsPanel(QWidget):
                 str(self.window_position.currentData() or WindowPosition.BOTTOM_LEFT.value)
             )
             c.planting.game_shortcut_path = str(self.game_shortcut.text() or "").strip()
+            c.planting.select_account_keyword = str(self.select_account_keyword.text() or "").strip()
             # 静默时段
             c.silent_hours.enabled = bool(self.silent_enabled.isChecked())
             c.silent_hours.start_hour = self.silent_start.time().hour()
@@ -657,6 +663,7 @@ class SettingsPanel(QWidget):
         self._set_combo_data(self.run_mode, c.safety.run_mode.value)
         self._set_combo_data(self.window_position, c.safety.window_position.value)
         self.game_shortcut.setText(str(c.planting.game_shortcut_path or ""))
+        self.select_account_keyword.setText(str(c.planting.select_account_keyword or ""))
         # 静默时段
         self.silent_enabled.setChecked(c.silent_hours.enabled)
         self.silent_start.setTime(QTime(c.silent_hours.start_hour, c.silent_hours.start_minute))

@@ -1,13 +1,17 @@
 {
-  "active_instance_id": "qq2",
+  "active_instance_id": "default",
   "instances": [
     {
       "id": "default",
-      "name": "default"
+      "name": "default",
+      "created_at": "2026-06-23T10:18:20",
+      "updated_at": "2026-06-23T10:18:20"
     },
     {
       "id": "qq2",
-      "name": "qq2"
+      "name": "qq2",
+      "created_at": "2026-06-23T10:18:20",
+      "updated_at": "2026-06-23T10:18:20"
     }
   ]
 }

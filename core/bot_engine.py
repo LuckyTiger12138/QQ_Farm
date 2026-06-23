@@ -412,10 +412,11 @@ class BotEngine(QObject):
             return False
 
         window = self.window_manager.find_window(
-            self.config.window_title_keyword, 
-            auto_launch=True, 
+            self.config.window_title_keyword,
+            auto_launch=True,
             shortcut_path=self.config.planting.game_shortcut_path,
-            select_rule=self.config.window_select_rule
+            select_rule=self.config.window_select_rule,
+            select_account_keyword=self.config.planting.select_account_keyword,
         )
         if not window:
             self.log_message.emit("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场")
@@ -907,7 +908,8 @@ class BotEngine(QObject):
             self.config.window_title_keyword,
             auto_launch=True,
             shortcut_path=self.config.planting.game_shortcut_path,
-            select_rule=self.config.window_select_rule
+            select_rule=self.config.window_select_rule,
+            select_account_keyword=self.config.planting.select_account_keyword,
         )
         if not window:
             logger.error("窗口监控：自动重启游戏失败")
@@ -975,6 +977,7 @@ class BotEngine(QObject):
             auto_launch=True,
             shortcut_path=self.config.planting.game_shortcut_path,
             select_rule=self.config.window_select_rule,
+            select_account_keyword=self.config.planting.select_account_keyword,
         )
         if not window:
             return None
@@ -1177,7 +1180,8 @@ class BotEngine(QObject):
                     self.config.window_title_keyword,
                     auto_launch=True,
                     shortcut_path=self.config.planting.game_shortcut_path,
-                    select_rule=self.config.window_select_rule
+                    select_rule=self.config.window_select_rule,
+                    select_account_keyword=self.config.planting.select_account_keyword,
                 )
                 if not window:
                     logger.error("自动重启游戏失败")
@@ -1315,7 +1319,8 @@ class BotEngine(QObject):
             self.config.window_title_keyword,
             auto_launch=True,
             shortcut_path=self.config.planting.game_shortcut_path,
-            select_rule=self.config.window_select_rule
+            select_rule=self.config.window_select_rule,
+            select_account_keyword=self.config.planting.select_account_keyword,
         )
         if not window:
             logger.error("异地登录重启游戏失败")
