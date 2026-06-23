@@ -54,6 +54,7 @@ _ALL_FRIEND_TEMPLATES = [
     "icon_maintain_in_friend_detail",
     # 成熟图标（特殊作物偷菜用）
     "icon_mature",
+    "icon_caiji",
     # 导航
     "btn_home", "btn_close", "btn_rw_close",
     # 场景判断
@@ -405,13 +406,11 @@ class FriendStrategy(BaseStrategy):
         """基于已有检测结果执行偷菜（参考 qq-farm-copilot 确认机制）
 
         流程：
-        1. 检测偷菜按钮 btn_steal（优先点击页面上方的一键摘取按钮）— 普通作物
-        2. 检测成熟图标 icon_mature（逐个点击）— 特殊作物
+        1. 检测偷菜按钮 btn_steal（优先点击页面上方的一键摘取按钮）— 普通作物，命中后直接返回
+        2. 检测成熟图标 icon_mature（逐个点击）— 特殊作物，仅在无 btn_steal 时执行
         3. 兜底：icon_steal_in_friend_detail + 固定坐标
         """
-        stole = False
-
-        # 1. btn_steal（普通作物一键摘取）
+        # 1. btn_steal（普通作物一键摘取）→ 命中后直接返回
         steal_buttons = [d for d in dets if d.name == "btn_steal"]
         if steal_buttons:
             steal_buttons.sort(key=lambda d: (d.y, d.x))
@@ -419,20 +418,20 @@ class FriendStrategy(BaseStrategy):
             logger.info(f"偷菜流程：检测到 btn_steal ({btn.x}, {btn.y}, 置信度: {btn.confidence:.0%})，选择最上方的按钮")
             self.click(btn.x, btn.y, "偷菜", ActionType.STEAL)
             if rect:
-                self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
-            stole = True
+                success = self._confirm_action_disappear("btn_steal", rect, timeout=2.0)
+                if success:
+                    pass
+                return success
+            return True
 
-        # 2. icon_mature（特殊作物，无 btn_steal 的成熟作物）
-        mature_icons = [d for d in dets if d.name == "icon_mature"]
-        if mature_icons:
-            for icon in mature_icons:
+        # 2. icon_mature + icon_caiji（特殊作物，仅在无 btn_steal 时）
+        steal_icons = [d for d in dets if d.name in ("icon_mature", "icon_caiji")]
+        if steal_icons:
+            for icon in steal_icons:
                 if self.stopped:
                     break
                 self.click(icon.x, icon.y, "偷特殊作物", ActionType.STEAL)
                 time.sleep(0.3)
-            stole = True
-
-        if stole:
             return True
 
         # 3. 兜底：icon_steal_in_friend_detail + 固定坐标
@@ -674,9 +673,9 @@ class FriendStrategy(BaseStrategy):
         h, w = cv_img.shape[:2]
         x_min = int(w * 0.12)
         x_max = int(w * 0.93)
-        # 精确 Y 范围：85% ~ 92%，实际 icon 集中在 Y=940-945
-        y_min = int(h * 0.89)   # ~940
-        y_max = int(h * 0.92)   # ~970
+        # Y 范围：86% ~ 93%，实际 icon 集中在 Y=930-970
+        y_min = int(h * 0.86)   # ~906
+        y_max = int(h * 0.93)   # ~980
 
         name_set = set(icon_names)
         # 日志：列出所有匹配 icon 的位置（不管是否在区域内）

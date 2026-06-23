@@ -40,7 +40,8 @@
     "btn_xc_close": 0.9,
     "seed_杨桃": 0.83,
     "ui_goto_friend": 0.73,
-    "icon_mature": 0.68
+    "icon_mature": 0.65,
+    "icon_caiji": 0.65
   },
   "category_overrides": {
     "button": 0.8,

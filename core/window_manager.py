@@ -211,18 +211,24 @@ class WindowManager:
             # 2. 列出所有匹配窗口
             windows = self._list_all_windows(title_keyword)
 
-            # 2.5 多实例模式：select_account_keyword 非空时不复用其他实例的窗口
+            # 2.5 多实例模式：select_account_keyword 非空时按索引判断是否需要启动新实例
             existing_game_hwnds: set[int] = set()
             if select_account_keyword and not self._pinned_hwnd:
-                existing_game_hwnds = {
-                    int(getattr(w, '_hWnd', 0) or 0) for w in windows
-                }
-                if existing_game_hwnds:
-                    logger.info(
-                        f"多实例模式：已有 {len(existing_game_hwnds)} 个游戏窗口"
-                        f"（其他实例），启动新实例"
-                    )
-                    windows = []
+                if str(select_rule or '').strip().lower() in {'', 'auto'}:
+                    # auto + 多实例：无法确定正确的窗口索引，始终启动新实例
+                    expected_index = len(windows)
+                else:
+                    expected_index = self._resolve_select_index(select_rule, len(windows))
+                if expected_index >= len(windows):
+                    existing_game_hwnds = {
+                        int(getattr(w, '_hWnd', 0) or 0) for w in windows
+                    }
+                    if existing_game_hwnds:
+                        logger.info(
+                            f"多实例模式：期望第{expected_index + 1}个窗口，"
+                            f"实际{len(existing_game_hwnds)}个，启动新实例"
+                        )
+                        windows = []
 
             if not windows:
                 # 如果还是没找到且启用了自动启动
