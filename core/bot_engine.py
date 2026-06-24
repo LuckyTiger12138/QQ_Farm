@@ -14,6 +14,7 @@
   P3  资源:     expand    — 扩建土地 + 领取任务
   P4  社交:     friend    — 好友巡查/帮忙/偷菜/同意好友
 """
+import ctypes
 import os
 import re
 import sys
@@ -160,6 +161,7 @@ class BotEngine(QObject):
 
         # [4] 操作执行层
         self.action_executor: ActionExecutor | None = None
+        self._black_screen_count = 0  # 连续黑屏检测计数
 
         # 调度
         self.scheduler = TaskScheduler()
@@ -891,19 +893,55 @@ class BotEngine(QObject):
         thread.start()
 
     def _is_window_alive(self) -> bool:
-        """检查游戏窗口是否存在（供调度器窗口监控调用）"""
+        """检查游戏窗口是否存在且未黑屏"""
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
             auto_launch=False,
             shortcut_path="",
             select_rule=self.config.window_select_rule
         )
-        return window is not None
+        if not window:
+            return False
+
+        # 黑屏检测：截图检查画面平均亮度
+        try:
+            rect = (window.left, window.top, window.width, window.height)
+            cv_img = self._capture_only(rect)
+            if cv_img is not None:
+                mean_brightness = float(cv_img.mean())
+                if mean_brightness < 5.0:
+                    self._black_screen_count += 1
+                    logger.warning(
+                        f"窗口监控：检测到黑屏（亮度={mean_brightness:.1f}），"
+                        f"连续 {self._black_screen_count}/2 次"
+                    )
+                    if self._black_screen_count >= 2:
+                        logger.warning("窗口监控：黑屏持续，触发重连")
+                        self._black_screen_count = 0
+                        return False
+                else:
+                    self._black_screen_count = 0
+        except Exception as e:
+            logger.debug(f"黑屏检测异常: {e}")
+
+        return True
 
     def _on_window_lost(self):
-        """窗口监控检测到游戏窗口关闭，尝试自动重启"""
-        logger.warning("窗口监控：检测到游戏窗口关闭，尝试自动重启...")
-        self.log_message.emit("⚠ 检测到游戏窗口关闭，正在尝试自动重启...")
+        """窗口监控检测到游戏窗口关闭/黑屏，尝试自动重启"""
+        logger.warning("窗口监控：检测到游戏窗口异常，尝试自动重启...")
+        self.log_message.emit("⚠ 检测到游戏窗口异常，正在尝试自动重启...")
+
+        # 关闭可能冻结的旧窗口，清除占用
+        old_hwnd = self.window_manager._pinned_hwnd
+        if old_hwnd:
+            self.window_manager._all_claimed_hwnds.discard(old_hwnd)
+            self.window_manager._pinned_hwnd = None
+            try:
+                ctypes.windll.user32.PostMessageW(old_hwnd, 0x0010, 0, 0)
+            except Exception:
+                pass
+            time.sleep(1)
+
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
             auto_launch=True,
