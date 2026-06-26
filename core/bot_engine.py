@@ -893,19 +893,29 @@ class BotEngine(QObject):
         thread.start()
 
     def _is_window_alive(self) -> bool:
-        """检查游戏窗口是否存在且未黑屏"""
-        window = self.window_manager.find_window(
-            self.config.window_title_keyword,
-            auto_launch=False,
-            shortcut_path="",
-            select_rule=self.config.window_select_rule
+        """检查当前绑定的游戏窗口是否存在且未黑屏
+
+        注意：不走 find_window，避免多实例过滤逻辑误判（自身 _pinned_hwnd 已清空时，
+        其他实例的窗口会被过滤掉，导致误报窗口丢失）。
+        """
+        hwnd = self.window_manager._pinned_hwnd
+        if not hwnd:
+            # 未锁定窗口（尚未启动或已丢失），由调度器决定是否触发 _on_window_lost
+            return False
+
+        # 直接校验已锁定的 hwnd 是否仍然有效
+        valid_window = self.window_manager._verify_and_pin_window(
+            hwnd, self.config.window_title_keyword
         )
-        if not window:
+        if not valid_window:
+            logger.warning(f"窗口监控：绑定窗口 hwnd={hwnd} 已丢失")
+            self.window_manager._all_claimed_hwnds.discard(hwnd)
+            self.window_manager._pinned_hwnd = None
             return False
 
         # 黑屏检测：截图检查画面平均亮度
         try:
-            rect = (window.left, window.top, window.width, window.height)
+            rect = (valid_window.left, valid_window.top, valid_window.width, valid_window.height)
             cv_img = self._capture_only(rect)
             if cv_img is not None:
                 mean_brightness = float(cv_img.mean())
@@ -952,6 +962,11 @@ class BotEngine(QObject):
         if not window:
             logger.error("窗口监控：自动重启游戏失败")
             self.log_message.emit("❌ 自动重启游戏失败，请手动打开 QQ 农场")
+            # 失败后设置 30 秒冷却，避免反复重启占用资源（用户可能需要手动处理）
+            try:
+                self.scheduler.set_remote_login_cooldown(30)
+            except Exception:
+                pass
             return
         # 重启成功，调整窗口并更新
         w, h = self.config.planting.window_width, self.config.planting.window_height
