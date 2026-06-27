@@ -931,8 +931,16 @@ class BotEngine(QObject):
                         return False
                 else:
                     self._black_screen_count = 0
+
+            # 断网/异地登录检测：检测 ui_next_time 模板
+            next_time_dets = self.cv_detector.detect_targeted(
+                cv_img, ["ui_next_time"], scales=[1.0, 0.9, 1.1]
+            )
+            if next_time_dets:
+                logger.warning("窗口监控：检测到断网/异地登录（ui_next_time），触发重连")
+                return False
         except Exception as e:
-            logger.debug(f"黑屏检测异常: {e}")
+            logger.debug(f"窗口监控检测异常: {e}")
 
         return True
 
