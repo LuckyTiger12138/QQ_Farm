@@ -52,6 +52,27 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "Detected version: $V"
 
+      - name: Prepare release body
+        id: release_body
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          NOTES_FILE=".github/release-notes/${VERSION}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            echo "Using custom release notes from $NOTES_FILE"
+            cp "$NOTES_FILE" release_body.md
+          else
+            echo "No custom release notes at $NOTES_FILE, using default"
+            cat > release_body.md <<'EOF'
+          ## 下载
+
+          - `QQFarmBot.7z`（推荐，体积更小）：解压后运行 `QQFarmBot.exe`
+          - `QQFarmBot.zip`（兼容）：解压后运行 `QQFarmBot.exe`
+          EOF
+          fi
+          echo "path=release_body.md" >> $GITHUB_OUTPUT
+
       - name: Build EXE
         run: pyinstaller build.spec --noconfirm
 
@@ -102,15 +123,7 @@ jobs:
           files: |
             dist/QQFarmBot.7z
             dist/QQFarmBot.zip
-          body: |
-            ## 下载
-
-            - `QQFarmBot.7z`（推荐，体积更小）：解压后运行 `QQFarmBot.exe`
-            - `QQFarmBot.zip`（兼容）：解压后运行 `QQFarmBot.exe`
-
-            > 由 GitHub Actions 自动构建发布，对应提交 ${{ github.sha }}
-          # 启用 GitHub 自动生成 Release Notes（按 commit / PR 聚合，追加在 body 之后）
-          generate_release_notes: true
+          body_path: ${{ steps.release_body.outputs.path }}
           draft: false
           prerelease: false
         env:
