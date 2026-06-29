@@ -67,8 +67,7 @@ jobs:
             cat > release_body.md <<'EOF'
           ## 下载
 
-          - `QQFarmBot.7z`（推荐，体积更小）：解压后运行 `QQFarmBot.exe`
-          - `QQFarmBot.zip`（兼容）：解压后运行 `QQFarmBot.exe`
+          - `QQFarmBot.exe`：双击即可运行（无需解压）
           EOF
           fi
           echo "path=release_body.md" >> $GITHUB_OUTPUT
@@ -86,34 +85,12 @@ jobs:
           $size = (Get-Item "dist/QQFarmBot.exe").Length / 1MB
           Write-Host "EXE size: $([math]::Round($size,2)) MB"
 
-      - name: Archive (7z + zip)
-        shell: pwsh
-        run: |
-          # 7z（推荐，体积更小）
-          $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
-          if (-not $sevenZip) {
-            $sevenZipPath = "C:\Program Files\7-Zip\7z.exe"
-            if (Test-Path $sevenZipPath) { $sevenZip = $sevenZipPath }
-          }
-          if ($sevenZip) {
-            & $sevenZip a -mx=9 dist/QQFarmBot.7z dist/QQFarmBot.exe
-            Write-Host "Created QQFarmBot.7z"
-          } else {
-            Write-Warning "7z not found, skipping 7z"
-          }
-          # zip（兼容格式，始终生成）
-          Compress-Archive -Path dist/QQFarmBot.exe -DestinationPath dist/QQFarmBot.zip -CompressionLevel Optimal
-          Write-Host "Created QQFarmBot.zip"
-          Get-ChildItem dist -Filter "QQFarmBot.*" | Format-Table Name, Length
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: QQFarmBot-${{ steps.version.outputs.version }}
-          path: |
-            dist/QQFarmBot.7z
-            dist/QQFarmBot.zip
-          if-no-files-found: ignore
+          path: dist/QQFarmBot.exe
+          if-no-files-found: error
 
       - name: Create Release
         # 仅 tag 推送时创建 Release；手动触发只验证构建（产物作为 artifact 上传）
@@ -122,9 +99,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
-          files: |
-            dist/QQFarmBot.7z
-            dist/QQFarmBot.zip
+          files: dist/QQFarmBot.exe
           body_path: ${{ steps.release_body.outputs.path }}
           draft: false
           prerelease: false
