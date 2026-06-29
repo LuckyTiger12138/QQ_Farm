@@ -86,23 +86,25 @@ jobs:
           $size = (Get-Item "dist/QQFarmBot.exe").Length / 1MB
           Write-Host "EXE size: $([math]::Round($size,2)) MB"
 
-      - name: Archive (7z)
+      - name: Archive (7z + zip)
         shell: pwsh
         run: |
-          # 优先用 7z；runner 自带 7z（7-Zip 路径）
+          # 7z（推荐，体积更小）
           $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
           if (-not $sevenZip) {
             $sevenZipPath = "C:\Program Files\7-Zip\7z.exe"
             if (Test-Path $sevenZipPath) { $sevenZip = $sevenZipPath }
           }
           if ($sevenZip) {
-            Write-Host "Using 7z: $($sevenZip.Source ?? $sevenZip)"
             & $sevenZip a -mx=9 dist/QQFarmBot.7z dist/QQFarmBot.exe
             Write-Host "Created QQFarmBot.7z"
           } else {
-            Write-Host "7z not found, fallback to zip"
-            Compress-Archive -Path dist/QQFarmBot.exe -DestinationPath dist/QQFarmBot.zip -CompressionLevel Optimal
+            Write-Warning "7z not found, skipping 7z"
           }
+          # zip（兼容格式，始终生成）
+          Compress-Archive -Path dist/QQFarmBot.exe -DestinationPath dist/QQFarmBot.zip -CompressionLevel Optimal
+          Write-Host "Created QQFarmBot.zip"
+          Get-ChildItem dist -Filter "QQFarmBot.*" | Format-Table Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
