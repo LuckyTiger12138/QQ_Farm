@@ -109,6 +109,8 @@ jobs:
             - `QQFarmBot.zip`（兼容）：解压后运行 `QQFarmBot.exe`
 
             > 由 GitHub Actions 自动构建发布，对应提交 ${{ github.sha }}
+          # 启用 GitHub 自动生成 Release Notes（按 commit / PR 聚合，追加在 body 之后）
+          generate_release_notes: true
           draft: false
           prerelease: false
         env:
