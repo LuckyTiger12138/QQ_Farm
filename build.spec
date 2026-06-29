@@ -1,4 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import rapidocr_onnxruntime
+
+# 动态获取 rapidocr_onnxruntime 安装路径（避免硬编码本地绝对路径，便于在 CI 等其他环境构建）
+_rapidocr_dir = os.path.dirname(rapidocr_onnxruntime.__file__)
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -7,8 +13,8 @@ a = Analysis(
         ('templates', 'templates'),
         ('gui/icons', 'gui/icons'),
         ('configs', 'configs'),
-        ('C:/Users/FuXing/AppData/Local/Programs/Python/Python312/Lib/site-packages/rapidocr_onnxruntime/config.yaml', 'rapidocr_onnxruntime'),
-        ('C:/Users/FuXing/AppData/Local/Programs/Python/Python312/Lib/site-packages/rapidocr_onnxruntime/models', 'rapidocr_onnxruntime/models'),
+        (os.path.join(_rapidocr_dir, 'config.yaml'), 'rapidocr_onnxruntime'),
+        (os.path.join(_rapidocr_dir, 'models'), 'rapidocr_onnxruntime/models'),
     ],
     hiddenimports=['PyQt6.sip'],
     hookspath=[],
