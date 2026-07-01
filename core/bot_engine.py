@@ -45,10 +45,10 @@ from tasks.land_scan import LandScanTask
 from core.strategies import (
     PopupStrategy, HarvestStrategy, MaintainStrategy,
     PlantStrategy, ExpandStrategy, FriendStrategy, TaskStrategy,
-    GiftStrategy, TargetedStealStrategy,
+    GiftStrategy, TargetedStealStrategy, TargetedPrankStrategy,
 )
 from core.ui.navigator import Navigator
-from core.cross_instance_bus import CrossInstanceBus, StealAlert
+from core.cross_instance_bus import CrossInstanceBus, StealAlert, PrankAlert
 
 
 class BotWorker(QThread):
@@ -89,6 +89,7 @@ SCENE_TEMPLATES = [
     # 农场操作按钮
     "btn_harvest", "btn_weed", "btn_bug", "btn_water",
     "btn_expand", "btn_friend_help", "btn_task",
+    "btn_fangcao", "btn_fangchong",
     "btn_steal", "btn_visit_first", "btn_batch_sell", "btn_sell",
     "friend_check", "btn_friend_apply", "btn_friend_agreed",
     "ui_goto_friend",
@@ -155,9 +156,10 @@ class BotEngine(QObject):
         self.friend = FriendStrategy(self.cv_detector)      # P4
         self.gift = GiftStrategy(self.cv_detector)          # P5 礼品领取
         self.targeted_steal = TargetedStealStrategy(self.cv_detector)  # 定点偷菜（大小号通讯）
+        self.targeted_prank = TargetedPrankStrategy(self.cv_detector)  # 定点捣乱（大小号通讯）
         self._strategies = [self.popup, self.harvest, self.maintain,
                             self.plant, self.expand, self.task, self.friend, self.gift,
-                            self.targeted_steal]
+                            self.targeted_steal, self.targeted_prank]
 
         # [4] 操作执行层
         self.action_executor: ActionExecutor | None = None
@@ -419,10 +421,20 @@ class BotEngine(QObject):
             shortcut_path=self.config.planting.game_shortcut_path,
             select_rule=self.config.window_select_rule,
             select_account_keyword=self.config.planting.select_account_keyword,
+            saved_hwnd=self.config.planting.last_hwnd,
         )
         if not window:
             self.log_message.emit("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场")
             return False
+
+        # 持久化窗口句柄：下次重启时优先复用
+        hwnd = self.window_manager._pinned_hwnd
+        if hwnd and hwnd != self.config.planting.last_hwnd:
+            self.config.planting.last_hwnd = hwnd
+            try:
+                self.config.save()
+            except Exception:
+                pass
 
         w, h = self.config.planting.window_width, self.config.planting.window_height
         if w > 0 and h > 0:
@@ -831,6 +843,10 @@ class BotEngine(QObject):
                 f"最近成熟: {earliest}s"
             )
             self._cross_bus.post_alert(alert)
+
+    def _broadcast_prank_alerts(self) -> None:
+        """预留：向配对实例广播捣乱通知（当前捣乱使用定时间隔，不依赖通知触发）"""
+        pass
 
     def _on_farm_finished(self, result: dict):
         """农场任务完成回调（BotWorker fallback 专用）"""
@@ -1612,6 +1628,111 @@ class BotEngine(QObject):
             logger.warning(f"[大小号通讯🎯] 偷菜失败: [{source_name}] → 好友[{friend_name}] | {result['message']}")
             self.log_message.emit(f"[大小号通讯🎯] ✗ 偷菜失败: [{source_name}] → 好友[{friend_name}] | {result['message']}")
             return TaskResult(success=False, error=result["message"])
+
+    # ============================================================
+    # 定点捣乱（大小号通讯）
+    # ============================================================
+
+    def _get_daily_prank_remaining(self) -> int:
+        """获取今日剩余捣乱次数"""
+        ci_cfg = self.config.cross_instance
+        from datetime import date
+        today = date.today().isoformat()
+        if ci_cfg.prank_count_date != today:
+            ci_cfg.prank_count_today = 0
+            ci_cfg.prank_count_date = today
+        return max(0, ci_cfg.max_prank_per_day - ci_cfg.prank_count_today)
+
+    def _add_prank_count(self, count: int) -> None:
+        """增加今日捣乱计数"""
+        ci_cfg = self.config.cross_instance
+        from datetime import date
+        today = date.today().isoformat()
+        if ci_cfg.prank_count_date != today:
+            ci_cfg.prank_count_today = 0
+            ci_cfg.prank_count_date = today
+        ci_cfg.prank_count_today += count
+        try:
+            self.config.save()
+        except Exception as e:
+            logger.debug(f"保存捣乱计数失败: {e}")
+
+    def _run_task_prank(self, ctx: TaskContext) -> TaskResult:
+        """定点捣乱任务：定时间隔运行，访问配对好友农场放草/放虫
+
+        从 cross_instance.partners 读取目标好友，每次运行只放一种类型（交替草/虫）。
+        每块地消耗 1 次机会，每日上限由 max_prank_per_day 控制。
+        """
+        ci_cfg = self.config.cross_instance
+        if not ci_cfg.enabled or not ci_cfg.accept_prank:
+            return TaskResult(success=False, error="未启用接收捣乱")
+        if not ci_cfg.partners:
+            return TaskResult(success=False, error="未配置配对")
+
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
+
+        if self._bot_stop_requested:
+            return TaskResult(success=False, error="已停止")
+
+        daily_remaining = self._get_daily_prank_remaining()
+        if daily_remaining <= 0:
+            logger.info(f"[大小号捣乱🌿] 今日捣乱次数已用完 ({ci_cfg.max_prank_per_day}次)")
+            return TaskResult(success=True, error="今日捣乱次数已用完")
+
+        rect = self._prepare_window()
+        if not rect:
+            return TaskResult(success=False, error="窗口未找到")
+
+        if not self.targeted_prank.action_executor:
+            self.targeted_prank.action_executor = self.action_executor
+        self.targeted_prank.set_capture_fn(self._fast_strategy_capture)
+        self.targeted_prank._stop_requested = False
+
+        total_count = 0
+        for partner in ci_cfg.partners:
+            if not partner.enabled or not partner.friend_name:
+                continue
+            if self._bot_stop_requested:
+                break
+
+            available = daily_remaining - total_count
+            if available <= 0:
+                break
+
+            logger.info(
+                f"[大小号捣乱🌿] 访问好友[{partner.friend_name}] "
+                f"本轮可用{available}次"
+            )
+            self.log_message.emit(
+                f"[大小号捣乱🌿] 访问 [{partner.friend_name}]"
+            )
+
+            result = self.targeted_prank.prank_friend(
+                partner.friend_name, rect, available,
+            )
+            count = result.get("prank_count", 0)
+            if count > 0:
+                self._add_prank_count(count)
+                total_count += count
+                logger.info(
+                    f"[大小号捣乱🌿] 捣乱{count}次: [{partner.friend_name}] "
+                    f"累计{total_count}/{ci_cfg.max_prank_per_day}"
+                )
+
+        if total_count > 0:
+            if self._cross_bus:
+                for partner in ci_cfg.partners:
+                    if partner.enabled and partner.instance_id:
+                        self._cross_bus.request_maintain(partner.instance_id)
+            self.log_message.emit(
+                f"[大小号捣乱🌿] ✓ 本轮捣乱{total_count}次 "
+                f"剩余{self._get_daily_prank_remaining()}次"
+            )
+            return TaskResult(success=True)
+        else:
+            return TaskResult(success=True)
 
     # ============================================================
     # 异步任务执行器管理

@@ -190,7 +190,7 @@ class WindowManager:
             logger.error(f"验证 hwnd {hwnd} 失败: {e}")
         return None
 
-    def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto", select_account_keyword: str = "") -> WindowInfo | None:
+    def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto", select_account_keyword: str = "", saved_hwnd: int = 0) -> WindowInfo | None:
         """通过标题关键词和选择规则查找窗口，可选自动启动游戏
 
         Args:
@@ -199,8 +199,19 @@ class WindowManager:
             shortcut_path: 游戏快捷方式路径
             select_rule: 窗口选择规则 ('auto' 或 'index:N')
             select_account_keyword: 选择账号窗口匹配关键词（QQ号）
+            saved_hwnd: 上次启动时的窗口句柄，重启后优先复用（持久化匹配）
         """
         try:
+            # 0. 持久化匹配：优先尝试上次保存的窗口句柄（重启后复用）
+            if saved_hwnd and not self._pinned_hwnd:
+                if saved_hwnd not in self._all_claimed_hwnds:
+                    valid_window = self._verify_and_pin_window(saved_hwnd, title_keyword)
+                    if valid_window:
+                        self._pinned_hwnd = saved_hwnd
+                        self._all_claimed_hwnds.add(saved_hwnd)
+                        logger.info(f"持久化匹配: 复用上次窗口 hwnd={saved_hwnd} → 实例窗口已恢复")
+                        return valid_window
+
             # 1. 优先复用已锁定的窗口（防止窗口移动后排序变化导致选错）
             if self._pinned_hwnd:
                 valid_window = self._verify_and_pin_window(self._pinned_hwnd, title_keyword)

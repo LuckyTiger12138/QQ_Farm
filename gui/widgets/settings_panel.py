@@ -288,8 +288,10 @@ class SettingsPanel(QWidget):
         ci_opts_layout.setSpacing(12)
         self.ci_send = CheckBox("发送成熟通知", ci_opts_row)
         self.ci_accept = CheckBox("接收偷菜任务", ci_opts_row)
+        self.ci_accept_prank = CheckBox("接收捣乱任务", ci_opts_row)
         ci_opts_layout.addWidget(self.ci_send)
         ci_opts_layout.addWidget(self.ci_accept)
+        ci_opts_layout.addWidget(self.ci_accept_prank)
         ci_opts_layout.addStretch()
         ci_form.addRow(self._field_label("选项", ci_card), ci_opts_row)
 
@@ -298,6 +300,17 @@ class SettingsPanel(QWidget):
         self.ci_threshold.setSingleStep(30)
         self.ci_threshold.setSuffix(" 秒")
         ci_form.addRow(self._field_label("通知阈值", ci_card), self.ci_threshold)
+
+        self.ci_max_prank = SpinBox(ci_card)
+        self.ci_max_prank.setRange(1, 200)
+        self.ci_max_prank.setSingleStep(10)
+        self.ci_max_prank.setSuffix(" 次/天")
+        ci_form.addRow(self._field_label("捣乱上限", ci_card), self.ci_max_prank)
+
+        self.ci_prank_used = SpinBox(ci_card)
+        self.ci_prank_used.setRange(0, 999)
+        self.ci_prank_used.setSuffix(" 次")
+        ci_form.addRow(self._field_label("今日已捣乱", ci_card), self.ci_prank_used)
 
         self.ci_partners = LineEdit(ci_card)
         self.ci_partners.setPlaceholderText("格式: 实例ID:好友昵称, 实例ID:好友昵称")
@@ -417,7 +430,10 @@ class SettingsPanel(QWidget):
         self.ci_enabled.toggled.connect(self._auto_save)
         self.ci_send.toggled.connect(self._auto_save)
         self.ci_accept.toggled.connect(self._auto_save)
+        self.ci_accept_prank.toggled.connect(self._auto_save)
         self.ci_threshold.valueChanged.connect(self._auto_save)
+        self.ci_max_prank.valueChanged.connect(self._auto_save)
+        self.ci_prank_used.valueChanged.connect(self._auto_save)
         self.ci_partners.editingFinished.connect(self._auto_save)
 
     # ── 自动保存 ────────────────────────────────────────────
@@ -466,7 +482,10 @@ class SettingsPanel(QWidget):
             c.cross_instance.enabled = bool(self.ci_enabled.isChecked())
             c.cross_instance.send_alerts = bool(self.ci_send.isChecked())
             c.cross_instance.accept_steal = bool(self.ci_accept.isChecked())
+            c.cross_instance.accept_prank = bool(self.ci_accept_prank.isChecked())
             c.cross_instance.alert_threshold_seconds = int(self.ci_threshold.value())
+            c.cross_instance.max_prank_per_day = int(self.ci_max_prank.value())
+            c.cross_instance.prank_count_today = int(self.ci_prank_used.value())
             c.cross_instance.partners = self._parse_partners(str(self.ci_partners.text() or ""))
 
             c.save()
@@ -685,7 +704,10 @@ class SettingsPanel(QWidget):
         self.ci_enabled.setChecked(bool(c.cross_instance.enabled))
         self.ci_send.setChecked(bool(c.cross_instance.send_alerts))
         self.ci_accept.setChecked(bool(c.cross_instance.accept_steal))
+        self.ci_accept_prank.setChecked(bool(c.cross_instance.accept_prank))
         self.ci_threshold.setValue(int(c.cross_instance.alert_threshold_seconds))
+        self.ci_max_prank.setValue(int(c.cross_instance.max_prank_per_day))
+        self.ci_prank_used.setValue(int(c.cross_instance.prank_count_today))
         self.ci_partners.setText(self._format_partners(c.cross_instance.partners))
         # 日志路径
         cfg_path = str(getattr(c, "_config_path", "") or "").strip()

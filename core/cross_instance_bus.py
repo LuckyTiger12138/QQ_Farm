@@ -31,28 +31,40 @@ class StealAlert:
             self.timestamp = time.time()
 
 
+@dataclass
+class PrankAlert:
+    """捣乱通知消息"""
+    source_instance_id: str            # 发送方实例ID
+    source_name: str                   # 发送方名称
+    friend_name: str                   # 好友昵称（接收方用来OCR定位）
+    target_instance_id: str = ""       # 接收方实例ID
+    empty_plot_count: int = 0          # 空地块数量
+    timestamp: float = 0.0             # 发送时间戳
+
+    def __post_init__(self):
+        if self.timestamp <= 0:
+            self.timestamp = time.time()
+
+
 class CrossInstanceBus:
     """全局单例：跨实例消息总线
 
     线程安全，通过 queue.Queue + Lock 实现。
+    支持偷菜通知 (StealAlert) 和捣乱通知 (PrankAlert)。
     """
 
     def __init__(self):
         self._alerts: queue.Queue[StealAlert] = queue.Queue()
+        self._prank_alerts: queue.Queue[PrankAlert] = queue.Queue()
         self._lock = threading.Lock()
         # 记录已发送的 alert key，防止同一配对短时间内重复发送
         self._sent_keys: dict[str, float] = {}  # key -> timestamp
+        self._prank_sent_keys: dict[str, float] = {}
         self._dedup_window: float = 240.0  # 4 分钟内同一配对不重复
+        self._prank_dedup_window: float = 120.0  # 2 分钟内同一配对不重复发送捣乱
 
     def post_alert(self, alert: StealAlert) -> bool:
-        """发送偷菜通知
-
-        Args:
-            alert: 偷菜通知
-
-        Returns:
-            是否成功入队（False 表示去重过滤）
-        """
+        """发送偷菜通知"""
         dedup_key = f"{alert.source_instance_id}->{alert.friend_name}"
         with self._lock:
             last_sent = self._sent_keys.get(dedup_key, 0.0)
@@ -72,15 +84,48 @@ class CrossInstanceBus:
         )
         return True
 
+    def post_prank_alert(self, alert: PrankAlert) -> bool:
+        """发送捣乱通知"""
+        dedup_key = f"prank:{alert.source_instance_id}->{alert.friend_name}"
+        with self._lock:
+            last_sent = self._prank_sent_keys.get(dedup_key, 0.0)
+            if time.time() - last_sent < self._prank_dedup_window:
+                logger.debug(
+                    f"跨实例捣乱通知去重: {dedup_key} "
+                    f"(上次发送 {time.time() - last_sent:.0f}s 前)"
+                )
+                return False
+            self._prank_sent_keys[dedup_key] = time.time()
+
+        self._prank_alerts.put(alert)
+        logger.info(
+            f"[大小号捣乱📬] 通知入队: [{alert.source_name}] → [{alert.friend_name}] "
+            f"| 空地: {alert.empty_plot_count}块"
+        )
+        return True
+
+    def poll_prank_alerts(self, instance_id: str) -> list[PrankAlert]:
+        """拉取发给指定实例的捣乱通知"""
+        results: list[PrankAlert] = []
+        remaining: list[PrankAlert] = []
+
+        while not self._prank_alerts.empty():
+            try:
+                alert = self._prank_alerts.get_nowait()
+                if not alert.target_instance_id or alert.target_instance_id == instance_id:
+                    results.append(alert)
+                else:
+                    remaining.append(alert)
+            except queue.Empty:
+                break
+
+        for alert in remaining:
+            self._prank_alerts.put(alert)
+
+        return results
+
     def poll_alerts(self, instance_id: str) -> list[StealAlert]:
-        """拉取发给指定实例的通知
-
-        Args:
-            instance_id: 接收方实例ID
-
-        Returns:
-            属于该实例的通知列表
-        """
+        """拉取发给指定实例的偷菜通知"""
         results: list[StealAlert] = []
         remaining: list[StealAlert] = []
 
@@ -103,17 +148,40 @@ class CrossInstanceBus:
         """清理过期的去重记录"""
         now = time.time()
         with self._lock:
-            expired = [
-                k for k, v in self._sent_keys.items()
-                if now - v > max_age_seconds
-            ]
-            for k in expired:
-                del self._sent_keys[k]
+            for k, v in list(self._sent_keys.items()):
+                if now - v > max_age_seconds:
+                    del self._sent_keys[k]
+            for k, v in list(self._prank_sent_keys.items()):
+                if now - v > max_age_seconds:
+                    del self._prank_sent_keys[k]
 
     def get_stats(self) -> dict:
         """获取总线统计信息"""
         with self._lock:
             return {
                 "pending_alerts": self._alerts.qsize(),
+                "pending_prank_alerts": self._prank_alerts.qsize(),
                 "tracked_pairs": len(self._sent_keys),
+                "tracked_prank_pairs": len(self._prank_sent_keys),
             }
+
+    # ── 捣乱后清理请求 ──────────────────────────────────────────
+
+    def request_maintain(self, target_instance_id: str) -> None:
+        """请求目标实例执行一键务农（捣乱后清理用）"""
+        with self._lock:
+            key = f"maintain_{target_instance_id}"
+            self._sent_keys[key] = time.time()
+        logger.info(f"[大小号捣乱🧹] 请求实例 [{target_instance_id}] 执行一键务农")
+
+    def poll_maintain_request(self, instance_id: str) -> bool:
+        """检查是否有本实例的清理请求"""
+        key = f"maintain_{instance_id}"
+        with self._lock:
+            if key in self._sent_keys:
+                ts = self._sent_keys[key]
+                if time.time() - ts < 300:
+                    del self._sent_keys[key]
+                    return True
+                del self._sent_keys[key]
+        return False

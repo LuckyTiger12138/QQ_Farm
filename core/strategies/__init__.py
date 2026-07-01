@@ -8,3 +8,4 @@ from core.strategies.task import TaskStrategy
 from core.strategies.friend import FriendStrategy
 from core.strategies.gift import GiftStrategy
 from core.strategies.targeted_steal import TargetedStealStrategy
+from core.strategies.targeted_prank import TargetedPrankStrategy

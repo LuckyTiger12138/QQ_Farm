@@ -502,6 +502,77 @@ class TaskExecutor:
                     )
             self._wake_event.set()
 
+    # ── 跨实例捣乱任务注入 ──────────────────────────────────────
+
+    def _poll_and_inject_prank_tasks(self):
+        """轮询跨实例消息总线，将捣乱通知转化为高优先级任务"""
+        if not self._cross_bus or not self._instance_id:
+            return
+        try:
+            alerts = self._cross_bus.poll_prank_alerts(self._instance_id)
+        except Exception:
+            return
+        if not alerts:
+            return
+
+        for alert in alerts:
+            task_name = f"prank_{alert.source_instance_id}"
+            logger.info(
+                f"[大小号捣乱📥] 收到来自 [{alert.source_name}] 的捣乱通知: "
+                f"好友[{alert.friend_name}] | 空地: {alert.empty_plot_count}块"
+            )
+            with self._lock:
+                if task_name in self._tasks:
+                    task = self._tasks[task_name]
+                    task.features["friend_name"] = alert.friend_name
+                    task.features["source_name"] = alert.source_name
+                    task.next_run = datetime.now()
+                    task.enabled = True
+                    logger.info(f"[大小号捣乱📥] 更新捣乱任务: {task_name} → 好友[{alert.friend_name}]")
+                else:
+                    prank_task = TaskItem(
+                        name=task_name,
+                        enabled=True,
+                        priority=5,
+                        next_run=datetime.now(),
+                        success_interval=1800,
+                        failure_interval=300,
+                        trigger=TaskTriggerType.INTERVAL.value,
+                        features={
+                            "friend_name": alert.friend_name,
+                            "source_name": alert.source_name,
+                        },
+                    )
+                    self._tasks[task_name] = prank_task
+                    if "prank" in self._runners and task_name not in self._runners:
+                        self._runners[task_name] = self._runners["prank"]
+                    logger.info(
+                        f"[大小号捣乱📥] 注入捣乱任务: {task_name} → 好友[{alert.friend_name}] "
+                        f"(优先级=5)"
+                    )
+            self._wake_event.set()
+
+    # ── 捣乱后清理请求 ────────────────────────────────────────
+
+    def _poll_maintain_requests(self):
+        """检查是否有捣乱后的清理请求，有则强制触发 main 任务"""
+        if not self._cross_bus or not self._instance_id:
+            return
+        try:
+            need_maintain = self._cross_bus.poll_maintain_request(self._instance_id)
+        except Exception:
+            return
+        if not need_maintain:
+            return
+
+        with self._lock:
+            if "main" in self._tasks:
+                task = self._tasks["main"]
+                task.next_run = datetime.now()
+                task.enabled = True
+                logger.info(f"[大小号捣乱🧹] 收到清理请求，触发 main 任务（一键务农）")
+        self._wake_event.set()
+
     # ── 主循环（移植自 copilot） ──────────────────────────────
 
     def _loop(self):
@@ -519,6 +590,8 @@ class TaskExecutor:
 
                 # 跨实例通讯：轮询偷菜通知并注入任务
                 self._poll_and_inject_steal_tasks()
+                # 跨实例通讯：轮询捣乱后的清理请求
+                self._poll_maintain_requests()
 
                 now = datetime.now()
                 with self._lock:

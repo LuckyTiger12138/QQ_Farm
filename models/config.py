@@ -154,11 +154,12 @@ class PlantingConfig(BaseModel):
     window_height: int = 1054
     game_shortcut_path: str = ""  # 游戏快捷方式路径，用于自动启动
     select_account_keyword: str = ""  # 选择账号窗口匹配关键词（QQ号），如 "1234560000"
-    warehouse_first: bool = False         # 仓库优先播种
-    skip_event_crops: bool = False        # 跳过活动作物
-    level_ocr_enabled: bool = False       # 等级OCR开关
-    window_platform: str = "qq"           # qq/wechat
-    planting_stable_seconds: float = 0.5  # 播种画面稳定等待时间
+    last_hwnd: int = 0                  # 上次启动时的游戏窗口句柄（用于重启后窗口匹配）
+    warehouse_first: bool = False       # 仓库优先播种
+    skip_event_crops: bool = False      # 跳过活动作物
+    level_ocr_enabled: bool = False     # 等级OCR开关
+    window_platform: str = "qq"         # qq/wechat
+    planting_stable_seconds: float = 0.5    # 播种画面稳定等待时间
     planting_stable_timeout_seconds: float = 5.0  # 播种稳定超时
 
 
@@ -172,9 +173,14 @@ class CrossInstancePartnerConfig(BaseModel):
 class CrossInstanceConfig(BaseModel):
     """大小号通讯功能配置"""
     enabled: bool = True                   # 总开关
-    send_alerts: bool = True               # 是否发送成熟通知
+    send_alerts: bool = True               # 是否发送成熟通知（偷菜用）
     accept_steal: bool = False             # 是否接收偷菜任务
+    accept_prank: bool = False             # 是否接收捣乱任务
     alert_threshold_seconds: int = 300     # 成熟阈值（默认5分钟）
+    max_prank_per_day: int = 100           # 每日捣乱次数上限
+    prank_count_today: int = 0             # 今日捣乱次数
+    prank_count_date: str = ""             # 捣乱计数日期 (YYYY-MM-DD)
+    last_prank_type: str = ""              # 上次捣乱类型 "weed"/"bug"，用于交替
     partners: list[CrossInstancePartnerConfig] = Field(default_factory=list)
 
 
@@ -222,7 +228,7 @@ class AppConfig(BaseModel):
         return config
 
     def ensure_default_tasks(self):
-        """确保 tasks 中包含所有默认任务（旧配置迁移用）"""
+        """确保 tasks 中包含所有默认任务，清理已废弃任务"""
         defaults = self.get_default_tasks()
         added = [name for name in defaults if name not in self.tasks]
         for name in added:
@@ -230,6 +236,13 @@ class AppConfig(BaseModel):
         if added:
             from loguru import logger
             logger.debug(f"已补充默认任务: {added}")
+        deprecated = {"keepalive", "prank"}
+        removed = [name for name in deprecated if name in self.tasks]
+        for name in removed:
+            del self.tasks[name]
+        if removed:
+            from loguru import logger
+            logger.debug(f"已清理废弃任务: {removed}")
 
     def sync_features_to_tasks(self):
         """将 FeaturesConfig 开关同步到 tasks.features（向后兼容）
@@ -313,9 +326,11 @@ class AppConfig(BaseModel):
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,
                 daily_time="00:10",
             ),
-            "keepalive": TaskScheduleItemConfig(
-                enabled=True, priority=5, trigger=TaskTriggerType.INTERVAL,
-                interval_seconds=600, failure_interval_seconds=120,
+            "捣乱": TaskScheduleItemConfig(
+                enabled=False, priority=25, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=120,
+                enabled_time_range="05:00:00-23:59:59",
+                failure_interval_seconds=300,
             ),
         }
 
