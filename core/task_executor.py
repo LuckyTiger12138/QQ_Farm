@@ -516,7 +516,7 @@ class TaskExecutor:
             return
 
         for alert in alerts:
-            task_name = f"prank_{alert.source_instance_id}"
+            task_name = f"捣乱_{alert.source_instance_id}"
             logger.info(
                 f"[大小号捣乱📥] 收到来自 [{alert.source_name}] 的捣乱通知: "
                 f"好友[{alert.friend_name}] | 空地: {alert.empty_plot_count}块"
@@ -544,8 +544,8 @@ class TaskExecutor:
                         },
                     )
                     self._tasks[task_name] = prank_task
-                    if "prank" in self._runners and task_name not in self._runners:
-                        self._runners[task_name] = self._runners["prank"]
+                    if "捣乱" in self._runners and task_name not in self._runners:
+                        self._runners[task_name] = self._runners["捣乱"]
                     logger.info(
                         f"[大小号捣乱📥] 注入捣乱任务: {task_name} → 好友[{alert.friend_name}] "
                         f"(优先级=5)"
