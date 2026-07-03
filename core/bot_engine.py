@@ -1657,7 +1657,7 @@ class BotEngine(QObject):
         except Exception as e:
             logger.debug(f"保存捣乱计数失败: {e}")
 
-    def _run_task_prank(self, ctx: TaskContext) -> TaskResult:
+    def _run_task_捣乱(self, ctx: TaskContext) -> TaskResult:
         """定点捣乱任务：定时间隔运行，访问配对好友农场放草/放虫
 
         从 cross_instance.partners 读取目标好友，每次运行只放一种类型（交替草/虫）。
