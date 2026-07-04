@@ -1,4 +1,4 @@
-"""Fluent 状态面板 — 任务队列信息 + 操作统计 + 深色主题自适应。"""
+"""Fluent 状态面板 — 运行状态 + 任务队列 + 深色主题自适应。"""
 
 from __future__ import annotations
 
@@ -19,14 +19,13 @@ from qfluentwidgets import (
 
 
 class StatusPanel(QWidget):
-    """运行态统计显示（状态 + 任务队列 + 操作统计）。"""
+    """运行态显示（状态 + 任务队列）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._labels: dict[str, StrongBodyLabel] = {}
         self._numeric_keys = {
             "running_tasks", "pending_tasks", "waiting_tasks",
-            "harvest", "plant", "water", "weed", "bug", "fertilize",
         }
         self._build_ui()
 
@@ -52,15 +51,6 @@ class StatusPanel(QWidget):
         self._add_cell(tasks_grid, 1, 1, "下次执行", "next_run", "--")
         root.addWidget(tasks_card)
 
-        # ── 操作统计卡片 ──
-        stats_card, stats_grid = self._build_card("操作统计", FluentIcon.APPLICATION)
-        self._add_cell(stats_grid, 0, 0, "收获", "harvest", "0")
-        self._add_cell(stats_grid, 0, 1, "播种", "plant", "0")
-        self._add_cell(stats_grid, 0, 2, "浇水", "water", "0")
-        self._add_cell(stats_grid, 1, 0, "除草", "weed", "0")
-        self._add_cell(stats_grid, 1, 1, "除虫", "bug", "0")
-        self._add_cell(stats_grid, 1, 2, "施肥", "fertilize", "0")
-        root.addWidget(stats_card)
         root.addStretch()
 
     def _build_card(self, title: str, icon: FluentIcon) -> tuple[ElevatedCardWidget, QGridLayout]:
@@ -258,12 +248,6 @@ class StatusPanel(QWidget):
         self._set_value("next_task", self._short_text(stats.get("next_task", "--")))
         next_run_text, next_run_tooltip = self._format_next_run(stats.get("next_run", "--"))
         self._set_value("next_run", next_run_text, tooltip=next_run_tooltip)
-
-        # 操作统计
-        for key in ("harvest", "plant", "water", "weed", "bug", "fertilize"):
-            value = self._safe_int(stats.get(key, 0))
-            self._set_value(key, value)
-            self._set_counter_color(key, value, "#0F766E", "#2DD4BF")
 
         # 向后兼容：旧字段
         if "next_farm_check" in self._labels:

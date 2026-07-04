@@ -15,6 +15,7 @@ class BaseStrategy:
         self.cv_detector = cv_detector
         self.action_executor = None
         self._capture_fn = None
+        self._external_stopped_fn = None
         self._stop_requested = False
         self.navigator = None
         self._click_last: dict[str, float] = {}  # 按钮名 → 上次点击时间，防重复点击
@@ -22,9 +23,19 @@ class BaseStrategy:
     def set_capture_fn(self, fn):
         self._capture_fn = fn
 
+    def set_stopped_fn(self, fn):
+        self._external_stopped_fn = fn
+
     @property
     def stopped(self) -> bool:
-        return self._stop_requested
+        if self._stop_requested:
+            return True
+        if self._external_stopped_fn:
+            try:
+                return bool(self._external_stopped_fn())
+            except Exception:
+                return False
+        return False
 
     def capture(self, rect: tuple):
         if self._capture_fn:

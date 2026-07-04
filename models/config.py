@@ -67,6 +67,27 @@ class SafetyConfig(BaseModel):
     window_position: WindowPosition = WindowPosition.BOTTOM_LEFT  # 窗口位置
     auto_remote_login: bool = False  # 掉线重登（默认关闭，多实例下不建议开启）
     debug_log_enabled: bool = False  # 调试日志开关
+    stuck_seconds: int = 180          # 任务卡死阈值（预留给任务级恢复）
+    stuck_long_wait_seconds: int = 600  # 长时间卡死阈值（预留给重启策略）
+
+
+class RecoveryConfig(BaseModel):
+    """任务级异常恢复配置"""
+    enabled: bool = True
+    repair_before_restart: bool = True
+    auto_restart_on_window_lost: bool = True
+    max_repair_attempts: int = 2
+    max_restart_attempts: int = 1
+    repair_retry_delay_seconds: int = 5
+    restart_wait_seconds: int = 30
+
+
+class NotificationConfig(BaseModel):
+    """异常通知配置（先保留配置入口，具体通道后续接入）"""
+    enabled: bool = False
+    exception_notify_enabled: bool = False
+    win_toast_enabled: bool = True
+    onepush_config: str = ""
 
 
 class ScreenshotConfig(BaseModel):
@@ -149,6 +170,7 @@ def resolve_task_min_interval_seconds(executor_cfg: ExecutorConfig) -> int:
 class PlantingConfig(BaseModel):
     strategy: PlantMode = PlantMode.BEST_EXP_RATE
     preferred_crop: str = "椰子"  # strategy=preferred 时使用
+    secondary_crop: str = ""       # strategy=preferred 时，首选无种子/无法播种后的次级作物
     player_level: int = 69
     window_width: int = 581
     window_height: int = 1054
@@ -159,6 +181,9 @@ class PlantingConfig(BaseModel):
     skip_event_crops: bool = False      # 跳过活动作物
     level_ocr_enabled: bool = False     # 等级OCR开关
     window_platform: str = "qq"         # qq/wechat
+    wechat_mouse_guard_enabled: bool = False  # 微信后台运行时鼠标防占用（预留开关）
+    wechat_scale_check_enabled: bool = True   # 微信窗口缩放检查容错（预留开关）
+    virtual_desktop_enabled: bool = False     # 虚拟桌面/多屏适配（预留开关）
     planting_stable_seconds: float = 0.5    # 播种画面稳定等待时间
     planting_stable_timeout_seconds: float = 5.0  # 播种稳定超时
 
@@ -211,6 +236,8 @@ class AppConfig(BaseModel):
     tasks: dict[str, TaskScheduleItemConfig] = Field(default_factory=dict)
     executor: ExecutorConfig = Field(default_factory=ExecutorConfig)
     cross_instance: CrossInstanceConfig = Field(default_factory=CrossInstanceConfig)
+    recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
+    notification: NotificationConfig = Field(default_factory=NotificationConfig)
 
     _config_path: str = ""
 
@@ -247,7 +274,7 @@ class AppConfig(BaseModel):
     def sync_features_to_tasks(self):
         """将 FeaturesConfig 开关同步到 tasks.features（向后兼容）
 
-        同步后会清除不在已知键列表中的残留键（如 auto_bad、steal_stats），
+        同步后会清除不在已知键列表中的残留键（如 auto_bad、legacy_flags），
         防止 GUI 显示无效配置项。
         """
         f = self.features
@@ -306,6 +333,10 @@ class AppConfig(BaseModel):
                 enabled=True, priority=20, trigger=TaskTriggerType.INTERVAL,
                 interval_seconds=1200, failure_interval_seconds=120,
             ),
+            "timed_harvest": TaskScheduleItemConfig(
+                enabled=True, priority=9, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=600, failure_interval_seconds=120,
+            ),
             "gift": TaskScheduleItemConfig(
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,
                 daily_time="00:05",
@@ -325,6 +356,14 @@ class AppConfig(BaseModel):
             "share": TaskScheduleItemConfig(
                 enabled=False, priority=30, trigger=TaskTriggerType.DAILY,
                 daily_time="00:10",
+            ),
+            "repair": TaskScheduleItemConfig(
+                enabled=False, priority=3, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=300, failure_interval_seconds=60,
+            ),
+            "restart": TaskScheduleItemConfig(
+                enabled=False, priority=2, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=1800, failure_interval_seconds=300,
             ),
             "捣乱": TaskScheduleItemConfig(
                 enabled=False, priority=25, trigger=TaskTriggerType.INTERVAL,

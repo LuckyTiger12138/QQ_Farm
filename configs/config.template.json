@@ -5,16 +5,20 @@
     "auto_harvest": true,
     "auto_plant": true,
     "auto_buy_seed": true,
-    "auto_weed": true,
-    "auto_water": true,
-    "auto_bug": true,
+    "auto_maintain": true,
     "auto_fertilize": true,
-    "auto_bad": false,
     "auto_task": false,
     "auto_upgrade": false,
     "auto_svip_gift": true,
     "auto_mall_gift": true,
-    "auto_mail": false
+    "auto_mail": false,
+    "friend": {
+      "enable_steal": true,
+      "enable_maintain": true,
+      "max_steal_per_round": 0,
+      "blacklist": [],
+      "enable_accept_request": true
+    }
   },
   "safety": {
     "random_delay_min": 0.1,
@@ -24,7 +28,9 @@
     "run_mode": "background",
     "window_position": "bottom_left",
     "auto_remote_login": false,
-    "debug_log_enabled": false
+    "debug_log_enabled": false,
+    "stuck_seconds": 180,
+    "stuck_long_wait_seconds": 600
   },
   "screenshot": {
     "quality": 80,
@@ -40,13 +46,20 @@
   "planting": {
     "strategy": "best_exp_rate",
     "preferred_crop": "椰子",
+    "secondary_crop": "",
     "player_level": 69,
     "window_width": 581,
     "window_height": 1054,
+    "game_shortcut_path": "",
+    "select_account_keyword": "",
+    "last_hwnd": 0,
     "warehouse_first": false,
     "skip_event_crops": false,
     "level_ocr_enabled": false,
     "window_platform": "qq",
+    "wechat_mouse_guard_enabled": false,
+    "wechat_scale_check_enabled": true,
+    "virtual_desktop_enabled": false,
     "planting_stable_seconds": 0.5,
     "planting_stable_timeout_seconds": 5.0
   },
@@ -82,21 +95,67 @@
       "daily_time": "00:01",
       "next_run": "",
       "failure_interval_seconds": 30,
+      "features": {
+        "auto_harvest": true,
+        "auto_plant": true,
+        "auto_maintain": true,
+        "auto_expand": false,
+        "auto_upgrade": false,
+        "auto_buy_seed": true,
+        "auto_fertilize": true,
+        "auto_remote_login": false
+      }
+    },
+    "profile": {
+      "enabled": true,
+      "priority": 8,
+      "trigger": "interval",
+      "interval_seconds": 1800,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 60,
       "features": {}
     },
     "friend": {
       "enabled": true,
       "priority": 20,
       "trigger": "interval",
-      "interval_seconds": 120,
+      "interval_seconds": 60,
       "enabled_time_range": "00:00:00-23:59:59",
       "daily_time": "00:01",
       "next_run": "",
       "failure_interval_seconds": 300,
+      "features": {
+        "auto_steal": true,
+        "auto_maintain": true,
+        "blacklist": []
+      }
+    },
+    "land_scan": {
+      "enabled": true,
+      "priority": 20,
+      "trigger": "interval",
+      "interval_seconds": 1200,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 120,
+      "features": {}
+    },
+    "timed_harvest": {
+      "enabled": true,
+      "priority": 9,
+      "trigger": "interval",
+      "interval_seconds": 600,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 120,
       "features": {}
     },
     "gift": {
-      "enabled": false,
+      "enabled": true,
       "priority": 30,
       "trigger": "daily",
       "interval_seconds": 120,
@@ -104,7 +163,11 @@
       "daily_time": "00:05",
       "next_run": "",
       "failure_interval_seconds": 60,
-      "features": {}
+      "features": {
+        "auto_svip_gift": true,
+        "auto_mall_gift": true,
+        "auto_mail": false
+      }
     },
     "sell": {
       "enabled": false,
@@ -128,6 +191,17 @@
       "failure_interval_seconds": 3600,
       "features": {}
     },
+    "fertilize": {
+      "enabled": false,
+      "priority": 25,
+      "trigger": "interval",
+      "interval_seconds": 1800,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 600,
+      "features": {}
+    },
     "share": {
       "enabled": false,
       "priority": 30,
@@ -138,6 +212,39 @@
       "next_run": "",
       "failure_interval_seconds": 60,
       "features": {}
+    },
+    "repair": {
+      "enabled": false,
+      "priority": 3,
+      "trigger": "interval",
+      "interval_seconds": 300,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 60,
+      "features": {}
+    },
+    "restart": {
+      "enabled": false,
+      "priority": 2,
+      "trigger": "interval",
+      "interval_seconds": 1800,
+      "enabled_time_range": "00:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 300,
+      "features": {}
+    },
+    "捣乱": {
+      "enabled": false,
+      "priority": 25,
+      "trigger": "interval",
+      "interval_seconds": 120,
+      "enabled_time_range": "05:00:00-23:59:59",
+      "daily_time": "00:01",
+      "next_run": "",
+      "failure_interval_seconds": 300,
+      "features": {}
     }
   },
   "executor": {
@@ -146,5 +253,32 @@
     "default_success_interval": 120,
     "default_failure_interval": 60,
     "max_failures": 3
+  },
+  "cross_instance": {
+    "enabled": true,
+    "send_alerts": true,
+    "accept_steal": false,
+    "accept_prank": false,
+    "alert_threshold_seconds": 300,
+    "max_prank_per_day": 100,
+    "prank_count_today": 0,
+    "prank_count_date": "",
+    "last_prank_type": "",
+    "partners": []
+  },
+  "recovery": {
+    "enabled": true,
+    "repair_before_restart": true,
+    "auto_restart_on_window_lost": true,
+    "max_repair_attempts": 2,
+    "max_restart_attempts": 1,
+    "repair_retry_delay_seconds": 5,
+    "restart_wait_seconds": 30
+  },
+  "notification": {
+    "enabled": false,
+    "exception_notify_enabled": false,
+    "win_toast_enabled": true,
+    "onepush_config": ""
   }
 }

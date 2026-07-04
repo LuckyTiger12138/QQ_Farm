@@ -193,51 +193,13 @@ class InstanceSidebar(QWidget):
         super().__init__(parent)
         self._rows: dict[str, InstanceItem] = {}
         self._active_instance_id: str = ''
+        self._material_enabled = False
         self._build_ui()
 
     def _build_ui(self) -> None:
         self.setObjectName('instanceSidebar')
         self.setFixedWidth(180)
-        self.setStyleSheet(f"""
-            QWidget#instanceSidebar {{
-                background: {Colors.SIDEBAR_BG};
-                border-left: 1px solid {Colors.BORDER};
-            }}
-            QLabel#instanceTitle {{
-                color: {Colors.TEXT};
-                font-weight: 700;
-                font-size: 14px;
-                padding: 12px 10px 8px 10px;
-            }}
-            QPushButton#startAllBtn {{
-                background: {Colors.SUCCESS};
-                border: none;
-                color: white;
-                border-radius: 6px;
-                font-size: 12px;
-                font-weight: 600;
-                padding: 8px 12px;
-            }}
-            QPushButton#startAllBtn:hover {{
-                background: #2DA44E;
-            }}
-            QPushButton#stopAllBtn {{
-                background: {Colors.DANGER};
-                border: none;
-                color: white;
-                border-radius: 6px;
-                font-size: 12px;
-                font-weight: 600;
-                padding: 8px 12px;
-            }}
-            QPushButton#stopAllBtn:hover {{
-                background: #b91c1c;
-            }}
-            QScrollArea {{
-                background: transparent;
-                border: none;
-            }}
-        """)
+        self._apply_style()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 12, 8, 8)
@@ -282,6 +244,53 @@ class InstanceSidebar(QWidget):
         batch_row.addWidget(self._btn_start_all)
         batch_row.addWidget(self._btn_stop_all)
         root.addLayout(batch_row)
+
+    def _apply_style(self) -> None:
+        bg = "rgba(245, 245, 247, 150)" if self._material_enabled else Colors.SIDEBAR_BG
+        self.setStyleSheet(f"""
+            QWidget#instanceSidebar {{
+                background: {bg};
+                border-left: 1px solid {Colors.BORDER};
+            }}
+            QLabel#instanceTitle {{
+                color: {Colors.TEXT};
+                font-weight: 700;
+                font-size: 14px;
+                padding: 12px 10px 8px 10px;
+            }}
+            QPushButton#startAllBtn {{
+                background: {Colors.SUCCESS};
+                border: none;
+                color: white;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 8px 12px;
+            }}
+            QPushButton#startAllBtn:hover {{
+                background: #2DA44E;
+            }}
+            QPushButton#stopAllBtn {{
+                background: {Colors.DANGER};
+                border: none;
+                color: white;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 8px 12px;
+            }}
+            QPushButton#stopAllBtn:hover {{
+                background: #b91c1c;
+            }}
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+    def set_material_enabled(self, enabled: bool) -> None:
+        self._material_enabled = bool(enabled)
+        self._apply_style()
 
     def _show_global_menu(self, pos):
         """空白处右键菜单"""

@@ -23,11 +23,12 @@ class TaskScheduler(QObject):
     state_changed = pyqtSignal(str)  # 状态变化信号
     farm_check_triggered = pyqtSignal()  # 农场检查触发
     friend_check_triggered = pyqtSignal()  # 好友检查触发
-    stats_updated = pyqtSignal(dict)  # 统计数据更新
+    stats_updated = pyqtSignal(dict)  # 运行状态快照更新
     window_lost = pyqtSignal()  # 游戏窗口丢失信号
 
-    def __init__(self):
+    def __init__(self, instance_id: str = "default"):
         super().__init__()
+        self._instance_id = str(instance_id or "default").strip() or "default"
         self._state = BotState.IDLE
         self._farm_timer = QTimer(self)
         self._friend_timer = QTimer(self)
@@ -40,13 +41,7 @@ class TaskScheduler(QObject):
         self._window_monitor_paused = False  # 窗口监控暂停标志
         self._remote_login_cooldown_until = 0.0  # 异地登录冷却截止时间戳
 
-        # 统计
         self._start_time: float = 0
-        self._stats = {
-            "harvest": 0, "plant": 0, "water": 0,
-            "weed": 0, "bug": 0, "steal": 0,
-            "sell": 0, "fertilize": 0, "total_actions": 0,
-        }
         self._next_farm_check: float = 0
         self._next_friend_check: float = 0
 
@@ -67,6 +62,11 @@ class TaskScheduler(QObject):
     def _set_state(self, state: BotState):
         self._state = state
         self.state_changed.emit(state.value)
+        self.stats_updated.emit(self.get_stats())
+
+    def _ensure_start_time(self):
+        if not self._start_time:
+            self._start_time = time.time()
 
     def start(self, farm_interval_ms: int = 300000,
               friend_interval_ms: int = 1800000):
@@ -96,21 +96,38 @@ class TaskScheduler(QObject):
 
     def start_window_check(self):
         """仅启动窗口存活监控（不启动定时触发）"""
+        self._ensure_start_time()
         if self._state == BotState.IDLE:
             self._set_state(BotState.RUNNING)
+        else:
+            self.stats_updated.emit(self.get_stats())
         self._window_monitor_timer.start(self._window_monitor_interval_ms)
         logger.info("窗口存活监控已启动")
 
     def mark_running(self):
         """将调度器标记为运行状态（不启动任何定时器）"""
+        self._ensure_start_time()
         if self._state == BotState.IDLE:
             self._set_state(BotState.RUNNING)
+        else:
+            self.stats_updated.emit(self.get_stats())
 
     def stop(self):
         """停止调度器"""
         self._farm_timer.stop()
         self._friend_timer.stop()
         self._window_monitor_timer.stop()
+        self._start_time = 0
+        self._next_farm_check = 0
+        self._next_friend_check = 0
+        self._runtime_metrics.update({
+            "current_task": "--",
+            "next_task": "--",
+            "next_run": "--",
+            "running_tasks": 0,
+            "pending_tasks": 0,
+            "waiting_tasks": 0,
+        })
         self._set_state(BotState.IDLE)
         logger.info("调度器已停止")
 
@@ -208,31 +225,26 @@ class TaskScheduler(QObject):
         self._window_monitor_paused = False
         logger.info("窗口监控已恢复")
 
-    def record_action(self, action_type: str, count: int = 1):
-        """记录操作统计"""
-        if action_type in self._stats:
-            self._stats[action_type] += count
-        self._stats["total_actions"] += count
-        self.stats_updated.emit(self.get_stats())
-
     def get_stats(self) -> dict:
-        """获取统计数据（含 runtime_metrics，移植自 copilot）"""
+        """获取运行状态数据（含 runtime_metrics，移植自 copilot）"""
         elapsed = time.time() - self._start_time if self._start_time else 0
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
-        state_map = {
-            BotState.RUNNING.value: "运行中",
-            BotState.PAUSED.value: "已暂停",
-            BotState.IDLE.value: "已停止",
-            BotState.ERROR.value: "异常",
-        }
+        seconds = int(elapsed % 60)
+        if self._state == BotState.IDLE:
+            next_farm_check = "--"
+        else:
+            next_farm_check = (
+                datetime.fromtimestamp(self._next_farm_check).strftime("%H:%M:%S")
+                if self._next_farm_check
+                else self._runtime_metrics.get("next_run", "--")
+            )
         return {
-            **self._stats,
             **self._runtime_metrics,
-            "elapsed": f"{hours}小时{minutes}分",
-            "next_farm_check": datetime.fromtimestamp(self._next_farm_check).strftime("%H:%M:%S") if self._next_farm_check else "--",
+            "elapsed": f"{hours}小时{minutes}分{seconds}秒",
+            "next_farm_check": next_farm_check or "--",
             "next_friend_check": datetime.fromtimestamp(self._next_friend_check).strftime("%H:%M:%S") if self._next_friend_check else "--",
-            "state": state_map.get(self._state.value, self._state.value),
+            "state": self._state.value,
         }
 
     def update_runtime_metrics(self, **kwargs):
@@ -249,5 +261,5 @@ class TaskScheduler(QObject):
             self.stats_updated.emit(self.get_stats())
 
     def reset_stats(self):
-        for key in self._stats:
-            self._stats[key] = 0
+        """兼容旧调用：刷新运行状态快照。"""
+        self.stats_updated.emit(self.get_stats())

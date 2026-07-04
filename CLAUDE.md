@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-QQ Farm Vision Bot — 基于 OpenCV 视觉识别的 QQ 经典农场（微信小程序）自动化工具。纯本地运行，不依赖游戏接口，零封号风险。支持多实例同时运行。
+QQ Farm Vision Bot — 基于 OpenCV 视觉识别的 QQ 经典农场（QQ/微信小程序）自动化工具。纯本地运行，不依赖游戏接口。当前是 2.0.x 多实例版本，支持后台运行、Web 控制、老板键、地块巡查、跨实例偷菜/捣乱、自动选择账号和 GitHub Actions 发布。
 
 **技术栈**: Python 3.10+, PyQt6, OpenCV, MSS, PyAutoGUI, Pydantic, loguru, FastAPI (可选 Web 面板)
 
@@ -66,7 +66,7 @@ pyinstaller build.spec
 │  行为决策层 (core/strategies/)               │
 │  popup → harvest → maintain → plant →        │
 │  expand → task → friend → gift →             │
-│  targeted_steal                              │
+│  targeted_steal / targeted_prank             │
 ├─────────────────────────────────────────────┤
 │  图像识别层                                  │
 │  cv_detector.py (模板匹配)                   │
@@ -84,6 +84,8 @@ pyinstaller build.spec
 - **BotWorker** (QThread): 在独立线程执行 farm/friend/test_fertilize 任务
 - **TaskScheduler** (`core/task_scheduler.py`, QObject + QTimer): 定时触发农场检查和好友巡查，含窗口存活监控
 - **TaskExecutor** (`core/task_executor.py`): 基于优先级的异步任务调度器，支持 interval/daily 触发、时段过滤、失败重试、热更新。通过 `TaskScheduleItemConfig` 配置每个任务
+- **CrossInstanceBus** (`core/cross_instance_bus.py`): 跨实例偷菜/捣乱消息总线，负责 StealAlert / PrankAlert 去重和派发
+- **状态总览快照**: 状态总览只展示运行状态、任务队列和下次执行时间；操作次数统计与每日动作统计落盘已移除
 - 策略按优先级注册在 `self._strategies` 列表中
 - 主循环 `check_farm()` 最多 50 轮，3 轮空闲自动退出，每轮 sleep 0.3s
 - 静默时段: `core/silent_hours.py` 支持跨午夜时段（如 22:00-06:00），静默期间不执行操作
@@ -103,12 +105,13 @@ pyinstaller build.spec
 | P-1 | `popup.py` | PopupStrategy | 关闭弹窗/商店/商城/返回主界面 + 升级检测 |
 | P0 | `harvest.py` | HarvestStrategy | 一键收获 + 自动出售 |
 | P1 | `maintain.py` | MaintainStrategy | 除草/除虫/浇水 |
-| P2 | `plant.py` | PlantStrategy | 播种 + 购买种子 + 施肥 |
+| P2 | `plant.py` | PlantStrategy | 播种（动态翻页、手动指定次级回退） + 购买种子（OCR/价格/仓库格复查） + 施肥 |
 | P3 | `expand.py` | ExpandStrategy | 扩建土地 |
 | P3.5 | `task.py` | TaskStrategy | 领取任务奖励 / 出售果实 |
 | P4 | `friend.py` | FriendStrategy | 帮忙除草/浇水/除虫/偷菜 |
 | P5 | `gift.py` | GiftStrategy | SVIP 礼包 / 商城免费领取 / 邮件领取 |
 | — | `targeted_steal.py` | TargetedStealStrategy | 定点偷菜（大小号通讯触发） |
+| — | `targeted_prank.py` | TargetedPrankStrategy | 定点捣乱（大小号通讯触发） |
 
 ### 页面导航 (core/ui/navigator.py)
 
@@ -116,11 +119,15 @@ pyinstaller build.spec
 
 ### 地块巡查 (tasks/land_scan.py)
 
-**LandScanTask**: 两阶段滑动扫描（左滑 + 右滑）+ 逐块点击 OCR 采集。利用 `utils/land_grid.py` 的 `LandCell` / `get_lands_from_land_anchor` 计算地块网格坐标，`utils/ocr_utils.py` 的 `OCRTool` 识别成熟倒计时文字。扫描结果供大小号通讯判断即将成熟的地块。
+**LandScanTask**: 两阶段滑动扫描（左滑 + 右滑）+ 逐块点击 OCR 采集。利用 `utils/land_grid.py` 的 `LandCell` / `get_lands_from_land_anchor` 计算地块网格坐标，`utils/ocr_utils.py` 的 `OCRTool` 识别成熟倒计时文字，支持普通/红/黑/金/紫晶土地等级。扫描结果供大小号通讯判断即将成熟的地块。
+
+重要边界：地块巡查必须保持只读，不应隐式触发一键务农、主农场巡查、repair 或 restart。升级图标通过 `icon_land_upgrade.gif` 局部 ROI 检测并回写 `need_upgrade`。
 
 ### 大小号通讯 (core/cross_instance_bus.py)
 
-**CrossInstanceBus**: 全局单例内存消息总线（线程安全），所有 BotEngine 共享。数据流：
+**CrossInstanceBus**: 全局单例内存消息总线（线程安全），所有 BotEngine 共享。支持成熟偷菜通知和好友捣乱通知。
+
+偷菜数据流：
 ```
 Instance A 地块巡查 → 检测成熟倒计时 < N 秒 → post_alert(StealAlert)
 → Instance B TaskExecutor.poll_alerts() → 动态创建 TargetedStealTask → 定点偷菜
@@ -128,6 +135,13 @@ Instance A 地块巡查 → 检测成熟倒计时 < N 秒 → post_alert(StealAl
 - **StealAlert**: 包含 source_instance_id、friend_name、plot_ids、earliest_maturity_seconds
 - 内置去重（4 分钟内同一配对不重复发送）
 - 配置在 `CrossInstanceConfig` 中：send_alerts / accept_steal / partners
+
+捣乱数据流：
+```
+Instance A 检测可捣乱好友 → post_prank_alert(PrankAlert)
+→ Instance B TaskExecutor.poll_prank_alerts() → 注入中文 task key `捣乱`
+→ TargetedPrankStrategy 执行好友捣乱
+```
 
 ### 场景识别状态机 (core/scene_detector.py)
 
@@ -138,6 +152,7 @@ Scene 枚举值: FARM_OVERVIEW, FRIEND_FARM, PLOT_MENU, SEED_SELECT, SHOP_PAGE, 
 ### 图像检测 (core/cv_detector.py)
 
 - **模板加载**: 从 `templates/` 目录加载，文件名前缀决定类别
+- **GIF 模板**: 支持将 GIF 拆成有限多帧匹配变体，对外仍按同一个模板名使用
 - **多尺度检测**: 0.8x ~ 1.3x 缩放范围
 - **NMS**: 非极大值抑制去除重叠结果（IoU 阈值 0.5）
 - **DetectResult**: 包含 name, category, x, y, w, h, confidence
@@ -151,7 +166,7 @@ Pydantic BaseModel 层级结构，GUI 修改实时生效:
 - `PlantMode`: PREFERRED / BEST_EXP_RATE / LATEST_LEVEL
 - `SellMode`: BATCH_ALL / SELECTIVE
 - `RunMode`: FOREGROUND / BACKGROUND
-- `TaskScheduleItemConfig`: 每个任务的调度配置（间隔/时段/优先级/触发方式），默认任务列表通过 `get_default_tasks()` 获取（main, profile, friend, land_scan, gift, sell, task, fertilize, share）
+- `TaskScheduleItemConfig`: 每个任务的调度配置（间隔/时段/优先级/触发方式），默认任务列表通过 `get_default_tasks()` 获取（main, profile, friend, land_scan, gift, sell, task, fertilize, share, 捣乱）
 - `CrossInstanceConfig`: 大小号通讯功能配置（send_alerts / accept_steal / partners）
 - `sync_features_to_tasks()`: 将 FeaturesConfig 开关同步到 tasks.features，保持向后兼容
 
@@ -166,6 +181,15 @@ FastAPI Web 控制面板（可选，需安装 fastapi+uvicorn）：截图预览�
 - **定时施肥**: `_run_task_fertilize()` 由 TaskExecutor 按间隔定时触发，对全部地块执行施肥
 
 施肥流程 (`fertilize_all()`): 锚点检测地块网格 → 逐块点击检测施肥按钮 → 找到肥料（普通/有机）→ 拖拽施肥 → 关闭施肥弹窗。支持 `is_test` 模式遍历所有地块检测。
+
+### 播种与自动买种 (PlantStrategy)
+
+- **播种动态翻页**: `_find_seed_with_pagination()` 通过检测 `btn_seed_select_right.png` 翻页按钮查找目标 `seed_` 模板；每次翻页后重新截屏，按钮消失时视为末页。旧的滑动列表逻辑已废弃，仅保留兼容。
+- **次级作物回退**: `PlantingConfig.secondary_crop` 仅在手动指定策略下生效；`BotEngine._task_plant()` 先尝试首选作物，首选尝试期间临时暂停自动买种，避免首选缺种时先买首选，然后对剩余空地尝试次级作物。
+- **仓库优先播种**: `PlantingConfig.warehouse_first` 开启后优先尝试仓库种子；关闭后走普通种子选择面板。
+- **自动买种**: `_buy_seeds()` 先做仓库/库存相关检查，再进入商店；`_buy_seeds_with_ocr()` 使用 `utils/shop_item_ocr.py` 识别商店商品，失败后 `_buy_seeds_with_template()` 使用 `shop_` 模板兜底。
+- **买种安全阀**: 商店 OCR 优先按 `configs/goods.json` 的种子单价匹配，名称 OCR 仅用于同价候选消歧；购买前/后会用 `utils/warehouse_seed_scan.py` 按 3x5 仓库格复查 `ws_作物名`，失败时进入冷却并停止本轮播种。
+- **当前瓶颈**: 自动买种的主要问题是商店商品定位/OCR 灵敏度和真实窗口复查稳定性，不是播种列表翻页不足。仓库格分割已接入，锁定种子图标在存在 `icon_item_locked` / `icon_seed_locked` 模板时自动启用；下一阶段再补按仓库序号在播种弹窗选种。
 
 ### 个人信息获取与等级 OCR
 
@@ -203,6 +227,25 @@ FastAPI Web 控制面板（可选，需安装 fastapi+uvicorn）：截图预览�
 
 执行完毕后自动导航回主页。由 `_run_task_gift()` 以 daily 模式调度。
 
+### 窗口监控与异常恢复
+
+窗口监控相关能力来自 2.0.9~2.0.14 的连续更新：
+
+- 自动启动游戏快捷方式，并在多 QQ 环境下 OCR 选择账号
+- 多实例窗口占用机制，避免一个实例抢占另一个实例窗口
+- 模板截图绑定 hwnd，模板管理截屏来自目标实例窗口
+- 游戏窗口关闭自动重启
+- 黑屏检测
+- 断网 / 异地登录检测
+- 远程登录处理
+- 端午活动返回按钮 `btn_dw_back`
+
+### Release / CI
+
+- `.github/workflows/build.yml` 使用 GitHub Actions 自动打包发布
+- `.github/release-notes/v*.md` 存放自定义 Release Notes
+- v2.0.15 后 Release 直接发布 EXE，避免 Gitee 100MB 限制；GitHub 为主要发行渠道
+
 ### 数据模型
 
 - `models/farm_state.py`: `ActionType` 枚举, `Action`, `OperationResult`
@@ -218,7 +261,8 @@ FastAPI Web 控制面板（可选，需安装 fastapi+uvicorn）：截图预览�
 | `friend_` | ui_element（好友列表标识） | `friend_list.png` |
 | `crop_` | crop | `crop_mature.png` |
 | `seed_` | seed（播种列表） | `seed_小麦.png` |
-| `shop_` | shop（商店卡片） | `shop_小麦.png` |
+| `shop_` | shop（商店卡片，自动买种模板兜底） | `shop_小麦.png` |
+| `ws_` | warehouse_seed（仓库种子） | `ws_小麦.png` |
 | `land_` | land | `land_empty.png` |
 | `ui_` | ui_element | `ui_next_time.png` |
 
@@ -238,8 +282,10 @@ FastAPI Web 控制面板（可选，需安装 fastapi+uvicorn）：截图预览�
 ## Known Limitations
 
 - **显示器比例**: 16:10 或非标准比例显示器可能存在坐标精度丢失，建议 16:9 显示器使用
-- **自动买种**: 仓库库存判断存在 Bug，建议关闭该功能让用户手动购买
-- **播种位置**: 播种流程仅检测仓库第一排前 5 个格子，种子必须放在该位置
+- **播种查找**: 播种列表已支持动态翻页，不再局限于第一页或前 5 个格子；若找不到目标，优先检查 `btn_seed_select_right.png` 与目标 `seed_` 模板
+- **自动买种**: 已有价格校验、仓库格复查和失败冷却；商店商品定位/OCR 仍需真实窗口实测，识别不稳时建议关闭该功能，让用户手动购买后继续运行
+- **仓库优先**: 已有仓库优先播种能力和仓库格扫描，但不同分辨率/DPI 下仍需实测模板与坐标稳定性
+- **紫晶土地**: 地块巡查已支持紫晶等级，但仍依赖 `icon_land_amethyst.png`、OCR 文本和颜色采样在真实窗口中校准
 
 ## Key Design Decisions
 
@@ -252,3 +298,4 @@ FastAPI Web 控制面板（可选，需安装 fastapi+uvicorn）：截图预览�
 - **中文路径**: `cv_detector.py` 使用 `np.fromfile` + `cv2.imdecode` 读取模板，因为 `cv2.imread` 不支持中文路径
 - **Git 双仓库**: origin → Gitee, github → GitHub。发行版文件发布在 GitHub Releases（Gitee 有 100MB 限制）
 - **配置同步**: `sync_features_to_tasks()` 将旧的 FeaturesConfig 开关映射到新的 TaskScheduleItemConfig.features，保持向后兼容
+- **Task key**: 跨实例捣乱任务使用中文 key `捣乱`，不要再写 `_run_task_prank`

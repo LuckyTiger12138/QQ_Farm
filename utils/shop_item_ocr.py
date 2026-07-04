@@ -44,6 +44,7 @@ class ShopItem:
     """Recognized shop item."""
     name: str
     raw_name: str
+    price: int
     ocr_score: float
     name_similarity: float
     center_x: int
@@ -216,6 +217,34 @@ class ShopItemOCR:
         names.sort(key=lambda x: (x[3], x[2], len(x[0])), reverse=True)
         return names[0]
 
+    @staticmethod
+    def _parse_card_price(card_items: list[OCRItem]) -> int:
+        """解析卡片价格，优先取带金币/价格语义的数字。"""
+        candidates: list[tuple[int, float, int]] = []
+        for it in card_items:
+            text = str(it.text or '').strip()
+            if not text:
+                continue
+            compact = text.replace(',', '').replace('，', '').replace(' ', '')
+            nums = re.findall(r'\d+', compact)
+            if not nums:
+                continue
+            if any(token in compact for token in ('品', '等级', '解锁', '开放', '成熟', '经验')):
+                continue
+            value = int(nums[-1])
+            if value <= 0:
+                continue
+            priority = 1
+            if any(key in compact for key in ('金币', '价格', '售价', '单价', '购买')):
+                priority = 3
+            elif re.fullmatch(r'\d+', compact):
+                priority = 2
+            candidates.append((priority, float(it.score), value))
+        if not candidates:
+            return 0
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2]
+
     def detect_items(self, img_bgr: np.ndarray) -> list[ShopItem]:
         """检测商店中的所有物品"""
         cards = self.detect_shop_cards(img_bgr)
@@ -238,6 +267,7 @@ class ShopItemOCR:
                     ShopItem(
                         name=name,
                         raw_name=text,
+                        price=0,
                         ocr_score=float(it.score),
                         name_similarity=float(sim),
                         center_x=int(cx),
@@ -254,11 +284,13 @@ class ShopItemOCR:
             name, raw_name, ocr_score, sim = self._parse_card_name(card_items)
             if not name:
                 continue
+            price = self._parse_card_price(card_items)
             cx, cy = card.center
             results.append(
                 ShopItem(
                     name=name,
                     raw_name=raw_name,
+                    price=price,
                     ocr_score=ocr_score,
                     name_similarity=sim,
                     center_x=int(cx),
@@ -271,7 +303,10 @@ class ShopItemOCR:
     def find_item(self, img_bgr: np.ndarray, target_name: str, min_similarity: float = 0.70) -> ShopItemMatch:
         """查找指定名称的物品"""
         parsed = self.detect_items(img_bgr)
-        parsed_debug = '; '.join(f'{item.name}/{item.raw_name}@({item.center_x},{item.center_y})' for item in parsed)
+        parsed_debug = '; '.join(
+            f'{item.name}/{item.raw_name}/¥{item.price}@({item.center_x},{item.center_y})'
+            for item in parsed
+        )
         logger.debug("OCR识别内容: target='{}' | items={}", target_name, parsed_debug or '[]')
         if not parsed:
             return ShopItemMatch(target=None, best=None, best_similarity=0.0, parsed_items=[])
@@ -326,3 +361,137 @@ class ShopItemOCR:
             min_similarity,
         )
         return ShopItemMatch(target=None, best=best, best_similarity=best_similarity, parsed_items=parsed)
+
+    def detect_items_for_price(self, img_bgr: np.ndarray) -> list[ShopItem]:
+        """检测商店物品并保留价格字段。"""
+        cards = self.detect_shop_cards(img_bgr)
+        all_items = self.ocr.detect(img_bgr, scale=1.4, alpha=1.15, beta=0.0)
+        if not all_items:
+            return []
+
+        if not cards:
+            fallback: list[ShopItem] = []
+            for it in all_items:
+                price = self._parse_card_price([it])
+                if price <= 0:
+                    continue
+                cx, cy = self._item_center(it)
+                fallback.append(
+                    ShopItem(
+                        name='',
+                        raw_name=str(price),
+                        price=price,
+                        ocr_score=float(it.score),
+                        name_similarity=0.0,
+                        center_x=int(cx),
+                        center_y=int(cy),
+                        bbox=self._item_bbox(it),
+                    )
+                )
+            return fallback
+
+        results: list[ShopItem] = []
+        for card in cards:
+            card_items = self._pick_card_items(all_items, card)
+            if not card_items:
+                continue
+            price = self._parse_card_price(card_items)
+            if price <= 0:
+                continue
+            name, raw_name, ocr_score, sim = self._parse_card_name(card_items)
+            cx, cy = card.center
+            results.append(
+                ShopItem(
+                    name=name,
+                    raw_name=raw_name or str(price),
+                    price=price,
+                    ocr_score=ocr_score,
+                    name_similarity=sim,
+                    center_x=int(cx),
+                    center_y=int(cy),
+                    bbox=(card.x, card.y, card.x2, card.y2),
+                )
+            )
+        return results
+
+    def find_item_by_price(
+        self,
+        img_bgr: np.ndarray,
+        target_price: int,
+        target_name: str = '',
+    ) -> ShopItemMatch:
+        """按种子单价查找商店卡片，避免名称 OCR 误识别买错低级种子。"""
+        parsed = self.detect_items_for_price(img_bgr)
+        parsed_debug = '; '.join(
+            f'{item.name}/{item.raw_name}/¥{item.price}@({item.center_x},{item.center_y})'
+            for item in parsed
+        )
+        logger.debug("OCR价格识别: target_price={} | items={}", target_price, parsed_debug or '[]')
+        if not parsed or target_price <= 0:
+            return ShopItemMatch(target=None, best=None, best_similarity=0.0, parsed_items=parsed)
+
+        priced = [item for item in parsed if item.price > 0]
+        if not priced:
+            return ShopItemMatch(target=None, best=None, best_similarity=0.0, parsed_items=parsed)
+
+        exact_items = [item for item in priced if item.price == target_price]
+        exact: ShopItem | None = None
+        exact_name_similarity = 0.0
+        if len(exact_items) == 1:
+            exact = exact_items[0]
+        elif len(exact_items) > 1:
+            target_norm = self._norm_name(target_name)
+            ranked: list[tuple[float, float, ShopItem]] = []
+            for item in exact_items:
+                item_norm = self._norm_name(item.name)
+                raw_norm = self._norm_name(item.raw_name)
+                if target_norm:
+                    sim = max(
+                        SequenceMatcher(None, target_norm, item_norm).ratio(),
+                        SequenceMatcher(None, target_norm, raw_norm).ratio(),
+                    )
+                else:
+                    sim = 0.0
+                ranked.append((float(sim), float(item.ocr_score), item))
+            ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+            exact_name_similarity, _, best_exact = ranked[0]
+            if exact_name_similarity >= 0.55:
+                exact = best_exact
+                logger.info(
+                    "OCR价格同价消歧成功: price={} target='{}' match='{}' raw='{}' similarity={:.2f}",
+                    target_price,
+                    target_name,
+                    best_exact.name,
+                    best_exact.raw_name,
+                    exact_name_similarity,
+                )
+            else:
+                logger.warning(
+                    "OCR价格匹配存在同价候选，名称无法消歧: price={} target='{}' candidates={}",
+                    target_price,
+                    target_name,
+                    [
+                        f"{item.name}/{item.raw_name}@({item.center_x},{item.center_y})"
+                        for item in exact_items
+                    ],
+                )
+        best = min(priced, key=lambda item: abs(item.price - target_price))
+        best_similarity = 1.0 if exact else max(
+            0.0,
+            1.0 - abs(best.price - target_price) / max(target_price, 1),
+        )
+        if exact:
+            logger.info(
+                "OCR价格匹配成功: price={} | center=({}, {}) name='{}' raw='{}'",
+                target_price,
+                exact.center_x,
+                exact.center_y,
+                exact.name,
+                exact.raw_name,
+            )
+        return ShopItemMatch(
+            target=exact,
+            best=best,
+            best_similarity=max(best_similarity, exact_name_similarity),
+            parsed_items=parsed,
+        )

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import re
 import time
 
 from loguru import logger
 
 from core.cv_detector import DetectResult
-from utils.land_grid import LandCell, get_lands_from_land_anchor
+from utils.land_grid import LAND_ANCHOR_SPAN_BASELINE, LandCell, get_lands_from_land_anchor
 from utils.ocr_utils import OCRItem, OCRTool
 
 # ── 常量 ──────────────────────────────────────────────────────────────
@@ -41,16 +42,21 @@ LAND_SCAN_TIME_PICK_Y2 = 20
 
 # 空地弹窗等级 OCR 区域：相对 btn_land_pop_empty 中心
 LAND_SCAN_LEVEL_REGION_OFFSET = (-60, -50, 40, 50)
+# 空地弹窗升级图标 ROI：相对 btn_land_pop_empty 中心
+LAND_SCAN_UPGRADE_EMPTY_REGION_OFFSET = (-100, -50, 0, 0)
+# 已播种弹窗升级图标 ROI：相对 btn_crop_maturity_time_suffix 中心
+LAND_SCAN_UPGRADE_PLOTTED_REGION_OFFSET = (0, -50, 130, 50)
+LAND_SCAN_UPGRADE_ICON_THRESHOLD = 0.65
 
 # 成熟时间文本正则
 LAND_SCAN_MATURITY_TIME_PATTERN = re.compile(r'(\d{2})[：:](\d{2})[：:](\d{2})')
 # 地块等级文本正则
-LAND_SCAN_LEVEL_PATTERN = re.compile(r'(未扩建|普通|红|黑|金)')
+LAND_SCAN_LEVEL_PATTERN = re.compile(r'(未扩建|普通|紫晶|红|黑|金)')
 
 # 地块等级中文→英文映射
 LAND_SCAN_LEVEL_LABELS: dict[str, str] = {
     'unbuilt': '未扩建', 'normal': '普通土地', 'red': '红土地',
-    'black': '黑土地', 'gold': '金土地',
+    'black': '黑土地', 'gold': '金土地', 'amethyst': '紫晶土地',
 }
 
 # 已播种地块等级颜色采样点：相对 btn_crop_maturity_time_suffix 中心 (dx, dy)
@@ -61,6 +67,7 @@ LAND_SCAN_PLOTTED_LEVEL_COLOR_SAMPLE_RADIUS = 1
 LAND_SCAN_PLOTTED_LEVEL_COLORS_RGB: dict[str, tuple[int, int, int]] = {
     'normal': (178, 131, 74), 'red': (223, 87, 55),
     'black': (92, 67, 42), 'gold': (249, 203, 50),
+    'amethyst': (209, 168, 232),
 }
 LAND_SCAN_PLOTTED_LEVEL_COLOR_DISTANCE_THRESHOLD = 42.0
 
@@ -69,7 +76,13 @@ LAND_SCAN_POPUP_WAIT_RETRIES = 10
 # 弹窗等待每次间隔（秒）
 LAND_SCAN_POPUP_WAIT_INTERVAL = 0.2
 # 点击未命中时偏移重试列表 (dx, dy)
-LAND_SCAN_CLICK_RETRY_OFFSETS = [(0, -15), (0, 15), (-15, 0), (15, 0), (-10, -10), (10, 10)]
+LAND_SCAN_CLICK_RETRY_OFFSETS = [
+    (0, -15), (0, -30), (0, -45), (0, 15),
+    (-15, 0), (15, 0), (-10, -10), (10, 10),
+]
+# 边缘点击前进行横向微滑修正的 x 阈值
+LAND_SCAN_EDGE_SWIPE_LEFT_THRESHOLD = 160
+LAND_SCAN_EDGE_SWIPE_RIGHT_THRESHOLD = 330
 
 # 关闭弹窗坐标 — 点击弹窗外上方空白处（实测 y=100 有效关闭弹窗）
 LAND_SCAN_GOTO_MAIN_X = 290
@@ -78,6 +91,12 @@ LAND_SCAN_GOTO_MAIN_Y = 100
 LAND_SCAN_ANCHOR_STABLE_SECONDS = 0.5
 LAND_SCAN_ANCHOR_STABLE_REQUIRED_HITS = 3
 LAND_SCAN_ANCHOR_MAX_WAIT = 5.0
+# 只做方向/相对位置校验，不使用对比仓库固定窗口的像素跨度作为本地真值。
+LAND_SCAN_ANCHOR_MIN_ABS_DX = 120
+LAND_SCAN_ANCHOR_MAX_ABS_DY = 160
+LAND_SCAN_FALLBACK_ANCHOR_SPAN: tuple[int, int] | None = None
+LAND_SCAN_ANCHOR_MIN_Y_RATIO = 0.45
+LAND_SCAN_ANCHOR_MAX_Y_RATIO = 0.92
 
 
 class LandScanTask:
@@ -122,6 +141,7 @@ class LandScanTask:
 
         # 确保回到主界面
         self._go_to_main(bot_engine, rect)
+        anchor_span = self._measure_anchor_span(bot_engine, rect)
 
         scanned_count = 0
         try:
@@ -132,7 +152,9 @@ class LandScanTask:
                 self._swipe(bot_engine, LAND_SCAN_SWIPE_H_P1, LAND_SCAN_SWIPE_H_P2)
             self._wait_anchor_stable(bot_engine, rect, anchor_name='btn_land_right')
 
-            cells_left = self._collect_land_cells(bot_engine, rect)
+            cells_left = self._collect_land_cells(
+                bot_engine, rect, anchor_span=anchor_span, prefer_anchor='right',
+            )
             if not cells_left:
                 logger.warning('地块巡查: 左滑后未识别到地块网格')
             else:
@@ -152,7 +174,9 @@ class LandScanTask:
 
             if self._stopped(bot_engine):
                 return False
-            cells_right = self._collect_land_cells(bot_engine, rect)
+            cells_right = self._collect_land_cells(
+                bot_engine, rect, anchor_span=anchor_span, prefer_anchor='left',
+            )
             if not cells_right:
                 logger.warning('地块巡查: 右滑后未识别到地块网格')
             else:
@@ -216,25 +240,52 @@ class LandScanTask:
     # ================================================================
 
     @staticmethod
-    def _collect_land_cells(bot_engine, rect: tuple) -> list[LandCell]:
+    def _measure_anchor_span(bot_engine, rect: tuple) -> tuple[int, int] | None:
+        """在当前窗口实测左右锚点间距，避免套用其他窗口尺寸的固定基线。"""
+        cv_img = bot_engine._capture_only(rect)
+        if cv_img is None:
+            return LAND_SCAN_FALLBACK_ANCHOR_SPAN
+        right_anchor, left_anchor = _detect_land_anchors(bot_engine, cv_img)
+        right_anchor, left_anchor = _normalize_anchor_pair(
+            right_anchor, left_anchor,
+            expected_span=None,
+            allow_fallback=False,
+        )
+        if right_anchor is None or left_anchor is None:
+            logger.info('地块巡查: 初始锚点间距未实测到，将使用单锚点局部推导')
+            return LAND_SCAN_FALLBACK_ANCHOR_SPAN
+        span = (int(left_anchor[0] - right_anchor[0]), int(left_anchor[1] - right_anchor[1]))
+        logger.info(f'地块巡查: 实测左右锚点间距={span}')
+        return span
+
+    @staticmethod
+    def _collect_land_cells(
+        bot_engine,
+        rect: tuple,
+        *,
+        anchor_span: tuple[int, int] | None = None,
+        prefer_anchor: str = 'right',
+    ) -> list[LandCell]:
         """识别左右锚点并推算地块网格。"""
         cv_img = bot_engine._capture_only(rect)
         if cv_img is None:
             return []
-        # 只检测锚点模板
-        detections = bot_engine.cv_detector.detect_targeted(
-            cv_img, ['btn_land_right', 'btn_land_left', 'btn_expand_brand'],
-            scales=[1.0, 0.9, 1.1],
+        right_anchor, left_anchor = _detect_land_anchors(bot_engine, cv_img)
+        right_anchor, left_anchor = _normalize_anchor_pair(
+            right_anchor,
+            left_anchor,
+            expected_span=anchor_span,
+            allow_fallback=True,
+            prefer_anchor=prefer_anchor,
         )
+        effective_span = anchor_span
+        if effective_span is None and (right_anchor is None) != (left_anchor is None):
+            effective_span = _scaled_anchor_span(cv_img)
+            logger.info(
+                f'地块巡查: 使用当前截图缩放后的本地锚点间距={effective_span} '
+                f'| prefer={prefer_anchor}'
+            )
 
-        right_anchor = None
-        left_anchor = None
-        for det in detections:
-            if det.name == 'btn_land_right':
-                right_anchor = (int(det.x), int(det.y))
-            elif det.name == 'btn_land_left':
-                left_anchor = (int(det.x), int(det.y))
-                logger.trace(f'地块巡查: 左锚点检测 | pos=({det.x:.0f},{det.y:.0f}) conf={det.confidence:.2f}')
         if right_anchor:
             logger.trace(f'地块巡查: 右锚点检测 | pos={right_anchor}')
         else:
@@ -244,6 +295,7 @@ class LandScanTask:
             right_anchor, left_anchor,
             rows=LAND_SCAN_ROWS, cols=LAND_SCAN_COLS,
             start_anchor='right',
+            anchor_span=effective_span,
         )
         logger.info(
             f'地块巡查: 网格识别 | 右锚点={right_anchor} '
@@ -320,6 +372,8 @@ class LandScanTask:
         logger.info(f'地块巡查: 物理列={scan_cols}')
         scanned = 0
         hit_unbuilt = False
+        x_interval = abs(LAND_SCAN_SWIPE_H_P1[0] - LAND_SCAN_SWIPE_H_P2[0])
+        view_offset_x = 0
         for physical_col in scan_cols:
             if self._stopped(bot_engine):
                 return scanned
@@ -331,9 +385,39 @@ class LandScanTask:
             for cell in col_cells:
                 if self._stopped(bot_engine):
                     return scanned
+                target_cell = cell
+                final_x = int(cell.center[0] + view_offset_x)
+                final_y = int(cell.center[1])
+                if from_side.strip().lower() == 'right' and final_x < LAND_SCAN_EDGE_SWIPE_LEFT_THRESHOLD:
+                    self._swipe(bot_engine, LAND_SCAN_SWIPE_H_P2, LAND_SCAN_SWIPE_H_P1)
+                    view_offset_x += x_interval
+                    old_x = final_x
+                    final_x = int(cell.center[0] + view_offset_x)
+                    logger.info(
+                        f'地块巡查: 右滑边缘修正 | 列={physical_col} '
+                        f'序号={cell.label} 原x={old_x} 新x={final_x}'
+                    )
+                elif from_side.strip().lower() == 'left' and final_x > LAND_SCAN_EDGE_SWIPE_RIGHT_THRESHOLD:
+                    self._swipe(bot_engine, LAND_SCAN_SWIPE_H_P1, LAND_SCAN_SWIPE_H_P2)
+                    view_offset_x -= x_interval
+                    old_x = final_x
+                    final_x = int(cell.center[0] + view_offset_x)
+                    logger.info(
+                        f'地块巡查: 左滑边缘修正 | 列={physical_col} '
+                        f'序号={cell.label} 原x={old_x} 新x={final_x}'
+                    )
+                if final_x != cell.center[0] or final_y != cell.center[1]:
+                    target_cell = LandCell(
+                        order=cell.order,
+                        row=cell.row,
+                        col=cell.col,
+                        label=cell.label,
+                        center=(final_x, final_y),
+                        vertices=cell.vertices,
+                    )
                 self._run_pre_scan_maintain(bot_engine, rect)
                 updated, is_unbuilt = self._click_and_ocr_cell(
-                    bot_engine, rect, cell, from_side=from_side,
+                    bot_engine, rect, target_cell, from_side=from_side,
                 )
                 if updated:
                     scanned += 1
@@ -362,20 +446,8 @@ class LandScanTask:
         return rtl_cols[:max(0, column_count)]
 
     def _run_pre_scan_maintain(self, bot_engine, rect: tuple) -> None:
-        """点击地块前先做一键收获与三项维护，减少弹窗噪声。"""
-        try:
-            harvest = getattr(bot_engine, 'harvest', None)
-            if harvest and not harvest.stopped:
-                harvest.try_harvest_direct(rect)
-        except Exception:
-            pass
-        try:
-            maintain = getattr(bot_engine, 'maintain', None)
-            if maintain and not maintain.stopped:
-                features = bot_engine.config.features.model_dump()
-                maintain.try_maintain_direct(rect, features)
-        except Exception:
-            pass
+        """地块巡查保持只读，不隐式触发收获或一键务农。"""
+        _ = bot_engine, rect
 
     def _wait_anchor_stable(
         self, bot_engine, rect: tuple, *, anchor_name: str,
@@ -403,13 +475,16 @@ class LandScanTask:
                 time.sleep(0.1)
                 continue
 
+            anchor_names = [anchor_name]
+            if anchor_name == 'btn_land_right':
+                anchor_names.append('btn_land_right_2')
             detections = bot_engine.cv_detector.detect_targeted(
-                cv_img, [anchor_name], scales=[1.0, 0.9, 1.1],
+                cv_img, anchor_names, scales=[1.0, 0.9, 1.1],
             )
 
             current_pos: tuple[int, int] | None = None
             for det in detections:
-                if det.name == anchor_name:
+                if det.name in anchor_names:
                     current_pos = (int(det.x), int(det.y))
                     break
 
@@ -480,6 +555,11 @@ class LandScanTask:
                 continue
             detections = bot_engine.cv_detector.detect_targeted(
                 cv_img, _POPUP_TEMPLATES, scales=[1.0, 0.9, 1.1],
+                thresholds={
+                    'btn_crop_removal': 0.65,
+                    'btn_crop_maturity_time_suffix': 0.65,
+                    'btn_land_pop_empty': 0.65,
+                },
             )
 
             # 检查空地弹窗
@@ -536,7 +616,11 @@ class LandScanTask:
             self._recenter_swipe(bot_engine, from_side)
             time.sleep(0.3)
             # 刷新坐标
-            fresh_cells = self._collect_land_cells(bot_engine, rect)
+            fresh_cells = self._collect_land_cells(
+                bot_engine,
+                rect,
+                prefer_anchor='left' if from_side.strip().lower() == 'left' else 'right',
+            )
             if fresh_cells:
                 for fc in fresh_cells:
                     if fc.label == cell.label:
@@ -577,13 +661,19 @@ class LandScanTask:
         # ── 空地弹窗 ──
         if empty_det:
             level = self._ocr_land_level(cv_img, empty_det)
+            need_upgrade = self._detect_need_upgrade(
+                bot_engine,
+                cv_img,
+                (int(empty_det.x), int(empty_det.y)),
+                empty_plot=True,
+            )
             is_unbuilt = (level == 'unbuilt')
             if is_unbuilt:
                 logger.info(f'地块巡查: 检测到未扩建地块 {cell.label}，后续列将跳过')
             updated = self._update_plot(
                 bot_engine, cell,
                 level=level or 'normal', countdown='',
-                need_upgrade=False, need_planting=True,
+                need_upgrade=need_upgrade, need_planting=True,
             )
             return updated, is_unbuilt
 
@@ -605,6 +695,12 @@ class LandScanTask:
 
         # 颜色等级检测（基于锚点偏移）
         level = self._detect_level_by_color(cv_img, anchor or cell.center)
+        need_upgrade = self._detect_need_upgrade(
+            bot_engine,
+            cv_img,
+            anchor,
+            empty_plot=False,
+        )
 
         # 成熟时间 OCR（基于锚点精确偏移）
         countdown = ''
@@ -618,13 +714,50 @@ class LandScanTask:
         updated = self._update_plot(
             bot_engine, cell,
             level=level or 'normal', countdown=countdown,
-            need_upgrade=False, need_planting=need_planting,
+            need_upgrade=need_upgrade, need_planting=need_planting,
         )
         return updated, False
 
     # ================================================================
     # OCR 辅助
     # ================================================================
+
+    def _detect_need_upgrade(
+        self,
+        bot_engine,
+        cv_img,
+        anchor: tuple[int, int] | None,
+        *,
+        empty_plot: bool,
+    ) -> bool:
+        """检测当前地块弹窗是否展示升级图标。"""
+        if cv_img is None or anchor is None:
+            return False
+        if not getattr(bot_engine.cv_detector, "_loaded", False):
+            bot_engine.cv_detector.load_templates()
+        if 'icon_land_upgrade' not in getattr(bot_engine.cv_detector, "_templates_by_name", {}):
+            return False
+
+        offset = (
+            LAND_SCAN_UPGRADE_EMPTY_REGION_OFFSET
+            if empty_plot else LAND_SCAN_UPGRADE_PLOTTED_REGION_OFFSET
+        )
+        roi = _build_roi(anchor[0], anchor[1], offset)
+        detections = bot_engine.cv_detector.detect_targeted(
+            cv_img,
+            ['icon_land_upgrade'],
+            thresholds={'icon_land_upgrade': LAND_SCAN_UPGRADE_ICON_THRESHOLD},
+            scales=[1.0, 0.9, 1.1],
+            roi_map={'icon_land_upgrade': roi},
+        )
+        if detections:
+            best = detections[0]
+            logger.info(
+                f'地块巡查: 检测到升级图标 | '
+                f'anchor={anchor} roi={roi} conf={best.confidence:.3f}'
+            )
+            return True
+        return False
 
     def _ocr_land_level(
         self, cv_img, anchor_det: DetectResult,
@@ -754,6 +887,10 @@ class LandScanTask:
             if str(item.get('maturity_countdown', '')).strip() != countdown:
                 item['maturity_countdown'] = countdown
                 changed = True
+            now_text = datetime.now().isoformat(timespec='seconds')
+            if countdown and str(item.get('countdown_sync_time', '')).strip() != now_text:
+                item['countdown_sync_time'] = now_text
+                changed = True
             if bool(item.get('need_upgrade', False)) != need_upgrade:
                 item['need_upgrade'] = need_upgrade
                 changed = True
@@ -774,6 +911,7 @@ class LandScanTask:
             'plot_id': target,
             'level': level,
             'maturity_countdown': countdown,
+            'countdown_sync_time': datetime.now().isoformat(timespec='seconds') if countdown else '',
             'need_upgrade': need_upgrade,
             'need_planting': need_planting,
         })
@@ -825,6 +963,107 @@ def _build_expand_brand_excluded_labels(cell: LandCell) -> set[str]:
         for r in range(1, LAND_SCAN_ROWS + 1):
             labels.add(f'{c}-{r}')
     return labels
+
+
+def _detect_land_anchors(bot_engine, cv_img) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+    """检测左右土地锚点，返回当前截图坐标。"""
+    height = int(cv_img.shape[0]) if getattr(cv_img, 'shape', None) is not None else LAND_SCAN_FRAME_HEIGHT
+    min_y = int(height * LAND_SCAN_ANCHOR_MIN_Y_RATIO)
+    max_y = int(height * LAND_SCAN_ANCHOR_MAX_Y_RATIO)
+    detections = bot_engine.cv_detector.detect_targeted(
+        cv_img,
+        ['btn_land_right', 'btn_land_right_2', 'btn_land_left', 'btn_expand_brand'],
+        scales=[1.0, 0.9, 1.1],
+    )
+
+    right_anchor = None
+    left_anchor = None
+    for det in detections:
+        if int(det.y) < min_y or int(det.y) > max_y:
+            logger.trace(
+                f'地块巡查: 忽略异常锚点 | name={det.name} '
+                f'pos=({det.x:.0f},{det.y:.0f}) y_range=({min_y},{max_y}) '
+                f'conf={det.confidence:.2f}'
+            )
+            continue
+        if det.name in ('btn_land_right', 'btn_land_right_2') and right_anchor is None:
+            right_anchor = (int(det.x), int(det.y))
+            logger.trace(
+                f'地块巡查: 右锚点检测 | name={det.name} '
+                f'pos=({det.x:.0f},{det.y:.0f}) conf={det.confidence:.2f}'
+            )
+        elif det.name == 'btn_land_left' and left_anchor is None:
+            left_anchor = (int(det.x), int(det.y))
+            logger.trace(
+                f'地块巡查: 左锚点检测 | pos=({det.x:.0f},{det.y:.0f}) '
+                f'conf={det.confidence:.2f}'
+            )
+    return right_anchor, left_anchor
+
+
+def _scaled_anchor_span(cv_img) -> tuple[int, int]:
+    """按当前截图尺寸缩放本项目 581x1054 标定的左右锚点间距。"""
+    try:
+        height, width = cv_img.shape[:2]
+    except Exception:
+        width, height = LAND_SCAN_FRAME_WIDTH, LAND_SCAN_FRAME_HEIGHT
+    sx = float(width) / float(LAND_SCAN_FRAME_WIDTH)
+    sy = float(height) / float(LAND_SCAN_FRAME_HEIGHT)
+    base_dx, base_dy = LAND_ANCHOR_SPAN_BASELINE
+    return int(round(float(base_dx) * sx)), int(round(float(base_dy) * sy))
+
+
+def _normalize_anchor_pair(
+    right_anchor: tuple[int, int] | None,
+    left_anchor: tuple[int, int] | None,
+    *,
+    expected_span: tuple[int, int] | None = None,
+    allow_fallback: bool = True,
+    prefer_anchor: str = 'right',
+) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+    """丢弃明显不成对的误识别锚点，避免网格被拉歪。
+
+    expected_span 只使用当前窗口实测值；未实测到时不套固定像素基线。
+    """
+    if right_anchor is None or left_anchor is None:
+        return right_anchor, left_anchor
+
+    dx = float(left_anchor[0] - right_anchor[0])
+    dy = float(left_anchor[1] - right_anchor[1])
+
+    if expected_span is not None:
+        expected_dx, expected_dy = expected_span
+        dx_ok = abs(dx - expected_dx) <= LAND_SCAN_ANCHOR_MIN_ABS_DX
+        dy_ok = abs(dy - expected_dy) <= LAND_SCAN_ANCHOR_MAX_ABS_DY
+    else:
+        # 当前窗口无法实测时，只判断基本几何关系：左锚点应在右锚点左侧，且高度差不能离谱。
+        expected_dx = expected_dy = None
+        dx_ok = dx <= -LAND_SCAN_ANCHOR_MIN_ABS_DX
+        dy_ok = abs(dy) <= LAND_SCAN_ANCHOR_MAX_ABS_DY
+
+    if dx_ok and dy_ok:
+        return right_anchor, left_anchor
+
+    baseline_text = (
+        f'实测span=({expected_span[0]:.0f},{expected_span[1]:.0f})'
+        if expected_span is not None
+        else '未实测span'
+    )
+    logger.warning(
+        '地块巡查: 左右锚点相对位置异常，丢弃误识别对侧锚点 | '
+        f'右锚点={right_anchor} 左锚点={left_anchor} '
+        f'当前span=({dx:.0f},{dy:.0f}) {baseline_text}'
+    )
+
+    if not allow_fallback:
+        return None, None
+    if prefer_anchor.strip().lower() == 'left' and left_anchor is not None:
+        return None, left_anchor
+    if right_anchor is not None:
+        return right_anchor, None
+    if left_anchor is not None:
+        return None, left_anchor
+    return None, None
 
 
 def _build_roi(
@@ -903,7 +1142,7 @@ def _extract_land_level(text: str) -> str | None:
     token = match.group(1)
     return {
         '未扩建': 'unbuilt', '普通': 'normal',
-        '红': 'red', '黑': 'black', '金': 'gold',
+        '红': 'red', '黑': 'black', '金': 'gold', '紫晶': 'amethyst',
     }.get(token)
 
 

@@ -209,9 +209,6 @@ def _start_web_server(config: AppConfig, window: MainWindow):
             }
             return state_map.get(engine.scheduler.state, "stopped")
 
-        def get_stats():
-            return window.engine.scheduler.get_stats() if window.engine else {}
-
         def get_screenshot():
             """获取实时截图（优先内存，其次磁盘）"""
             engine = window.engine
@@ -250,7 +247,6 @@ def _start_web_server(config: AppConfig, window: MainWindow):
             return None
 
         web.get_bot_state = get_bot_state
-        web.get_stats = get_stats
         web.get_screenshot = get_screenshot
         web.start_bot = window.engine.start
         web.stop_bot = window.engine.stop

@@ -42,14 +42,16 @@ LAND_STATE_META: dict[str, LandStateMeta] = {
     'red': LandStateMeta('red', '红', '#DF5737', '#9D3E27', '#FFF7F3'),
     'black': LandStateMeta('black', '黑', '#5C432A', '#3B2B1C', '#F8F5EF'),
     'gold': LandStateMeta('gold', '金', '#F9CB32', '#B78918', '#3C2B05'),
+    'amethyst': LandStateMeta('amethyst', '紫晶', '#D1A8E8', '#8B5FBF', '#2E174A'),
 }
 
-LAND_STATE_ORDER: list[str] = ['unbuilt', 'normal', 'red', 'black', 'gold']
+LAND_STATE_ORDER: list[str] = ['unbuilt', 'normal', 'red', 'black', 'gold', 'amethyst']
 LAND_STATE_ALIASES: dict[str, str] = {
     '未扩建': 'unbuilt', '普通': 'normal', '红': 'red', '黑': 'black', '金': 'gold',
+    '紫晶': 'amethyst',
 }
 LAND_STATE_RANK: dict[str, int] = {
-    'unbuilt': 0, 'normal': 1, 'red': 2, 'black': 3, 'gold': 4,
+    'unbuilt': 0, 'normal': 1, 'red': 2, 'black': 3, 'gold': 4, 'amethyst': 5,
 }
 LAND_COUNTDOWN_PATTERN = re.compile(r'^(\d{2}):(\d{2}):(\d{2})$')
 

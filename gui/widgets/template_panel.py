@@ -17,6 +17,7 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QFont
 
 from gui.styles import Colors, ghost_button_style
 from core.cv_detector import CVDetector, TEMPLATE_CATEGORIES, DetectResult
+from models.game_data import get_crop_by_name, get_crop_unlock_level
 from loguru import logger
 
 
@@ -1910,6 +1911,74 @@ class CaptureWorker(QThread):
         self._select_rule = select_rule
         self._hwnd = hwnd
 
+    @staticmethod
+    def _validate_hwnd(hwnd: int, keyword: str) -> tuple[bool, str]:
+        """Validate hwnd still exists and matches the configured game title."""
+        try:
+            import ctypes
+
+            if not ctypes.windll.user32.IsWindow(hwnd):
+                return False, ""
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value or ""
+            if not CaptureWorker._title_matches_keyword(title, keyword):
+                return False, title
+            return True, title
+        except Exception as e:
+            logger.debug(f"[模板截图] 校验 hwnd={hwnd} 失败: {e}")
+            return False, ""
+
+    @staticmethod
+    def _title_matches_keyword(title: str, keyword: str) -> bool:
+        """Match the configured title without the broad farm-window fallback."""
+        text = "".join(str(title or "").lower().split())
+        key = "".join(str(keyword or "").lower().split())
+        if not key:
+            return True
+        if key in text:
+            return True
+        if "农场" in key and "农场" in text:
+            wants_qq = "qq" in key
+            return not wants_qq or "qq" in text
+        return False
+
+    def _find_window_without_claim(self):
+        """Find a capture target without registering it as an occupied instance window."""
+        from core.window_manager import WindowManager
+
+        wm = WindowManager()
+        windows = wm._list_all_windows(self._keyword)
+        strict_windows = [
+            w for w in windows
+            if self._title_matches_keyword(str(getattr(w, "title", "") or ""), self._keyword)
+        ]
+        if len(strict_windows) < len(windows):
+            logger.debug(
+                f"[模板截图] 标题严格过滤 {len(windows) - len(strict_windows)} 个窗口，"
+                f"剩余 {len(strict_windows)} 个"
+            )
+        windows = strict_windows
+        claimed = set(WindowManager._all_claimed_hwnds)
+        if claimed:
+            before = len(windows)
+            windows = [
+                w for w in windows
+                if int(getattr(w, "_hWnd", 0) or 0) not in claimed
+            ]
+            if len(windows) < before:
+                logger.info(
+                    f"[模板截图] 过滤掉 {before - len(windows)} 个"
+                    f"已被其他实例占用的窗口，剩余 {len(windows)} 个"
+                )
+        if not windows:
+            return None, wm
+
+        target_index = wm._resolve_select_index(self._select_rule, len(windows))
+        window = wm._create_window_info(windows[target_index])
+        return window, wm
+
     def run(self):
         try:
             from core.screen_capture import ScreenCapture
@@ -1918,22 +1987,25 @@ class CaptureWorker(QThread):
             # 优先使用已绑定的 hwnd 直接截图（多实例精确捕获）
             if self._hwnd:
                 import ctypes, ctypes.wintypes
-                logger.info(f"[模板截图] 使用已绑定 hwnd={self._hwnd} 直接截图")
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(self._hwnd, ctypes.byref(rect))
-                w_rect = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
-                image = sc.capture(w_rect, hwnd=self._hwnd)
-                if image:
-                    self.captured.emit(image)
+                hwnd = int(self._hwnd)
+                valid, title = self._validate_hwnd(hwnd, self._keyword)
+                if not valid:
+                    logger.warning(f"[模板截图] 已绑定 hwnd={hwnd} 无效或标题不匹配，回退关键字查找 | title='{title}'")
+                else:
+                    logger.info(f"[模板截图] 使用当前实例 hwnd={hwnd} 直接截图 | title='{title}'")
+                    rect = ctypes.wintypes.RECT()
+                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    w_rect = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+                    image = sc.capture(w_rect, hwnd=hwnd)
+                    if image:
+                        self.captured.emit(image)
+                        return
+                    self.error.emit(f"窗口 (hwnd={hwnd}) 截图失败")
                     return
-                self.error.emit(f"窗口 (hwnd={self._hwnd}) 截图失败")
-                return
 
-            # 兜底：通过关键字 + 选择规则查找窗口
+            # 兜底：通过关键字 + 选择规则查找窗口，但不登记到多实例占用集合
             logger.info(f"[模板截图] CaptureWorker 使用关键字: '{self._keyword}', 选择规则: '{self._select_rule}'")
-            from core.window_manager import WindowManager
-            wm = WindowManager()
-            window = wm.find_window(self._keyword, select_rule=self._select_rule)
+            window, wm = self._find_window_without_claim()
             if not window:
                 self.error.emit(f"未找到包含 '{self._keyword}' 的窗口")
                 return
@@ -2259,11 +2331,44 @@ class ScreenshotSelector(QWidget):
 
 # ── 模板管理面板 ────────────────────────────────────────────
 
+_LEVEL_SORT_PREFIX_ORDER = {
+    "seed": 0,
+    "shop": 1,
+    "ws": 2,
+    "crop": 3,
+}
+
+
+def _template_crop_name(name: str) -> str | None:
+    """Return crop name for crop-related template names."""
+    prefix, sep, crop_name = name.partition("_")
+    if not sep or prefix not in _LEVEL_SORT_PREFIX_ORDER:
+        return None
+    crop_name = crop_name.strip()
+    return crop_name if crop_name else None
+
+
+def _template_level_sort_key(item: tuple[str, str, float], descending: bool = False) -> tuple:
+    """Sort crop templates by unlock level, leaving non-crop templates last."""
+    name = item[0]
+    prefix = name.split("_", 1)[0]
+    crop_name = _template_crop_name(name)
+    if not crop_name or get_crop_by_name(crop_name) is None:
+        return (1, 0, prefix, name)
+
+    level = get_crop_unlock_level(crop_name)
+    level_key = -level if descending else level
+    prefix_order = _LEVEL_SORT_PREFIX_ORDER.get(prefix, 99)
+    return (0, level_key, crop_name, prefix_order, name)
+
+
 _SORT_MAP = {
     "名称 A-Z": lambda x: x[0],
     "名称 Z-A": lambda x: x[0],
     "最近修改": lambda x: x[2],
     "最早修改": lambda x: x[2],
+    "等级低-高": lambda x: _template_level_sort_key(x),
+    "等级高-低": lambda x: _template_level_sort_key(x, descending=True),
     "按类别":   lambda x: (x[0].split("_")[0], x[0]),
 }
 _FILTER_ALL = "全部类型"

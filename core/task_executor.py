@@ -238,7 +238,9 @@ class TaskExecutor:
                 if self._thread is th:
                     self._thread = None
                 self._running_task = None
-        logger.info("TaskExecutor 已停止")
+            logger.info("TaskExecutor 已停止")
+        else:
+            logger.warning("TaskExecutor 停止超时，当前任务仍在退出中")
         return stopped
 
     def pause(self):
@@ -293,6 +295,9 @@ class TaskExecutor:
 
     def task_call(self, name: str, force_call: bool = True) -> bool:
         """立即触发任务（移植自 copilot：可选强制启用任务）"""
+        if self._stop_event.is_set():
+            logger.debug(f"任务 {name} 触发被忽略：执行器正在停止")
+            return False
         with self._lock:
             task = self._tasks.get(name)
             if not task:
@@ -649,6 +654,12 @@ class TaskExecutor:
                     self._emit_snapshot()
                     continue
 
+                if self._stop_event.is_set():
+                    with self._lock:
+                        self._running_task = None
+                    self._emit_snapshot()
+                    break
+
                 # 执行任务
                 ctx = TaskContext(task_name=task.name, started_at=now)
                 try:
@@ -663,6 +674,12 @@ class TaskExecutor:
                         except Exception:
                             pass
                     result = TaskResult(success=False, error=str(e))
+
+                if self._stop_event.is_set():
+                    with self._lock:
+                        self._running_task = None
+                    self._emit_snapshot()
+                    break
 
                 with self._lock:
                     item = self._tasks.get(task.name)

@@ -2,11 +2,13 @@
 import time
 from loguru import logger
 
+from models.game_data import get_crop_seed_price
 from models.farm_state import ActionType
 from core.cv_detector import CVDetector, DetectResult
 from core.scene_detector import Scene, identify_scene
 from core.strategies.base import BaseStrategy
 from utils.land_grid import get_lands_from_land_anchor
+from utils.warehouse_seed_scan import WarehouseSeedScanResult, scan_warehouse_seed_page
 
 # 尝试导入 OCR 模块（可选依赖）
 try:
@@ -20,6 +22,8 @@ except ImportError:
 # 如果需要为特定作物设置特殊阈值，请在 GUI 的“模板管理”中修改并保存。
 # CROP_THRESHOLDS = { ... } 
 
+PURCHASE_VERIFY_FAILURE_COOLDOWN_SECONDS = 10 * 60
+
 class PlantStrategy(BaseStrategy):
     def __init__(self, cv_detector: CVDetector):
         super().__init__(cv_detector)
@@ -27,9 +31,11 @@ class PlantStrategy(BaseStrategy):
         self.auto_fertilize = False  # 是否自动施肥（播种后）
         self._purchase_count = 0  # 本轮播种购买次数
         self._max_purchase_per_round = 1  # 每轮最多购买次数
+        self._auto_buy_seed_pause_reason = ""
         
         # 翻页按钮位置校验：记录第一次检测到的真实翻页按钮坐标，用于后续防伪
         self._last_page_btn_pos = None
+        self._purchase_verify_failures: dict[str, float] = {}
 
     def _check_and_close_info_page(self, rect: tuple, exclude: list[str] = None) -> bool:
         """检测并关闭干扰页面（个人信息/任务/宠物/图鉴/仓库），返回是否成功关闭
@@ -435,21 +441,41 @@ class PlantStrategy(BaseStrategy):
 
             # 只有开启自动买种时才检查仓库
             if self.auto_buy_seed:
+                if not self._warehouse_seed_template_exists(crop_name):
+                    logger.warning(
+                        f"播种流程：缺少 ws_{crop_name} 仓库模板，无法安全判断库存，跳过自动买种"
+                    )
+                    return all_actions
+
                 # 安全策略：检查是否超过最大购买次数
                 if self._purchase_count >= self._max_purchase_per_round:
                     logger.warning(f"播种流程：已达到最大购买次数 ({self._max_purchase_per_round})，停止购买")
                     return all_actions
 
                 warehouse_result = self.check_warehouse_seeds(rect, crop_name)
+                if self.stopped:
+                    return all_actions
                 if warehouse_result["has_seed"]:
                     # 仓库有种子但弹窗中没有，说明这块地不是真正的空地（已播种/成熟/杂草）
                     # 重新点击空地打开弹窗
-                    logger.info(f"仓库有种子，重新点击空地打开弹窗")
+                    logger.info(
+                        "仓库有种子，重新点击空地打开弹窗 | slot={} raw={} confidence={:.0%}",
+                        warehouse_result.get("slot_index"),
+                        warehouse_result.get("raw_index"),
+                        min(float(warehouse_result.get("confidence") or 0.0), 1.0),
+                    )
                     self.click(lands[0].x, lands[0].y, f"点击空地 ({1}/{total_lands})")
                     for _ in range(5):
                         if self.stopped:
                             return all_actions
                         time.sleep(0.05)
+                elif warehouse_result.get("locked"):
+                    logger.warning(
+                        "播种流程：仓库命中锁定种子格，跳过自动买种 | 作物={} raw={}",
+                        crop_name,
+                        warehouse_result.get("raw_index"),
+                    )
+                    return all_actions
                 else:
                     logger.info(f"仓库中没有 '{crop_name}' 种子，去商店购买 (第{self._purchase_count + 1}次)")
                     buy_result = self._buy_seeds(rect, crop_name, skip_warehouse_check=True)
@@ -460,7 +486,10 @@ class PlantStrategy(BaseStrategy):
                         logger.info(f"播种流程：购买完成，重新尝试播种 (已购买{self._purchase_count}次)")
                         return all_actions + self.plant_all(rect, crop_name)
             else:
-                logger.info("自动买种未开启，跳过种植")
+                if self._auto_buy_seed_pause_reason:
+                    logger.info(self._auto_buy_seed_pause_reason)
+                else:
+                    logger.info("自动买种未开启，跳过种植")
             return all_actions
 
         # 第四步：按住种子，拖拽到每块空地
@@ -618,34 +647,94 @@ class PlantStrategy(BaseStrategy):
         ps.action_executor = self.action_executor
         ps.set_capture_fn(self._capture_fn)
         ps.close_shop(rect)
+        if not self.auto_buy_seed:
+            if self._auto_buy_seed_pause_reason:
+                logger.info(f"{self._auto_buy_seed_pause_reason}，已关闭商店，跳过购买 {crop_name}")
+            else:
+                logger.info(f"自动买种未开启，已关闭商店，跳过购买 {crop_name}")
+            return
         buy_result = self._buy_seeds(rect, crop_name)
         if buy_result:
             actions_done.append(buy_result)
 
 
+    @staticmethod
+    def _empty_warehouse_result() -> dict:
+        return {
+            "has_seed": False,
+            "quantity": 0,
+            "position": None,
+            "slot_index": None,
+            "raw_index": None,
+            "locked": False,
+            "confidence": 0.0,
+            "used_fallback_grid": False,
+        }
+
+    @staticmethod
+    def _warehouse_result_from_scan(scan: WarehouseSeedScanResult) -> dict:
+        best = scan.best
+        if best is None:
+            return {
+                "has_seed": False,
+                "quantity": 0,
+                "position": None,
+                "slot_index": None,
+                "raw_index": None,
+                "locked": bool(scan.has_locked_candidate),
+                "confidence": 0.0,
+                "used_fallback_grid": bool(scan.used_fallback_grid),
+            }
+        return {
+            "has_seed": bool(scan.has_seed),
+            "quantity": -1 if scan.has_seed else 0,
+            "position": best.position,
+            "slot_index": best.available_index,
+            "raw_index": best.raw_index,
+            "locked": bool(best.locked),
+            "confidence": float(best.confidence),
+            "used_fallback_grid": bool(scan.used_fallback_grid),
+        }
+
+    def _swipe_warehouse_seed_list(self) -> bool:
+        """仓库种子页向下翻动一屏。"""
+        if not self.action_executor:
+            logger.warning("检查仓库：action_executor 未初始化，无法滑动")
+            return False
+        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 550
+        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
+        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 350
+        dx, dy = ex - sx, ey - sy
+        logger.debug(f"检查仓库：执行滑动 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
+        return bool(self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6))
+
     def check_warehouse_seeds(self, rect: tuple, crop_name: str) -> dict:
         """检查仓库中指定种子的数量
 
-        流程：点击仓库按钮 → 点击种子页签 → 查找对应种子 → 获取数量
-        返回：{"has_seed": bool, "quantity": int, "position": (x, y)}
+        流程：点击仓库按钮 → 点击种子页签 → 按 3x5 格子扫描 ws_作物模板 → 必要时滑动查找。
+        返回兼容旧字段，并额外包含 slot_index/raw_index/locked/confidence。
         """
         if self.stopped:
-            return {"has_seed": False, "quantity": 0, "position": None}
+            return self._empty_warehouse_result()
+        if not self._warehouse_seed_template_exists(crop_name):
+            logger.warning(f"检查仓库：缺少 ws_{crop_name} 仓库模板，跳过仓库复查")
+            return self._empty_warehouse_result()
 
         cv_img, dets, _ = self.capture(rect)
         if cv_img is None:
-            return {"has_seed": False, "quantity": 0, "position": None}
+            return self._empty_warehouse_result()
 
         # 点击仓库按钮
         warehouse_btn = self.find_by_name(dets, "btn_warehouse")
         if not warehouse_btn:
             logger.warning("检查仓库：未找到仓库按钮")
-            return {"has_seed": False, "quantity": 0, "position": None}
+            return self._empty_warehouse_result()
 
         self.click(warehouse_btn.x, warehouse_btn.y, "打开仓库")
         for _ in range(5):
             if self.stopped:
-                return {"has_seed": False, "quantity": 0, "position": None}
+                return self._empty_warehouse_result()
             time.sleep(0.05)
 
         # 查找种子页签并点击
@@ -653,11 +742,11 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 logger.info("检查仓库：收到停止信号，取消")
                 self._close_warehouse(rect)
-                return {"has_seed": False, "quantity": 0, "position": None}
+                return self._empty_warehouse_result()
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 self._close_warehouse(rect)
-                return {"has_seed": False, "quantity": 0, "position": None}
+                return self._empty_warehouse_result()
 
             zhongzi_btn = self.find_by_name(dets, "btn_zhongzi")
             if zhongzi_btn:
@@ -665,20 +754,20 @@ class PlantStrategy(BaseStrategy):
                 for _ in range(5):
                     if self.stopped:
                         self._close_warehouse(rect)
-                        return {"has_seed": False, "quantity": 0, "position": None}
+                        return self._empty_warehouse_result()
                     time.sleep(0.05)
                 break
             for _ in range(3):
                 if self.stopped:
                     self._close_warehouse(rect)
-                    return {"has_seed": False, "quantity": 0, "position": None}
+                    return self._empty_warehouse_result()
                 time.sleep(0.05)
         else:
             logger.warning("检查仓库：未找到种子页签")
             self._close_warehouse(rect)
-            return {"has_seed": False, "quantity": 0, "position": None}
+            return self._empty_warehouse_result()
 
-        # 在种子页签中查找目标种子（带滑动）
+        # 在种子页签中按格子扫描目标种子（带滑动）
         max_swipe_attempts = 5
         swipe_count = 0
 
@@ -686,52 +775,46 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 logger.info("检查仓库：收到停止信号，取消")
                 self._close_warehouse(rect)
-                return {"has_seed": False, "quantity": 0, "position": None}
+                return self._empty_warehouse_result()
             cv_img, dets, _ = self.capture(rect)
             if cv_img is None:
                 self._close_warehouse(rect)
-                return {"has_seed": False, "quantity": 0, "position": None}
+                return self._empty_warehouse_result()
 
-            # 查找 ws_作物名 模板（使用配置的原始阈值）
-            base_threshold = self.cv_detector.get_template_threshold(f"ws_{crop_name}")
-            seed_det = self.cv_detector.detect_single_template(
-                cv_img, f"ws_{crop_name}", threshold=base_threshold)
-
-            if seed_det:
-                conf = min(seed_det[0].confidence, 1.0)  # 限制最大值用于显示
-                logger.info(f"仓库中找到种子：{crop_name} (置信度：{conf:.0%})")
+            scan = scan_warehouse_seed_page(cv_img, crop_name, self.cv_detector)
+            if scan.candidates:
+                result = self._warehouse_result_from_scan(scan)
+                logger.info(
+                    "检查仓库：找到种子 {} | slot={} raw={} locked={} confidence={:.0%} fallback_grid={}",
+                    crop_name,
+                    result.get("slot_index"),
+                    result.get("raw_index"),
+                    result.get("locked"),
+                    min(float(result.get("confidence") or 0.0), 1.0),
+                    result.get("used_fallback_grid"),
+                )
                 self._close_warehouse(rect)
-                return {
-                    "has_seed": True,
-                    "quantity": -1,
-                    "position": (seed_det[0].x, seed_det[0].y)
-                }
+                return result
+
+            if swipe_count < max_swipe_attempts:
+                logger.info(
+                    "检查仓库：当前页未找到种子，滑动列表 ({}/{}) | slots={} fallback_grid={}",
+                    swipe_count + 1,
+                    max_swipe_attempts,
+                    len(scan.slots),
+                    scan.used_fallback_grid,
+                )
+                if not self._swipe_warehouse_seed_list():
+                    logger.warning("检查仓库：滑动失败！")
+                time.sleep(0.8)
+                swipe_count += 1
             else:
-                # 未找到，尝试滑动列表（方向与商店相反：从下往上滑）
-                if swipe_count < max_swipe_attempts:
-                    logger.info(f"检查仓库：当前页未找到种子，滑动列表 ({swipe_count + 1}/{max_swipe_attempts})")
-                    if self.action_executor:
-                        # 仓库滑动方向：从 Y=550 滑到 Y=350（从下往上）
-                        sx = self.action_executor._window_left + self.action_executor._client_offset_x + 270
-                        sy = self.action_executor._window_top + self.action_executor._client_offset_y + 550
-                        ex = self.action_executor._window_left + self.action_executor._client_offset_x + 270
-                        ey = self.action_executor._window_top + self.action_executor._client_offset_y + 350
-                        dx, dy = ex - sx, ey - sy
-                        logger.debug(f"检查仓库：执行滑动 屏幕起点=({sx}, {sy}), 终点=({ex}, {ey}), 偏移=({dx}, {dy})")
-                        drag_result = self.action_executor.drag(sx, sy, dx, dy, duration=0.3, steps=6)
-                        if not drag_result:
-                            logger.warning("检查仓库：滑动失败！")
-                    else:
-                        logger.warning("检查仓库：action_executor 未初始化，无法滑动")
-                    time.sleep(0.8)
-                    swipe_count += 1
-                else:
-                    logger.warning(f"检查仓库：滑动 {max_swipe_attempts} 次后仍未找到 '{crop_name}'")
-                    self._close_warehouse(rect)
-                    return {"has_seed": False, "quantity": 0, "position": None}
+                logger.warning(f"检查仓库：滑动 {max_swipe_attempts} 次后仍未找到 '{crop_name}'")
+                self._close_warehouse(rect)
+                return self._empty_warehouse_result()
 
         self._close_warehouse(rect)
-        return {"has_seed": False, "quantity": 0, "position": None}
+        return self._empty_warehouse_result()
 
     def _close_warehouse(self, rect: tuple):
         """关闭仓库页面：通过识别关闭按钮点击"""
@@ -751,6 +834,62 @@ class PlantStrategy(BaseStrategy):
             if self.stopped:
                 return
             time.sleep(0.05)
+
+    def _template_exists(self, name: str) -> bool:
+        """检查模板是否已加载，避免把缺模板误判为购买失败。"""
+        if not getattr(self.cv_detector, "_loaded", False):
+            self.cv_detector.load_templates()
+        return name in getattr(self.cv_detector, "_templates_by_name", {})
+
+    def _warehouse_seed_template_exists(self, crop_name: str) -> bool:
+        return self._template_exists(f"ws_{crop_name}")
+
+    def _clear_purchase_verify_failure(self, crop_name: str) -> None:
+        self._purchase_verify_failures.pop(str(crop_name or '').strip(), None)
+
+    def _mark_purchase_verify_failure(self, crop_name: str) -> None:
+        name = str(crop_name or '').strip()
+        if name:
+            self._purchase_verify_failures[name] = time.time()
+
+    def _has_recent_purchase_verify_failure(self, crop_name: str) -> bool:
+        name = str(crop_name or '').strip()
+        if not name:
+            return False
+        failed_at = self._purchase_verify_failures.get(name)
+        if not failed_at:
+            return False
+        elapsed = time.time() - failed_at
+        if elapsed >= PURCHASE_VERIFY_FAILURE_COOLDOWN_SECONDS:
+            self._purchase_verify_failures.pop(name, None)
+            return False
+        remain = int(PURCHASE_VERIFY_FAILURE_COOLDOWN_SECONDS - elapsed)
+        logger.warning(
+            f"购买流程：{name} 上次购买后仓库复查失败，冷却 {remain}s 内跳过自动买种，避免重复误买"
+        )
+        return True
+
+    def _verify_purchase_in_warehouse(self, rect: tuple, crop_name: str) -> bool:
+        """购买后回仓库复查目标种子，防止 OCR/模板误点导致买错还继续播种。"""
+        if self.stopped:
+            return False
+        if not self._warehouse_seed_template_exists(crop_name):
+            logger.warning(f"购买流程：缺少 ws_{crop_name} 仓库模板，无法购买后仓库复查，本轮停止自动买种")
+            return False
+        for _ in range(12):
+            if self.stopped:
+                return False
+            time.sleep(0.1)
+        result = self.check_warehouse_seeds(rect, crop_name)
+        if result.get("has_seed"):
+            logger.info(f"购买流程：购买后仓库复查通过 | 作物={crop_name}")
+            self._clear_purchase_verify_failure(crop_name)
+            return True
+        logger.warning(
+            f"购买流程：购买后未在仓库确认到目标种子 | 作物={crop_name}，本轮停止自动播种"
+        )
+        self._mark_purchase_verify_failure(crop_name)
+        return False
 
     def _retry_plant_after_buy(self, rect, crop_name, actions_done):
         """购买完成后重新点空地播种"""
@@ -802,11 +941,39 @@ class PlantStrategy(BaseStrategy):
         if self.stopped:
             return None
 
+        if not self.auto_buy_seed:
+            if self._auto_buy_seed_pause_reason:
+                logger.info(f"购买流程：{self._auto_buy_seed_pause_reason}，跳过购买 {crop_name}")
+            else:
+                logger.info(f"购买流程：自动买种未开启，跳过购买 {crop_name}")
+            return None
+
+        if not self._warehouse_seed_template_exists(crop_name):
+            logger.warning(f"购买流程：缺少 ws_{crop_name} 仓库模板，无法购买后复查，跳过自动买种")
+            return None
+
+        if self._has_recent_purchase_verify_failure(crop_name):
+            return None
+
         # 安全策略：购买前检查仓库（除非调用方已检查过）
         if not skip_warehouse_check:
             warehouse_result = self.check_warehouse_seeds(rect, crop_name)
             if warehouse_result["has_seed"]:
-                logger.info(f"购买流程：仓库已有 '{crop_name}' 种子，跳过购买")
+                logger.info(
+                    "购买流程：仓库已有 '{}' 种子，跳过购买 | slot={} raw={} confidence={:.0%}",
+                    crop_name,
+                    warehouse_result.get("slot_index"),
+                    warehouse_result.get("raw_index"),
+                    min(float(warehouse_result.get("confidence") or 0.0), 1.0),
+                )
+                self._clear_purchase_verify_failure(crop_name)
+                return None
+            if warehouse_result.get("locked"):
+                logger.warning(
+                    "购买流程：仓库命中锁定种子格，跳过自动购买 | 作物={} raw={}",
+                    crop_name,
+                    warehouse_result.get("raw_index"),
+                )
                 return None
 
         logger.info("购买流程：打开商店")
@@ -818,7 +985,7 @@ class PlantStrategy(BaseStrategy):
         if cv_img is None:
             return None
 
-        shop_btn = self.find_by_name(dets, "btn_shop")
+        shop_btn = self.find_any(dets, ["btn_shop", "main_goto_mall"])
         if not shop_btn:
             logger.warning("购买流程：未找到商店按钮")
             return None
@@ -872,6 +1039,12 @@ class PlantStrategy(BaseStrategy):
             logger.warning(f"购买流程：OCR 初始化失败: {e}")
             return None
         
+        seed_price = get_crop_seed_price(crop_name)
+        if seed_price > 0:
+            logger.info(f"购买流程：启用价格校验 | {crop_name} 种子单价={seed_price}")
+        else:
+            logger.warning(f"购买流程：未找到 {crop_name} 的种子价格元数据，将使用名称 OCR 兜底")
+
         max_swipe_attempts = 5
         swipe_count = 0
         
@@ -886,8 +1059,24 @@ class PlantStrategy(BaseStrategy):
                 swipe_count += 1
                 continue
 
-            # 使用 OCR 查找目标作物
-            match = shop_ocr.find_item(cv_img, crop_name, min_similarity=0.70)
+            # 优先按 goods.json 单价匹配，避免名称 OCR 误识别后买到低级种子
+            match = None
+            if seed_price > 0:
+                price_match = shop_ocr.find_item_by_price(cv_img, seed_price, target_name=crop_name)
+                if price_match.target:
+                    match = price_match
+                    logger.info(
+                        f"购买流程：价格匹配成功 | {crop_name} 单价={seed_price} "
+                        f"识别={price_match.target.name}/{price_match.target.raw_name}"
+                    )
+                elif price_match.best:
+                    logger.debug(
+                        f"购买流程：价格未精确命中 | target={seed_price} "
+                        f"best={price_match.best.price}({price_match.best.name})"
+                    )
+
+            if match is None:
+                match = shop_ocr.find_item(cv_img, crop_name, min_similarity=0.78)
             
             if match.target:
                 # 找到了
@@ -1034,6 +1223,8 @@ class PlantStrategy(BaseStrategy):
                             break
                         time.sleep(0.05)
                     self._close_shop(rect)
+                    if not self._verify_purchase_in_warehouse(rect, crop_name):
+                        return None
                     return f"购买{crop_name}"
 
             elif scene == Scene.POPUP:
@@ -1074,13 +1265,13 @@ class PlantStrategy(BaseStrategy):
         返回 DetectResult 兼容格式列表。
         """
         anchors = self.cv_detector.detect_targeted(
-            cv_img, ['btn_land_right', 'btn_land_left'],
+            cv_img, ['btn_land_right', 'btn_land_right_2', 'btn_land_left'],
             scales=[1.0, 0.9, 1.1],
         )
         right_anchor = None
         left_anchor = None
         for det in anchors:
-            if det.name == 'btn_land_right':
+            if det.name in ('btn_land_right', 'btn_land_right_2'):
                 right_anchor = (int(det.x), int(det.y))
             elif det.name == 'btn_land_left':
                 left_anchor = (int(det.x), int(det.y))

@@ -10,6 +10,52 @@ import math
 import os
 
 
+def _parse_int(value, default: int = 0) -> int:
+    """Safely parse an integer-like value."""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_unlock_level_from_goods_conds(conds) -> int:
+    """Extract unlock level from goods.json conds."""
+    if not isinstance(conds, list):
+        return 0
+    for cond in conds:
+        if not isinstance(cond, dict):
+            continue
+        if _parse_int(cond.get('type')) == 1:
+            return _parse_int(cond.get('param'))
+    return 0
+
+
+def _load_goods_seed_meta() -> dict[int, dict[str, int]]:
+    """Load seed price/unlock metadata from configs/goods.json."""
+    json_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'goods.json')
+    if not os.path.exists(json_path):
+        return {}
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    meta: dict[int, dict[str, int]] = {}
+    if not isinstance(data, list):
+        return meta
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        seed_id = _parse_int(item.get('item_id'))
+        if seed_id <= 0:
+            continue
+        meta[seed_id] = {
+            'price': _parse_int(item.get('price')),
+            'unlock_level': _extract_unlock_level_from_goods_conds(item.get('conds')),
+        }
+    return meta
+
+
 def _parse_grow_phases_seconds(grow_phases: str) -> list[int]:
     """Parse `种子:30;发芽:30;成熟:0;` into [30, 30, 0]."""
     phases: list[int] = []
@@ -50,6 +96,8 @@ def _calc_grow_time_seconds(grow_phases: str, seasons: int) -> int:
 
 # 作物 seasons 查询表（name → seasons）
 _CROP_SEASONS: dict[str, int] = {}
+_CROP_SEED_PRICES: dict[str, int] = {}
+_CROP_SEED_UNLOCK_LEVELS: dict[str, int] = {}
 
 
 def _load_crops_from_plant_json() -> list[tuple]:
@@ -58,7 +106,7 @@ def _load_crops_from_plant_json() -> list[tuple]:
     Tuple format:
       (name, seed_id, land_level_need, grow_time_seconds, exp, fruit_count)
     """
-    global _CROP_SEASONS
+    global _CROP_SEASONS, _CROP_SEED_PRICES, _CROP_SEED_UNLOCK_LEVELS
     json_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'plants.json')
 
     if not os.path.exists(json_path):
@@ -67,8 +115,11 @@ def _load_crops_from_plant_json() -> list[tuple]:
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
+    goods_meta = _load_goods_seed_meta()
     crops: list[tuple] = []
     seasons_map: dict[str, int] = {}
+    price_map: dict[str, int] = {}
+    unlock_map: dict[str, int] = {}
     for item in data:
         name = str(item.get('name', '')).strip()
         if not name:
@@ -76,6 +127,10 @@ def _load_crops_from_plant_json() -> list[tuple]:
 
         seed_id = int(item.get('seed_id', 0))
         land_level_need = int(item.get('land_level_need', 0))
+        seed_meta = goods_meta.get(seed_id, {})
+        goods_unlock_level = int(seed_meta.get('unlock_level', 0) or 0)
+        if goods_unlock_level > 0:
+            land_level_need = goods_unlock_level
         seasons = int(item.get('seasons', 1))
         grow_phases = str(item.get('grow_phases', ''))
         grow_time = _calc_grow_time_seconds(grow_phases, seasons)
@@ -89,9 +144,13 @@ def _load_crops_from_plant_json() -> list[tuple]:
 
         crops.append((name, seed_id, land_level_need, grow_time, exp, fruit_count))
         seasons_map[name] = seasons
+        price_map[name] = int(seed_meta.get('price', 0) or 0)
+        unlock_map[name] = land_level_need
 
     crops.sort(key=lambda c: (c[2], c[1], c[0]))
     _CROP_SEASONS = seasons_map
+    _CROP_SEED_PRICES = price_map
+    _CROP_SEED_UNLOCK_LEVELS = unlock_map
     return crops
 
 
@@ -173,6 +232,20 @@ def get_crop_display_info() -> list[str]:
 def get_crop_seasons(name: str) -> int:
     """获取作物的季节数（1=单季, 2=双季）。"""
     return _CROP_SEASONS.get(name, 1)
+
+
+def get_crop_seed_price(name: str) -> int:
+    """获取作物种子单价；无 goods.json 元数据时返回 0。"""
+    return _CROP_SEED_PRICES.get(str(name or '').strip(), 0)
+
+
+def get_crop_unlock_level(name: str) -> int:
+    """获取作物解锁等级，优先使用 goods.json 元数据。"""
+    crop_name = str(name or '').strip()
+    if crop_name in _CROP_SEED_UNLOCK_LEVELS:
+        return _CROP_SEED_UNLOCK_LEVELS[crop_name]
+    crop = get_crop_by_name(crop_name)
+    return int(crop[2]) if crop else 0
 
 
 def parse_exp_string(exp_str: str) -> tuple[float, float]:

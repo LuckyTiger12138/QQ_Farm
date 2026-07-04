@@ -56,11 +56,14 @@ DEFAULT_TASK_TITLES = {
     "profile": "个人信息",
     "friend": "好友巡查",
     "land_scan": "地块巡查",
+    "timed_harvest": "定时收获",
     "gift": "礼品领取",
     "sell": "仓库出售",
     "task": "任务奖励",
     "fertilize": "定时施肥",
     "share": "每日分享",
+    "repair": "异常修复",
+    "restart": "窗口重启",
     "捣乱": "好友捣乱",
 }
 

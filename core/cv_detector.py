@@ -5,7 +5,11 @@ import cv2
 import numpy as np
 from dataclasses import dataclass, field
 from loguru import logger
-from PIL import Image
+from PIL import Image, ImageSequence
+
+
+SUPPORTED_TEMPLATE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.gif')
+MAX_GIF_TEMPLATE_FRAMES = 16
 
 
 @dataclass
@@ -77,7 +81,7 @@ class CVDetector:
     def __init__(self, templates_dir: str = "templates"):
         self._templates_dir = templates_dir
         self._templates: dict[str, list[dict]] = {}  # category -> [{name, image, mask}]
-        self._templates_by_name: dict[str, dict] = {}  # name -> template dict（快速查找）
+        self._templates_by_name: dict[str, list[dict]] = {}  # name -> template variants（快速查找）
         self._loaded = False
         self._disabled_names: set[str] = set()
         self._disabled_file = os.path.join(templates_dir, "disabled.json")
@@ -127,7 +131,7 @@ class CVDetector:
         """从 thresholds.json 加载单模板阈值和类别阈值覆盖"""
         if os.path.exists(self._thresholds_file):
             try:
-                with open(self._thresholds_file, "r", encoding="utf-8") as f:
+                with open(self._thresholds_file, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                 self._thresholds = {k: float(v) for k, v in data.get("thresholds", {}).items()}
                 self._category_overrides = {k: float(v) for k, v in data.get("category_overrides", {}).items()}
@@ -198,7 +202,7 @@ class CVDetector:
         if not os.path.exists(self._templates_dir):
             return names
         for filename in os.listdir(self._templates_dir):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            if filename.lower().endswith(SUPPORTED_TEMPLATE_EXTENSIONS):
                 names.append(os.path.splitext(filename)[0])
         return sorted(names)
 
@@ -212,9 +216,10 @@ class CVDetector:
             return
 
         count = 0
+        logical_count = 0
         skipped = 0
         for filename in os.listdir(self._templates_dir):
-            if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            if not filename.lower().endswith(SUPPORTED_TEMPLATE_EXTENSIONS):
                 continue
 
             name = os.path.splitext(filename)[0]
@@ -225,50 +230,85 @@ class CVDetector:
                 continue
 
             filepath = os.path.join(self._templates_dir, filename)
-            # cv2.imread 不支持中文路径，用 numpy 中转
-            template = cv2.imdecode(
-                np.fromfile(filepath, dtype=np.uint8), cv2.IMREAD_UNCHANGED
-            )
-            if template is None:
+            templates = self._load_template_variants(filepath)
+            if not templates:
                 logger.warning(f"无法读取模板: {filename}")
                 continue
+            logical_count += 1
 
             # 从文件名前缀判断类别: btn_harvest.png -> button
             prefix = name.split("_")[0]
             category = TEMPLATE_CATEGORIES.get(prefix, "unknown")
 
-            # 处理带alpha通道的模板（用于mask匹配）
-            mask = None
-            if template.ndim == 3 and template.shape[2] == 4:
-                alpha = template[:, :, 3]
-                if not np.all(alpha == 255):
-                    mask = alpha
-                template = template[:, :, :3]
-            
-            # 处理灰度图：预处理并缓存
-            if template.ndim == 2:
-                template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
-            gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
             if category not in self._templates:
                 self._templates[category] = []
 
-            tpl_data = {
-                "name": name,
-                "image": template,
-                "gray": gray,
-                "mask": mask,
-                "category": category,
-            }
-            self._templates[category].append(tpl_data)
-            self._templates_by_name[name] = tpl_data  # 快速查找
-            count += 1
+            for frame_index, template in enumerate(templates):
+                # 处理带 alpha 通道的模板（用于 mask 匹配）
+                mask = None
+                if template.ndim == 3 and template.shape[2] == 4:
+                    alpha = template[:, :, 3]
+                    if not np.all(alpha == 255):
+                        mask = alpha
+                    template = template[:, :, :3]
+
+                # 处理灰度图：预处理并缓存
+                if template.ndim == 2:
+                    template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+                gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+
+                tpl_data = {
+                    "name": name,
+                    "image": template,
+                    "gray": gray,
+                    "mask": mask,
+                    "category": category,
+                    "frame_index": frame_index,
+                }
+                self._templates[category].append(tpl_data)
+                self._templates_by_name.setdefault(name, []).append(tpl_data)
+                count += 1
 
         self._loaded = True
-        msg = f"已加载 {count} 个模板，分 {len(self._templates)} 个类别"
+        msg = f"已加载 {logical_count} 个模板"
+        if count != logical_count:
+            msg += f"（{count} 个匹配变体）"
+        msg += f"，分 {len(self._templates)} 个类别"
         if skipped:
             msg += f"（跳过 {skipped} 个已禁用）"
         logger.info(msg)
+
+    def _load_template_variants(self, filepath: str) -> list[np.ndarray]:
+        """读取模板文件；GIF 会拆分为去重后的少量帧。"""
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext == '.gif':
+            return self._load_gif_template_variants(filepath)
+
+        # cv2.imread 不支持中文路径，用 numpy 中转
+        template = cv2.imdecode(
+            np.fromfile(filepath, dtype=np.uint8), cv2.IMREAD_UNCHANGED
+        )
+        return [template] if template is not None else []
+
+    def _load_gif_template_variants(self, filepath: str) -> list[np.ndarray]:
+        """读取 GIF 模板的代表帧，保留 alpha 作为 mask。"""
+        variants: list[np.ndarray] = []
+        seen: set[bytes] = set()
+        try:
+            with Image.open(filepath) as image:
+                for frame in ImageSequence.Iterator(image):
+                    if len(variants) >= MAX_GIF_TEMPLATE_FRAMES:
+                        break
+                    rgba = np.array(frame.convert("RGBA"))
+                    bgra = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+                    key = bgra.tobytes()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    variants.append(bgra)
+        except Exception as e:
+            logger.warning(f"读取 GIF 模板失败: {os.path.basename(filepath)} | {e}")
+        return variants
 
     def detect_all(self, screenshot: np.ndarray,
                    threshold: float = 0.8) -> list[DetectResult]:
@@ -335,23 +375,20 @@ class CVDetector:
             self.load_templates()
 
         gray_screen = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
+        results: list[DetectResult] = []
+        for tpl in self._templates_by_name.get(name, []):
+            results.extend(self._match_template(
+                screenshot, gray_screen, tpl, threshold
+            ))
 
-        for category, templates in self._templates.items():
-            for tpl in templates:
-                if tpl["name"] == name:
-                    results = self._match_template(
-                        screenshot, gray_screen, tpl, threshold
-                    )
-                    results = [r for r in results
-                               if not (r.confidence != r.confidence or
-                                       r.confidence == float('inf') or
-                                       r.confidence == float('-inf') or
-                                       r.confidence > 1.0)]
-                    results = self._nms(results, iou_threshold=0.5)
-
-                    results.sort(key=lambda r: r.confidence, reverse=True)
-                    return results
-        return []
+        results = [r for r in results
+                   if not (r.confidence != r.confidence or
+                           r.confidence == float('inf') or
+                           r.confidence == float('-inf') or
+                           r.confidence > 1.0)]
+        results = self._nms(results, iou_threshold=0.5)
+        results.sort(key=lambda r: r.confidence, reverse=True)
+        return results
 
     def detect_quick(self, screenshot: np.ndarray,
                      name: str,
@@ -438,37 +475,38 @@ class CVDetector:
         gray_screen = cv2.cvtColor(screenshot, cv2.COLOR_BGR2GRAY)
         
         for name in name_set:
-            tpl = self._templates_by_name.get(name)
-            if tpl is None:
+            template_variants = self._templates_by_name.get(name, [])
+            if not template_variants:
                 continue
-            
+
             # 获取阈值
             thresh = (thresholds.get(name, 0.8) if thresholds
                       else self.get_template_threshold(name))
-            
-            # 检查是否有 ROI
-            roi = roi_map.get(name) if roi_map else None
-            if roi is not None:
-                # ROI 匹配：在局部区域搜索，再将命中坐标映射回全图
-                x1, y1, x2, y2 = [int(v) for v in roi]
-                sh, sw = screenshot.shape[:2]
-                x1 = max(0, min(x1, sw - 1))
-                y1 = max(0, min(y1, sh - 1))
-                x2 = max(x1 + 1, min(x2, sw))
-                y2 = max(y1 + 1, min(y2, sh))
-                if x2 > x1 and y2 > y1:
-                    roi_img = screenshot[y1:y2, x1:x2]
-                    roi_gray = gray_screen[y1:y2, x1:x2]
-                    tpl_matches = self._match_template_with_scales_roi(
-                        roi_img, roi_gray, tpl, thresh, fast_scales, offset=(x1, y1)
+
+            for tpl in template_variants:
+                # 检查是否有 ROI
+                roi = roi_map.get(name) if roi_map else None
+                if roi is not None:
+                    # ROI 匹配：在局部区域搜索，再将命中坐标映射回全图
+                    x1, y1, x2, y2 = [int(v) for v in roi]
+                    sh, sw = screenshot.shape[:2]
+                    x1 = max(0, min(x1, sw - 1))
+                    y1 = max(0, min(y1, sh - 1))
+                    x2 = max(x1 + 1, min(x2, sw))
+                    y2 = max(y1 + 1, min(y2, sh))
+                    if x2 > x1 and y2 > y1:
+                        roi_img = screenshot[y1:y2, x1:x2]
+                        roi_gray = gray_screen[y1:y2, x1:x2]
+                        tpl_matches = self._match_template_with_scales_roi(
+                            roi_img, roi_gray, tpl, thresh, fast_scales, offset=(x1, y1)
+                        )
+                        results.extend(tpl_matches)
+                else:
+                    # 全图匹配
+                    tpl_matches = self._match_template_with_scales(
+                        screenshot, tpl, thresh, fast_scales
                     )
                     results.extend(tpl_matches)
-            else:
-                # 全图匹配
-                tpl_matches = self._match_template_with_scales(
-                    screenshot, tpl, thresh, fast_scales
-                )
-                results.extend(tpl_matches)
 
         # 过滤异常置信度
         results = [r for r in results
@@ -566,11 +604,8 @@ class CVDetector:
 
     def _find_template(self, name: str) -> dict | None:
         """按名称查找模板数据"""
-        for templates in self._templates.values():
-            for tpl in templates:
-                if tpl["name"] == name:
-                    return tpl
-        return None
+        variants = self._templates_by_name.get(name, [])
+        return variants[0] if variants else None
 
     def _match_template_with_scales(self, screenshot: np.ndarray,
                                      tpl: dict,

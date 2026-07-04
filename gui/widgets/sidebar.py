@@ -89,16 +89,12 @@ class Sidebar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._buttons: list[NavItem] = []
+        self._material_enabled = False
         self.setFixedWidth(170)
         self._init_ui()
 
     def _init_ui(self):
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: {Colors.SIDEBAR_BG};
-                border-right: 1px solid {Colors.BORDER};
-            }}
-        """)
+        self._apply_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 20, 8, 8)
@@ -112,6 +108,19 @@ class Sidebar(QWidget):
 
         layout.addStretch()
         self._buttons[0].set_selected(True)
+
+    def _apply_style(self):
+        bg = "rgba(245, 245, 247, 150)" if self._material_enabled else Colors.SIDEBAR_BG
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {bg};
+                border-right: 1px solid {Colors.BORDER};
+            }}
+        """)
+
+    def set_material_enabled(self, enabled: bool):
+        self._material_enabled = bool(enabled)
+        self._apply_style()
 
     def _on_nav(self, key: str):
         for btn in self._buttons:

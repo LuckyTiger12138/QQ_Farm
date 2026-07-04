@@ -35,13 +35,17 @@
     "seed_菠菜": 0.8,
     "ws_猕猴桃": 0.8,
     "btn_qqsvip": 0.8,
-    "btn_land_left": 0.9,
-    "btn_land_right": 0.9,
+    "btn_land_left": 0.82,
+    "btn_land_right": 0.82,
     "btn_xc_close": 0.9,
     "seed_杨桃": 0.83,
     "ui_goto_friend": 0.73,
     "icon_mature": 0.65,
-    "icon_caiji": 0.65
+    "icon_caiji": 0.65,
+    "btn_land_right_2": 0.82,
+    "btn_warehouse": 0.73,
+    "btn_shop": 0.74,
+    "seed_金银花": 0.85
   },
   "category_overrides": {
     "button": 0.8,

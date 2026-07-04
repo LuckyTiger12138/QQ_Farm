@@ -8,8 +8,9 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFrame, QStackedWidget,
     QMessageBox, QInputDialog,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QPixmap, QImage
+from qfluentwidgets import Theme, setTheme
 from PIL import Image
 
 from loguru import logger
@@ -29,6 +30,7 @@ from gui.widgets.land_detail_panel import LandDetailPanel
 from gui.widgets.task_panel import TaskPanel
 from gui.widgets.feature_panel import FeaturePanel
 from gui.widgets.global_settings_panel import GlobalSettingsPanel
+from gui.acrylic import disable_blur, enable_blur
 from utils.logger import get_log_signal
 
 
@@ -38,6 +40,13 @@ class MainWindow(QMainWindow):
         self.config = config
         self.instance_manager = instance_manager
         self._first_show = True
+        self._app_settings = QSettings("QQFarmVisionBot", "QQFarmVisionBot")
+        self._global_theme_mode = self._load_theme_mode()
+        self._global_mica_enabled = self._load_mica_enabled()
+        self._central: QWidget | None = None
+        self._content_area: QWidget | None = None
+        self._instance_sidebar: InstanceSidebar | None = None
+        self._apply_material_backing(self._global_mica_enabled)
         
         # 跨实例通讯消息总线（所有引擎共享）
         self._cross_bus = CrossInstanceBus()
@@ -60,6 +69,8 @@ class MainWindow(QMainWindow):
         
         self._init_ui()
         self._connect_signals()
+        self._global_panel.set_values(self._global_theme_mode, self._global_mica_enabled)
+        self._apply_global_settings(self._global_theme_mode, self._global_mica_enabled, persist=False)
 
     def _init_ui(self):
         self.setWindowTitle("QQ Farm Vision Bot - 多实例版 | F11老板键")
@@ -69,12 +80,10 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(GLASS_STYLESHEET)
 
         central = QWidget()
+        central.setObjectName("mainCentral")
+        self._central = central
         self.setCentralWidget(central)
-        central.setStyleSheet(f"""
-            QWidget {{
-                background-color: {Colors.WINDOW_BG};
-            }}
-        """)
+        self._apply_central_background()
 
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
@@ -92,6 +101,7 @@ class MainWindow(QMainWindow):
 
         # ── 内容区 ──
         content = QWidget()
+        self._content_area = content
         content.setStyleSheet("background: transparent; border: none;")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(16, 12, 16, 12)
@@ -142,8 +152,9 @@ class MainWindow(QMainWindow):
 
         # 状态面板定时刷新（每秒）
         self._status_refresh_timer = QTimer(self)
-        self._status_refresh_timer.setInterval(1000)
+        self._status_refresh_timer.setInterval(500)
         self._status_refresh_timer.timeout.connect(self._refresh_status)
+        self._status_refresh_timer.start()
 
         content_layout.addWidget(self._stack)
         body.addWidget(content, 1)
@@ -269,13 +280,98 @@ class MainWindow(QMainWindow):
         engine_id = self.engine.instance_id
         self.engine.screenshot_updated.connect(lambda img, iid=engine_id: self._on_screenshot_updated(iid, img))
         self.engine.detection_result.connect(lambda det, iid=engine_id: self._on_screenshot_updated(iid, det))
-        self.engine.state_changed.connect(self._on_state_changed)
-        self.engine.stats_updated.connect(self._status_panel.update_stats)
-        self.engine.stats_updated.connect(self._on_stats_for_task_panel)
+        self.engine.state_changed.connect(lambda state, iid=engine_id: self._on_engine_state_changed(iid, state))
+        self.engine.stats_updated.connect(lambda stats, iid=engine_id: self._on_engine_stats_updated(iid, stats))
         get_log_signal().new_log.connect(self._log_panel.append_log)
         self._settings_panel.config_changed.connect(self._on_config_changed)
         self._settings_panel.web_server_toggled.connect(self._on_web_server_toggled)
+        self._global_panel.apply_requested.connect(self._on_global_settings_apply)
+        self._global_panel.check_update_requested.connect(self._on_global_check_update_requested)
         self.engine.config_updated.connect(lambda cfg: self._on_config_updated_filtered(self._current_instance_id, cfg))
+
+    def _load_theme_mode(self) -> str:
+        value = str(self._app_settings.value("global/theme_mode", "auto") or "auto")
+        return value if value in {"auto", "light", "dark"} else "auto"
+
+    def _load_mica_enabled(self) -> bool:
+        value = self._app_settings.value("global/mica_enabled", False)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _on_global_settings_apply(self, theme_mode: str, mica_enabled: bool):
+        self._apply_global_settings(theme_mode, mica_enabled, persist=True)
+
+    def _on_global_check_update_requested(self):
+        if self.engine:
+            self.engine._check_update_async()
+
+    def _apply_global_settings(self, theme_mode: str, mica_enabled: bool, *, persist: bool):
+        theme = str(theme_mode or "auto")
+        if theme not in {"auto", "light", "dark"}:
+            theme = "auto"
+        self._global_theme_mode = theme
+        self._global_mica_enabled = bool(mica_enabled)
+
+        if theme == "dark":
+            setTheme(Theme.DARK)
+        elif theme == "light":
+            setTheme(Theme.LIGHT)
+        else:
+            setTheme(Theme.AUTO)
+
+        if persist:
+            self._app_settings.setValue("global/theme_mode", self._global_theme_mode)
+            self._app_settings.setValue("global/mica_enabled", self._global_mica_enabled)
+            self._app_settings.sync()
+
+        self._apply_central_background()
+        self._apply_sidebar_material()
+        self._apply_material_backing(self._global_mica_enabled)
+        self._apply_window_material()
+
+    def _apply_material_backing(self, enabled: bool):
+        enabled = bool(enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, enabled)
+        self.setAutoFillBackground(not enabled)
+        if self._central:
+            self._central.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
+            self._central.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, enabled)
+            self._central.setAutoFillBackground(False)
+        if self._content_area:
+            self._content_area.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
+            self._content_area.setAutoFillBackground(False)
+
+    def _apply_central_background(self):
+        if not self._central:
+            return
+        if self._global_mica_enabled:
+            bg = "rgba(245, 245, 247, 96)"
+        else:
+            bg = Colors.WINDOW_BG
+        self._central.setStyleSheet(f"""
+            QWidget#mainCentral {{
+                background-color: {bg};
+            }}
+        """)
+
+    def _apply_sidebar_material(self):
+        if hasattr(self, "_sidebar") and self._sidebar:
+            self._sidebar.set_material_enabled(self._global_mica_enabled)
+        if self._instance_sidebar:
+            self._instance_sidebar.set_material_enabled(self._global_mica_enabled)
+
+    def _apply_window_material(self):
+        if not self.winId():
+            return
+        hwnd = int(self.winId())
+        if self._global_mica_enabled:
+            ok = enable_blur(hwnd)
+            if not ok:
+                logger.warning("云母效果启用失败，已使用半透明背景兜底")
+        else:
+            disable_blur(hwnd)
 
     # ── 导航切换 ────────────────────────────────────────────
 
@@ -283,6 +379,8 @@ class MainWindow(QMainWindow):
         page_map = {"status": 0, "land": 1, "task": 2, "feature": 3, "settings": 4, "template": 5, "global": 6, "logs": 7}
         idx = page_map.get(key, 0)
         self._stack.setCurrentIndex(idx)
+        if key == "status":
+            self._refresh_status()
 
     # ── 截图更新 ────────────────────────────────────────────
 
@@ -315,17 +413,17 @@ class MainWindow(QMainWindow):
             self._btn_start.setEnabled(False)
             self._btn_pause.setEnabled(True)
             self._btn_stop.setEnabled(True)
-            self._status_refresh_timer.start()
+            self._refresh_status()
 
     def _on_pause(self):
         if self._btn_pause.text() == "暂停":
             self.engine.pause()
             self._btn_pause.setText("恢复")
-            self._status_refresh_timer.stop()
+            self._refresh_status()
         else:
             self.engine.resume()
             self._btn_pause.setText("暂停")
-            self._status_refresh_timer.start()
+            self._refresh_status()
 
     def _on_stop(self):
         self.engine.stop()
@@ -333,7 +431,7 @@ class MainWindow(QMainWindow):
         self._btn_pause.setEnabled(False)
         self._btn_stop.setEnabled(False)
         self._btn_pause.setText("暂停")
-        self._status_refresh_timer.stop()
+        self._refresh_status()
 
     def _on_state_changed(self, state: str):
         """Bot 状态变化时更新按钮"""
@@ -353,10 +451,24 @@ class MainWindow(QMainWindow):
         if self.instance_manager and self._current_instance_id:
             self._on_instance_state_changed(self._current_instance_id, state)
 
+    def _on_engine_state_changed(self, instance_id: str, state: str):
+        """按当前实例过滤 Bot 状态，避免后台实例覆盖状态总览。"""
+        if instance_id == self._current_instance_id:
+            self._on_state_changed(state)
+        elif self.instance_manager:
+            self._on_instance_state_changed(instance_id, state)
+
+    def _on_engine_stats_updated(self, instance_id: str, stats: dict):
+        """按当前实例过滤运行状态快照，确保状态总览显示活动实例数据。"""
+        if instance_id != self._current_instance_id:
+            return
+        self._status_panel.update_stats(stats)
+        self._on_stats_for_task_panel(stats)
+
     def _refresh_status(self):
         """定时刷新状态面板数据"""
         idx = self._stack.currentIndex()
-        if idx == 0:
+        if idx == 0 and self.engine:
             # scheduler.get_stats() 已包含 runtime_metrics（由执行器快照回调实时更新）
             self._status_panel.update_stats(self.engine.scheduler.get_stats())
         # 始终刷新任务调度面板的 next_run（不限制当前页面）
@@ -364,7 +476,7 @@ class MainWindow(QMainWindow):
             self._task_panel.refresh_snapshots(self.engine._task_snapshots)
 
     def _on_stats_for_task_panel(self, _stats):
-        """stats_updated 信号触发时同步刷新任务调度面板"""
+        """运行状态快照更新时同步刷新任务调度面板"""
         if self.engine and self.engine._task_snapshots:
             self._task_panel.refresh_snapshots(self.engine._task_snapshots)
 
@@ -375,8 +487,14 @@ class MainWindow(QMainWindow):
 
     def _on_config_updated(self, config: AppConfig):
         """引擎配置更新时同步 GUI（如地块巡查完成、Web 端修改配置）"""
-        if config != self.config:
+        same_object = config is self.config
+        same_path = (
+            str(getattr(config, '_config_path', '') or '')
+            and str(getattr(config, '_config_path', '') or '') == str(getattr(self.config, '_config_path', '') or '')
+        )
+        if not same_object and not same_path:
             return
+        self.config = config
         self._settings_panel.config = config
         self._settings_panel._loading += 1
         self._settings_panel._load_config()
@@ -436,6 +554,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        QTimer.singleShot(50, self._apply_window_material)
         if self._first_show:
             self._first_show = False
             QTimer.singleShot(300, self._show_opensource_notice)
@@ -575,9 +694,53 @@ class MainWindow(QMainWindow):
 
     def _get_active_window_hwnd(self) -> int | None:
         """获取当前活跃实例运行中已绑定的窗口句柄"""
+        try:
+            self._refresh_claimed_hwnds()
+        except Exception as e:
+            logger.debug(f"[MainWindow] 刷新窗口占用集合失败: {e}")
+
+        other_claimed: set[int] = set()
+        for instance_id, other_engine in self._engines.items():
+            if instance_id == self._current_instance_id or not other_engine.window_manager:
+                continue
+            other_hwnd = (
+                other_engine.window_manager.get_window_handle()
+                or getattr(other_engine.window_manager, "_pinned_hwnd", None)
+            )
+            if other_hwnd:
+                other_claimed.add(int(other_hwnd))
+
         engine = self._engines.get(self._current_instance_id)
         if engine and engine.window_manager:
-            return engine.window_manager.get_window_handle()
+            hwnd = engine.window_manager.get_window_handle()
+            if not hwnd:
+                hwnd = getattr(engine.window_manager, "_pinned_hwnd", None)
+            if hwnd:
+                if int(hwnd) in other_claimed:
+                    logger.warning(
+                        f"[MainWindow] 当前实例 '{self._current_instance_id}' 的 hwnd={hwnd} "
+                        "已被其他实例占用，模板截图将回退按规则查找"
+                    )
+                    return None
+                logger.debug(f"[MainWindow] 当前实例 '{self._current_instance_id}' 使用已绑定 hwnd={hwnd}")
+                return int(hwnd)
+
+        try:
+            if self.instance_manager:
+                session = self.instance_manager.get_session(self._current_instance_id)
+                if session and session.config:
+                    hwnd = int(getattr(session.config.planting, "last_hwnd", 0) or 0)
+                    if hwnd > 0:
+                        if hwnd in other_claimed:
+                            logger.warning(
+                                f"[MainWindow] 当前实例 '{self._current_instance_id}' 的持久化 hwnd={hwnd} "
+                                "已被其他实例占用，模板截图将回退按规则查找"
+                            )
+                            return None
+                        logger.debug(f"[MainWindow] 当前实例 '{self._current_instance_id}' 使用持久化 hwnd={hwnd}")
+                        return hwnd
+        except Exception as e:
+            logger.warning(f"[MainWindow] 获取持久化窗口句柄失败: {e}")
         return None
 
     def _refresh_claimed_hwnds(self):
@@ -628,9 +791,8 @@ class MainWindow(QMainWindow):
             new_engine.log_message.connect(self._log_panel.append_log)
             new_engine.screenshot_updated.connect(lambda img, iid=instance_id: self._on_screenshot_updated(iid, img))
             new_engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
-            new_engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
-            new_engine.stats_updated.connect(lambda stats, iid=instance_id: self._status_panel.update_stats(stats) if iid == self._current_instance_id else None)
-            new_engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_stats_for_task_panel(stats) if iid == self._current_instance_id else None)
+            new_engine.state_changed.connect(lambda state, iid=instance_id: self._on_engine_state_changed(iid, state))
+            new_engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_engine_stats_updated(iid, stats))
             new_engine.config_updated.connect(lambda cfg, iid=instance_id: self._on_config_updated_filtered(iid, cfg))
             logger.info(f"已创建实例 {instance_id} 的 BotEngine，window_select_rule={session.config.window_select_rule}")
         else:
@@ -696,6 +858,7 @@ class MainWindow(QMainWindow):
             self._btn_pause.setText("暂停")
 
         logger.info(f"已切换到实例: {session.name} ({instance_id})")
+        self._refresh_status()
 
     def _get_or_create_engine(self, session: InstanceSession) -> BotEngine:
         """获取或创建实例的 BotEngine"""
@@ -707,9 +870,8 @@ class MainWindow(QMainWindow):
             engine.log_message.connect(self._log_panel.append_log)
             engine.screenshot_updated.connect(lambda img, iid=instance_id: self._on_screenshot_updated(iid, img))
             engine.detection_result.connect(lambda det, iid=instance_id: self._on_screenshot_updated(iid, det))
-            engine.state_changed.connect(lambda state, iid=instance_id: self._on_instance_state_changed(iid, state))
-            engine.stats_updated.connect(lambda stats, iid=instance_id: self._status_panel.update_stats(stats) if iid == self._current_instance_id else None)
-            engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_stats_for_task_panel(stats) if iid == self._current_instance_id else None)
+            engine.state_changed.connect(lambda state, iid=instance_id: self._on_engine_state_changed(iid, state))
+            engine.stats_updated.connect(lambda stats, iid=instance_id: self._on_engine_stats_updated(iid, stats))
             engine.config_updated.connect(lambda cfg, iid=instance_id: self._on_config_updated_filtered(iid, cfg))
         return self._engines[instance_id]
 

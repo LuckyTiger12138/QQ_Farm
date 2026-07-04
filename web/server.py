@@ -37,7 +37,6 @@ class WebServer:
 
         # 由外部注入的回调/数据提供者
         self.get_bot_state: Callable = lambda: "stopped"       # 返回 running/paused/stopped
-        self.get_stats: Callable = lambda: {}                   # 返回统计数据 dict
         self.start_bot: Callable = lambda: None
         self.stop_bot: Callable = lambda: None
         self.pause_bot: Callable = lambda: None
@@ -142,24 +141,8 @@ class WebServer:
                 return HTMLResponse(_PAGE_HTML)
 
             # ── API 
-            STAT_LABELS = {
-                "harvest": "收获", "plant": "播种", "water": "浇水",
-                "weed": "除草", "bug": "除虫", "sell": "出售",
-                "fertilize": "施肥", "steal": "偷菜",
-                "help_water": "帮浇水", "help_weed": "帮除草",
-                "help_bug": "帮除虫", "total_actions": "总操作", "rounds": "轮数",
-                "elapsed": "已用时间", "next_farm_check": "下次农场巡查",
-                "next_friend_check": "下次好友巡查", "state": "状态",
-            }
-
             @app.get("/api/status")
             async def api_status():
-                raw_stats = self.get_stats()
-                # 统计 key 映射为中文
-                stats = {}
-                for k, v in raw_stats.items():
-                    stats[STAT_LABELS.get(k, k)] = v
-
                 next_farm = 0
                 next_friend = 0
                 config_info = {}
@@ -261,7 +244,6 @@ class WebServer:
 
                 return JSONResponse({
                     "state": self.get_bot_state(),
-                    "stats": stats,
                     "next_farm_check": next_farm,
                     "next_friend_check": next_friend,
                     "config": config_info,
@@ -479,10 +461,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .btn-warning:hover:not(:disabled){background:#e08600}
 .btn-success{background:#34c759;color:#fff}
 .btn-success:hover:not(:disabled){background:#2db84e}
-.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px}
-.stat-item{background:#f8f9fa;border-radius:8px;padding:10px;text-align:center}
-.stat-value{font-size:22px;font-weight:700;color:#007aff}
-.stat-label{font-size:11px;color:#666;margin-top:4px}
 .schedule{display:flex;flex-direction:column;gap:8px}
 .schedule-row{display:flex;justify-content:space-between;padding:8px 12px;background:#f8f9fa;border-radius:8px}
 .schedule-row .label{color:#666;font-size:13px}
@@ -527,8 +505,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
         <button class="btn btn-primary" id="btn-resume" onclick="doAction('resume')" disabled>⏯ 恢复</button>
         <button class="btn btn-danger" id="btn-stop" onclick="doAction('stop')" disabled>⏹ 停止</button>
       </div>
-      <h2 style="margin-top:20px">📊 统计数据</h2>
-      <div class="stats" id="stats"></div>
       <h2 style="margin-top:20px">⏰ 下次巡查</h2>
       <div class="schedule">
         <div class="schedule-row"><span class="label">农场巡查</span><span class="value" id="next-farm">--</span></div>
@@ -666,11 +642,6 @@ async function refresh(){
     $('#status').className='status '+state;
     $('#status').textContent={running:'运行中',paused:'已暂停',stopped:'已停止'}[state]||state;
     updateButtons();
-    // 统计（已是中文）
-    const stats=d.stats||{};
-    let h='';
-    for(const[k,v]of Object.entries(stats)){if(v===0)continue;h+=`<div class="stat-item"><div class="stat-value">${v}</div><div class="stat-label">${k}</div></div>`;}
-    $('#stats').innerHTML=h||'<div style="color:#999;grid-column:1/-1">暂无数据</div>';
     // 下次巡查
     $('#next-farm').textContent=fmtCountdown(d.next_farm_check);
     $('#next-friend').textContent=fmtCountdown(d.next_friend_check);

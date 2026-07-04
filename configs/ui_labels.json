@@ -5,11 +5,14 @@
       "profile": "个人信息",
       "friend": "好友巡查",
       "land_scan": "地块巡查",
+      "timed_harvest": "定时收获",
       "gift": "礼品领取",
       "sell": "仓库出售",
       "task": "任务奖励",
       "fertilize": "定时施肥",
-      "share": "每日分享"
+      "share": "每日分享",
+      "repair": "异常修复",
+      "restart": "窗口重启"
     },
     "feature_labels": {
       "auto_harvest": "收获",
@@ -30,7 +33,7 @@
       "blacklist": "好友黑名单"
     },
     "feature_hints": {
-      "main.auto_buy_seed": "建议关闭，仓库库存判断存在Bug",
+      "main.auto_buy_seed": "商店识别灵敏度待增强，识别不稳时建议关闭",
       "main.auto_remote_login": "多实例下不建议开启"
     }
   },
@@ -40,11 +43,14 @@
       "profile": "个人信息",
       "friend": "好友巡查",
       "land_scan": "地块巡查",
+      "timed_harvest": "定时收获",
       "gift": "礼品领取",
       "sell": "仓库出售",
       "task": "任务奖励",
       "fertilize": "定时施肥",
-      "share": "每日分享"
+      "share": "每日分享",
+      "repair": "异常修复",
+      "restart": "窗口重启"
     },
     "task_hints": {
       "share": "仅支持微信平台"

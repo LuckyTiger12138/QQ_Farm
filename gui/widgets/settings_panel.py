@@ -36,6 +36,9 @@ from models.config import AppConfig, PlantMode, RunMode, WindowPosition, CrossIn
 from models.game_data import CROPS, format_grow_time, get_best_crop_for_level, get_crop_names
 
 
+CROP_COMBO_MAX_VISIBLE_ITEMS = 10
+
+
 class SettingsPanel(QWidget):
     """实例设置编辑面板 — 卡片式分组布局。"""
 
@@ -96,7 +99,13 @@ class SettingsPanel(QWidget):
         plant_form.addRow(self._field_label("推荐作物", plant_card), self.auto_crop_label)
 
         self.crop = ComboBox(plant_card)
+        self._limit_combo_popup(self.crop, CROP_COMBO_MAX_VISIBLE_ITEMS)
         plant_form.addRow(self._field_label("指定作物", plant_card), self.crop)
+
+        self.secondary_crop = ComboBox(plant_card)
+        self._limit_combo_popup(self.secondary_crop, CROP_COMBO_MAX_VISIBLE_ITEMS)
+        self.secondary_crop.addItem("不使用次级", userData="")
+        plant_form.addRow(self._field_label("次级作物", plant_card), self.secondary_crop)
 
         self.warehouse_first = CheckBox("仓库优先", plant_card)
         warehouse_tip = CaptionLabel("建议开启，关闭后可能会因种子模板识别出错导致重复购买。", plant_card)
@@ -389,6 +398,14 @@ class SettingsPanel(QWidget):
         if idx >= 0:
             combo.setCurrentIndex(idx)
 
+    @staticmethod
+    def _limit_combo_popup(combo: ComboBox, max_visible_items: int):
+        """限制长下拉菜单高度，超出部分交给弹层滚动条。"""
+        try:
+            combo.setMaxVisibleItems(max(1, int(max_visible_items)))
+        except AttributeError:
+            pass
+
     # ── 信号连接 ────────────────────────────────────────────
 
     def _connect_signals(self):
@@ -398,6 +415,7 @@ class SettingsPanel(QWidget):
         self.strategy.currentIndexChanged.connect(self._on_strategy_changed)
         self.strategy.currentIndexChanged.connect(self._auto_save)
         self.crop.currentIndexChanged.connect(self._auto_save)
+        self.secondary_crop.currentIndexChanged.connect(self._auto_save)
         self.warehouse_first.toggled.connect(self._auto_save)
         self.skip_event_crops.toggled.connect(self._auto_save)
         # 窗口
@@ -448,6 +466,7 @@ class SettingsPanel(QWidget):
             c.planting.player_level = int(self.level.value())
             c.planting.strategy = PlantMode(str(self.strategy.currentData() or PlantMode.PREFERRED.value))
             c.planting.preferred_crop = str(self.crop.currentData() or c.planting.preferred_crop)
+            c.planting.secondary_crop = str(self.secondary_crop.currentData() or "")
             c.planting.warehouse_first = bool(self.warehouse_first.isChecked())
             c.planting.skip_event_crops = bool(self.skip_event_crops.isChecked())
             # 窗口
@@ -498,22 +517,32 @@ class SettingsPanel(QWidget):
     def _on_level_changed(self, level: int):
         self._loading += 1
         current_crop = str(self.crop.currentData() or "")
+        current_secondary = str(self.secondary_crop.currentData() or "")
         self.crop.clear()
+        self.secondary_crop.clear()
+        self.secondary_crop.addItem("不使用次级", userData="")
         for name, _, req_level, grow_time, exp, _ in CROPS:
             time_str = format_grow_time(grow_time)
             if req_level <= level or req_level >= 999:
                 self.crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
+                self.secondary_crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
             else:
                 self.crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
+                self.secondary_crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
         if current_crop in self._crop_names:
             idx = self._crop_names.index(current_crop)
             if idx < self.crop.count():
                 self.crop.setCurrentIndex(idx)
+        if current_secondary:
+            idx = self.secondary_crop.findData(current_secondary)
+            if idx >= 0:
+                self.secondary_crop.setCurrentIndex(idx)
         self._loading -= 1
 
     def _on_strategy_changed(self, *_):
         is_manual = str(self.strategy.currentData() or "") == PlantMode.PREFERRED.value
         self.crop.setEnabled(is_manual)
+        self.secondary_crop.setEnabled(is_manual)
         self.auto_crop_label.setVisible(not is_manual)
         self._update_auto_crop_label()
 
@@ -673,6 +702,8 @@ class SettingsPanel(QWidget):
         self._update_auto_crop_label()
         if c.planting.preferred_crop in self._crop_names:
             self._set_combo_data(self.crop, c.planting.preferred_crop)
+        secondary_crop = str(getattr(c.planting, "secondary_crop", "") or "")
+        self._set_combo_data(self.secondary_crop, secondary_crop)
         self.warehouse_first.setChecked(bool(c.planting.warehouse_first))
         self.skip_event_crops.setChecked(bool(c.planting.skip_event_crops))
         # 窗口

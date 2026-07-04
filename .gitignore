@@ -39,3 +39,4 @@ docs/
 # OS
 Thumbs.db
 .DS_Store
+instances/update_check_cache.json

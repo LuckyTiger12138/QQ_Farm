@@ -188,7 +188,7 @@ class FriendStrategy(BaseStrategy):
         if help_count > 0:
             compact.append(f"帮忙x{help_count}")
         logger.info(f"好友流程: 结束 | {', '.join(compact) or '无操作'}")
-        return actions
+        return compact
 
     # ── 导航 ────────────────────────────────────────────────────
 
