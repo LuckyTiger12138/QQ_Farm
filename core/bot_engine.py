@@ -50,6 +50,9 @@ from core.strategies import (
 )
 from core.ui.navigator import Navigator
 from core.cross_instance_bus import CrossInstanceBus, StealAlert, PrankAlert
+from utils.debug_recorder import configure_debug_recorder, record_debug_event
+from utils.instance_paths import InstancePaths, ensure_instance_layout
+from utils.logger import configure_instance_debug_log
 
 
 class BotWorker(QThread):
@@ -179,6 +182,7 @@ class BotEngine(QObject):
         self._task_snapshots: TaskSnapshot | None = None
         self._bot_stop_requested = False  # 通用停止标志（任务级别）
         self._recovery_attempts: dict[str, dict[str, int]] = {}
+        self._instance_paths: InstancePaths | None = None
 
         # OCR 工具（延迟初始化）
         self._head_info_ocr = None
@@ -293,6 +297,16 @@ class BotEngine(QObject):
         )
         self.config = config
         self.plant.auto_buy_seed = config.features.auto_buy_seed
+        self._configure_debug_mode()
+        self._debug_event(
+            "config_updated",
+            auto_harvest=config.features.auto_harvest,
+            auto_plant=config.features.auto_plant,
+            auto_buy_seed=config.features.auto_buy_seed,
+            silent_hours=config.silent_hours.model_dump(),
+            enabled_tasks=[name for name, task in config.tasks.items() if task.enabled],
+            cross_instance=config.cross_instance.model_dump(),
+        )
         self.config_updated.emit(config)  # 通知 GUI 刷新
 
         # ✅ 同步任务执行器配置（间隔/启用状态等）
@@ -332,18 +346,39 @@ class BotEngine(QObject):
 
     def _setup_instance_dirs(self):
         """初始化实例独立的目录（日志和截图）"""
-        if self.instance_id == 'default':
-            return  # 默认实例使用现有目录
-
-        # 创建实例独立的截图目录
-        screenshots_dir = f"screenshots/{self.instance_id}"
-        os.makedirs(screenshots_dir, exist_ok=True)
+        paths = ensure_instance_layout(self.instance_id)
+        self._instance_paths = paths
 
         # 更新 screen_capture 的保存目录
         if hasattr(self.screen_capture, '_save_dir'):
-            self.screen_capture._save_dir = screenshots_dir
+            self.screen_capture._save_dir = str(paths.screenshots_dir)
 
-        logger.info(f"实例 {self.instance_id} 目录已初始化: screenshots/{self.instance_id}/")
+        self._configure_debug_mode()
+        logger.info(f"实例 {self.instance_id} 目录已初始化: {paths.base_dir}")
+
+    def _configure_debug_mode(self) -> None:
+        """根据实例配置启用/关闭本地调试文件。"""
+        paths = self._instance_paths or ensure_instance_layout(self.instance_id)
+        self._instance_paths = paths
+        enabled = bool(getattr(self.config.safety, "debug_log_enabled", False))
+        debug_log_pattern = configure_instance_debug_log(
+            self.instance_id,
+            enabled,
+            str(paths.logs_dir),
+        )
+        debug_dir = configure_debug_recorder(self.instance_id, enabled, paths.logs_dir)
+        if enabled:
+            trace_pattern = debug_dir / "task_trace_YYYY-MM-DD.jsonl" if debug_dir else "-"
+            logger.info(f"调试模式已启用: 文本日志={debug_log_pattern} | 任务诊断={trace_pattern}")
+            self._debug_event(
+                "debug_mode_enabled",
+                log_dir=str(paths.logs_dir),
+                config_path=str(getattr(self.config, "_config_path", "") or ""),
+            )
+
+    def _debug_event(self, event: str, **fields) -> None:
+        """写入实例级结构化调试事件。"""
+        record_debug_event(self.instance_id, event, **fields)
 
     def toggle_game_window(self) -> dict:
         """老板键：切换游戏窗口显示/隐藏（异步执行，不阻塞 GUI）
@@ -1698,11 +1733,18 @@ class BotEngine(QObject):
 
         ci_cfg = self.config.cross_instance
         if not ci_cfg.enabled or not ci_cfg.accept_steal:
-            logger.warning(
-                f"[大小号通讯🎯] 配置检查失败: engine={self.instance_id} | "
-                f"config_id={id(self.config)} | enabled={ci_cfg.enabled} | accept_steal={ci_cfg.accept_steal}"
+            logger.info(
+                f"[大小号通讯🎯] 接收偷菜未启用，跳过: engine={self.instance_id} | "
+                f"enabled={ci_cfg.enabled} | accept_steal={ci_cfg.accept_steal}"
             )
-            return TaskResult(success=False, error="未启用接收偷菜")
+            self._debug_event(
+                "steal_task_skipped",
+                task=ctx.task_name,
+                reason="cross_instance_or_accept_steal_disabled",
+                enabled=ci_cfg.enabled,
+                accept_steal=ci_cfg.accept_steal,
+            )
+            return TaskResult(success=True)
 
         logger.info(
             f"[大小号通讯🎯] 开始定点偷菜: [{source_name}] → 好友[{friend_name}]"
@@ -1766,9 +1808,22 @@ class BotEngine(QObject):
         """
         ci_cfg = self.config.cross_instance
         if not ci_cfg.enabled or not ci_cfg.accept_prank:
-            return TaskResult(success=False, error="未启用接收捣乱")
+            logger.info(
+                f"[大小号捣乱🌿] 接收捣乱未启用，跳过: engine={self.instance_id} | "
+                f"enabled={ci_cfg.enabled} | accept_prank={ci_cfg.accept_prank}"
+            )
+            self._debug_event(
+                "prank_task_skipped",
+                task=ctx.task_name,
+                reason="cross_instance_or_accept_prank_disabled",
+                enabled=ci_cfg.enabled,
+                accept_prank=ci_cfg.accept_prank,
+            )
+            return TaskResult(success=True)
         if not ci_cfg.partners:
-            return TaskResult(success=False, error="未配置配对")
+            logger.info("[大小号捣乱🌿] 未配置配对，跳过")
+            self._debug_event("prank_task_skipped", task=ctx.task_name, reason="no_partners")
+            return TaskResult(success=True)
 
         if is_silent_time(self.config.silent_hours):
             remaining = get_silent_remaining_seconds(self.config.silent_hours)
@@ -1792,6 +1847,8 @@ class BotEngine(QObject):
         self.targeted_prank._stop_requested = False
 
         total_count = 0
+        attempted = 0
+        failure_messages: list[str] = []
         for partner in ci_cfg.partners:
             if not partner.enabled or not partner.friend_name:
                 continue
@@ -1802,6 +1859,7 @@ class BotEngine(QObject):
             if available <= 0:
                 break
 
+            attempted += 1
             logger.info(
                 f"[大小号捣乱🌿] 访问好友[{partner.friend_name}] "
                 f"本轮可用{available}次"
@@ -1821,6 +1879,13 @@ class BotEngine(QObject):
                     f"[大小号捣乱🌿] 捣乱{count}次: [{partner.friend_name}] "
                     f"累计{total_count}/{ci_cfg.max_prank_per_day}"
                 )
+            else:
+                message = str(
+                    result.get("message")
+                    or f"好友[{partner.friend_name}] 本轮捣乱 0 次"
+                )
+                failure_messages.append(message)
+                logger.warning(f"[大小号捣乱🌿] 本轮未产生实际捣乱: {message}")
 
         if total_count > 0:
             if self._cross_bus:
@@ -1832,8 +1897,11 @@ class BotEngine(QObject):
                 f"剩余{self._get_daily_prank_remaining()}次"
             )
             return TaskResult(success=True)
-        else:
-            return TaskResult(success=True)
+        if attempted > 0:
+            error = "；".join(failure_messages[-3:]) or "本轮捣乱 0 次"
+            self.log_message.emit(f"[大小号捣乱🌿] ✗ 本轮未实际捣乱: {error}")
+            return TaskResult(success=False, error=error)
+        return TaskResult(success=True, error="无启用的捣乱配对")
 
     # ============================================================
     # 异步任务执行器管理
@@ -1867,6 +1935,20 @@ class BotEngine(QObject):
         )
         self._async_executor.start()
         logger.info(f"异步执行器已启动: {len(tasks)} 个任务, {len(runners)} 个 runner")
+        self._debug_event(
+            "executor_initialized",
+            tasks=[
+                {
+                    "name": task.name,
+                    "enabled": task.enabled,
+                    "priority": task.priority,
+                    "next_run": task.next_run,
+                    "time_range": task.enabled_time_range,
+                }
+                for task in tasks
+            ],
+            runners=sorted(runners.keys()),
+        )
         return True
 
     def _stop_executor(self) -> bool:
@@ -1964,6 +2046,8 @@ class BotEngine(QObject):
         """任务失败回调"""
         display_name = self._task_display_name(task_name)
         logger.warning(f"[{display_name}] 任务失败: {error}")
+        self._persist_task_next_run(task_name)
+        self._debug_event("task_error", task=task_name, error=error)
         if self._bot_stop_requested:
             logger.debug(f"[{display_name}] 手动停止中，跳过任务恢复")
             return
@@ -2005,6 +2089,7 @@ class BotEngine(QObject):
 
         if repair_enabled:
             if attempts["repair"] < max_repair and self._async_executor.task_call("repair", force_call=False):
+                self._mark_recovery_task("repair", task_name, error)
                 attempts["repair"] += 1
                 logger.info(f"任务恢复: [{display_name}] 失败后已触发 repair")
                 return
@@ -2015,6 +2100,7 @@ class BotEngine(QObject):
                 )
         if prefer_restart and restart_enabled:
             if attempts["restart"] < max_restart and self._async_executor.task_call("restart", force_call=False):
+                self._mark_recovery_task("restart", task_name, error)
                 attempts["restart"] += 1
                 logger.info(f"任务恢复: [{display_name}] 窗口/截图异常，已触发 restart")
             elif attempts["restart"] >= max_restart:
@@ -2022,6 +2108,47 @@ class BotEngine(QObject):
                     f"任务恢复: [{display_name}] restart 已达上限 "
                     f"{attempts['restart']}/{max_restart}，本次不再触发"
                 )
+
+    def _mark_recovery_task(self, recovery_task: str, source_task: str, error: str) -> None:
+        """给 repair/restart 写入一次性恢复触发标记。"""
+        if not self._async_executor:
+            return
+        with self._async_executor._lock:
+            item = self._async_executor._tasks.get(recovery_task)
+            if not item:
+                return
+            item.features = dict(item.features or {})
+            item.features["_recovery_source_task"] = source_task
+            item.features["_recovery_error"] = str(error or "")
+            item.features["_recovery_requested_at"] = datetime.now().isoformat(timespec="seconds")
+        self._debug_event(
+            "recovery_task_marked",
+            recovery_task=recovery_task,
+            source_task=source_task,
+            error=error,
+        )
+
+    def _consume_recovery_marker(self, recovery_task: str) -> dict:
+        """读取并清除一次性恢复触发标记。"""
+        if not self._async_executor:
+            return {}
+        marker: dict = {}
+        with self._async_executor._lock:
+            item = self._async_executor._tasks.get(recovery_task)
+            if not item:
+                return {}
+            features = dict(item.features or {})
+            source = features.pop("_recovery_source_task", "")
+            error = features.pop("_recovery_error", "")
+            requested_at = features.pop("_recovery_requested_at", "")
+            item.features = features
+            if source:
+                marker = {
+                    "source_task": source,
+                    "error": error,
+                    "requested_at": requested_at,
+                }
+        return marker
 
     def _persist_task_next_run(self, task_name: str):
         """将任务下次执行时间回写到配置文件（移植自 copilot）"""
@@ -2581,6 +2708,15 @@ class BotEngine(QObject):
 
     def _run_task_repair(self, ctx: TaskContext) -> TaskResult:
         """任务级修复：重置停止标志、重建窗口上下文、关闭干扰弹窗。"""
+        marker = self._consume_recovery_marker(ctx.task_name)
+        if not marker:
+            logger.info("任务恢复: repair 未由失败任务触发，本轮跳过")
+            self._debug_event("recovery_task_skipped", task="repair", reason="not_triggered_by_failure")
+            return TaskResult(success=True, next_run_seconds=86400)
+
+        logger.info(
+            f"任务恢复: repair 由 [{self._task_display_name(marker.get('source_task', ''))}] 触发"
+        )
         recovery = getattr(self.config, "recovery", None)
         delay = int(getattr(recovery, "repair_retry_delay_seconds", 5) or 5)
 
@@ -2620,6 +2756,15 @@ class BotEngine(QObject):
 
     def _run_task_restart(self, ctx: TaskContext) -> TaskResult:
         """任务级重启：释放缓存窗口并通过快捷方式重新定位/启动窗口。"""
+        marker = self._consume_recovery_marker(ctx.task_name)
+        if not marker:
+            logger.info("任务恢复: restart 未由窗口/截图异常触发，本轮跳过")
+            self._debug_event("recovery_task_skipped", task="restart", reason="not_triggered_by_failure")
+            return TaskResult(success=True, next_run_seconds=86400)
+
+        logger.info(
+            f"任务恢复: restart 由 [{self._task_display_name(marker.get('source_task', ''))}] 触发"
+        )
         recovery = getattr(self.config, "recovery", None)
         wait_seconds = int(getattr(recovery, "restart_wait_seconds", 30) or 30)
 

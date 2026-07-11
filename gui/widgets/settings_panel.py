@@ -746,11 +746,17 @@ class SettingsPanel(QWidget):
             try:
                 p = pathlib.Path(cfg_path).resolve()
                 if p.name.lower() == "config.json" and p.parent.name == "configs":
-                    self.logs_path_label.setText(str((p.parent.parent / "logs").resolve()))
+                    logs_dir = (p.parent.parent / "logs").resolve()
                 else:
-                    self.logs_path_label.setText(str(pathlib.Path("logs").resolve()))
+                    logs_dir = pathlib.Path("logs").resolve()
             except Exception:
-                self.logs_path_label.setText(str(pathlib.Path("logs").resolve()))
+                logs_dir = pathlib.Path("logs").resolve()
+            if c.safety.debug_log_enabled:
+                self.logs_path_label.setText(
+                    f"{logs_dir}\n调试文件: debug_YYYY-MM-DD.log / task_trace_YYYY-MM-DD.jsonl"
+                )
+            else:
+                self.logs_path_label.setText(str(logs_dir))
 
     # ── 大小号通讯配对解析 ────────────────────────────────────
 

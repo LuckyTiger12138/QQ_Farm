@@ -40,3 +40,7 @@ docs/
 Thumbs.db
 .DS_Store
 instances/update_check_cache.json
+
+# 配置备份文件
+instances/*/configs/config.*backup*.json
+instances/*/configs/config.before_*.json

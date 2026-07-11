@@ -99,6 +99,9 @@ BaseStrategy 提供: `click(x, y, desc)`, `find_by_name()`, `find_by_prefix_firs
 
 旧版 `features` 开关通过 `sync_features_to_tasks()` 同步到任务配置，保持向后兼容。
 任务执行必须受 UI 勾选控制：只勾选 `land_scan` 时不能隐式触发 `main`、`repair`、`restart` 或一键务农。
+`repair` / `restart` 是失败恢复许可任务：普通 interval 到点时无恢复标记必须跳过；只有 `_queue_recovery_after_failure()` 写入一次性恢复标记后才允许执行实际修复/重启。
+
+调试模式由 `safety.debug_log_enabled` 控制。开启后每个实例写入 `instances/{id}/logs/debug_YYYY-MM-DD.log` 和 `instances/{id}/logs/task_trace_YYYY-MM-DD.jsonl`，后者用于记录 `task_start` / `task_finish` / `task_out_of_time_range` / 动态注入 / 恢复跳过等调度诊断事件。
 
 ### ActionExecutor 双模式
 
@@ -194,6 +197,7 @@ Pydantic BaseModel 层级结构，`AppConfig.load(path)` / `.save()` 读写 JSON
 - **买种二阶段边界**: 已落地仓库格子扫描；尚未落地目标仓库的“按仓库序号在播种弹窗翻页选种”，实现前不要声称已完成该链路
 - **地块巡查只读**: `LandScanTask._run_pre_scan_maintain()` 必须保持 no-op，不要恢复对一键收获/一键务农的隐式调用
 - **状态总览**: 仅展示运行状态、任务队列和下次执行时间；操作次数统计与每日动作统计落盘已移除
+- **调试模式**: 勾选后优先查看 `task_trace_YYYY-MM-DD.jsonl` 判断任务是否被禁用、时间窗挡住、没有 runner、配置关闭或恢复链路跳过
 - **构建**: PyInstaller 打包时排除 `easyocr/torch/torchvision`（见 `build.spec`），打包后 `sys._MEIPASS` 为资源目录
 - **Git 双仓库**: origin → Gitee, github → GitHub。发行版发布在 GitHub Releases（Gitee 100MB 限制）
 - `QT_ENABLE_HIGHDPI_SCALING=0` — main.py 中强制禁用高 DPI 缩放

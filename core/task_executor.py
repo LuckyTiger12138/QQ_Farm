@@ -24,6 +24,7 @@ from models.config import (
     TaskTriggerType,
     normalize_task_enabled_time_range,
 )
+from utils.debug_recorder import record_debug_event
 
 
 @dataclass
@@ -209,6 +210,7 @@ class TaskExecutor:
         self._wake_event = threading.Event()
         self._running_task: str | None = None
         self._last_idle_at: float = 0.0
+        self._last_debug_idle_at: float = 0.0
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -223,6 +225,12 @@ class TaskExecutor:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
         logger.info("TaskExecutor 已启动")
+        self._debug_event(
+            "executor_start",
+            enabled_tasks=[t.name for t in self._tasks.values() if t.enabled],
+            disabled_tasks=[t.name for t in self._tasks.values() if not t.enabled],
+            runners=sorted(self._runners.keys()),
+        )
 
     def stop(self, wait_timeout: float = 5.0) -> bool:
         """停止后台线程"""
@@ -241,6 +249,7 @@ class TaskExecutor:
             logger.info("TaskExecutor 已停止")
         else:
             logger.warning("TaskExecutor 停止超时，当前任务仍在退出中")
+        self._debug_event("executor_stop", stopped=stopped, running_task=self._running_task)
         return stopped
 
     def pause(self):
@@ -301,14 +310,17 @@ class TaskExecutor:
         with self._lock:
             task = self._tasks.get(name)
             if not task:
+                self._debug_event("task_call_missing", task=name, force_call=force_call)
                 return False
             if not task.enabled and not force_call:
+                self._debug_event("task_call_disabled", task=name, force_call=force_call)
                 return False
             if force_call:
                 task.enabled = True
             task.next_run = datetime.now()
         self._wake_event.set()
         logger.info(f"任务 {name} 立即触发")
+        self._debug_event("task_call", task=name, force_call=force_call)
         return True
 
     def sync_tasks(self, configs: dict[str, TaskScheduleItemConfig]):
@@ -344,11 +356,34 @@ class TaskExecutor:
                 else:
                     self._tasks[name] = build_task_item(name, cfg)
                     logger.debug(f"新增任务: {name}")
+        self._debug_event(
+            "sync_tasks",
+            enabled_tasks=[name for name, cfg in configs.items() if cfg.enabled],
+            disabled_tasks=[name for name, cfg in configs.items() if not cfg.enabled],
+        )
 
     def set_empty_queue_policy(self, policy: str):
         """设置空队列策略"""
         with self._lock:
             self._executor_cfg.empty_queue_policy = str(policy or "stay")
+
+    def _debug_event(self, event: str, **fields) -> None:
+        """记录调度诊断事件。"""
+        record_debug_event(self._instance_id or "default", event, **fields)
+
+    def _debug_idle(self, snap: TaskSnapshot) -> None:
+        """节流记录空闲/等待状态，避免调试文件刷屏。"""
+        now_ts = time.time()
+        if now_ts - self._last_debug_idle_at < 60:
+            return
+        self._last_debug_idle_at = now_ts
+        next_waiting = snap.waiting_tasks[0] if snap.waiting_tasks else None
+        self._debug_event(
+            "executor_idle",
+            waiting_count=len(snap.waiting_tasks),
+            next_task=next_waiting.name if next_waiting else "",
+            next_run=next_waiting.next_run if next_waiting else "",
+        )
 
     # ── 快照（copilot 风格） ──────────────────────────────────
 
@@ -461,7 +496,8 @@ class TaskExecutor:
             return
         try:
             alerts = self._cross_bus.poll_alerts(self._instance_id)
-        except Exception:
+        except Exception as exc:
+            self._debug_event("steal_poll_error", error=str(exc))
             return
         if not alerts:
             return
@@ -505,6 +541,12 @@ class TaskExecutor:
                         f"[大小号通讯📥] 注入偷菜任务: {task_name} → 好友[{alert.friend_name}] "
                         f"(优先级=5)"
                     )
+            self._debug_event(
+                "steal_alert_injected",
+                task=task_name,
+                source=alert.source_instance_id,
+                friend_name=alert.friend_name,
+            )
             self._wake_event.set()
 
     # ── 跨实例捣乱任务注入 ──────────────────────────────────────
@@ -515,7 +557,8 @@ class TaskExecutor:
             return
         try:
             alerts = self._cross_bus.poll_prank_alerts(self._instance_id)
-        except Exception:
+        except Exception as exc:
+            self._debug_event("prank_poll_error", error=str(exc))
             return
         if not alerts:
             return
@@ -551,10 +594,19 @@ class TaskExecutor:
                     self._tasks[task_name] = prank_task
                     if "捣乱" in self._runners and task_name not in self._runners:
                         self._runners[task_name] = self._runners["捣乱"]
+                    elif "捣乱" not in self._runners:
+                        logger.warning("跨实例捣乱: 未注册 runner '捣乱'，动态任务无法执行")
                     logger.info(
                         f"[大小号捣乱📥] 注入捣乱任务: {task_name} → 好友[{alert.friend_name}] "
                         f"(优先级=5)"
                     )
+            self._debug_event(
+                "prank_alert_injected",
+                task=task_name,
+                source=alert.source_instance_id,
+                friend_name=alert.friend_name,
+                empty_plot_count=alert.empty_plot_count,
+            )
             self._wake_event.set()
 
     # ── 捣乱后清理请求 ────────────────────────────────────────
@@ -565,7 +617,8 @@ class TaskExecutor:
             return
         try:
             need_maintain = self._cross_bus.poll_maintain_request(self._instance_id)
-        except Exception:
+        except Exception as exc:
+            self._debug_event("maintain_request_poll_error", error=str(exc))
             return
         if not need_maintain:
             return
@@ -573,9 +626,13 @@ class TaskExecutor:
         with self._lock:
             if "main" in self._tasks:
                 task = self._tasks["main"]
+                if not task.enabled:
+                    logger.info("[大小号捣乱🧹] 收到清理请求，但 main 任务未启用，跳过")
+                    self._debug_event("maintain_request_skipped", reason="main_disabled")
+                    return
                 task.next_run = datetime.now()
-                task.enabled = True
                 logger.info(f"[大小号捣乱🧹] 收到清理请求，触发 main 任务（一键务农）")
+                self._debug_event("maintain_request_triggered", task="main")
         self._wake_event.set()
 
     # ── 主循环（移植自 copilot） ──────────────────────────────
@@ -595,6 +652,8 @@ class TaskExecutor:
 
                 # 跨实例通讯：轮询偷菜通知并注入任务
                 self._poll_and_inject_steal_tasks()
+                # 跨实例通讯：轮询捣乱通知并注入任务
+                self._poll_and_inject_prank_tasks()
                 # 跨实例通讯：轮询捣乱后的清理请求
                 self._poll_maintain_requests()
 
@@ -620,6 +679,12 @@ class TaskExecutor:
                                 f"任务 {item.name} 不在启用时段({item.enabled_time_range})，"
                                 f"推迟到 {item.next_run.strftime('%H:%M:%S')}"
                             )
+                            self._debug_event(
+                                "task_out_of_time_range",
+                                task=item.name,
+                                enabled_time_range=item.enabled_time_range,
+                                next_run=item.next_run,
+                            )
                         self._running_task = None
                     self._emit_snapshot()
                     time.sleep(0.03)
@@ -638,6 +703,7 @@ class TaskExecutor:
                             self._on_idle()
                         except Exception as exc:
                             logger.debug(f"idle hook error: {exc}")
+                    self._debug_idle(snap)
                     time.sleep(0.12)
                     continue
 
@@ -651,6 +717,7 @@ class TaskExecutor:
                                 TaskResult(success=False, error=f"未注册 runner: {task.name}"),
                             )
                             self._running_task = None
+                            self._debug_event("task_no_runner", task=task.name)
                     self._emit_snapshot()
                     continue
 
@@ -662,6 +729,14 @@ class TaskExecutor:
 
                 # 执行任务
                 ctx = TaskContext(task_name=task.name, started_at=now)
+                self._debug_event(
+                    "task_start",
+                    task=task.name,
+                    priority=task.priority,
+                    trigger=task.trigger,
+                    enabled_time_range=task.enabled_time_range,
+                    scheduled_at=task.next_run,
+                )
                 try:
                     result = runner(ctx)
                     if not isinstance(result, TaskResult):
@@ -686,7 +761,19 @@ class TaskExecutor:
                     if item:
                         item.last_run = now
                         self._apply_task_result(item, result)
+                        next_run_after = item.next_run
+                    else:
+                        next_run_after = None
                     self._running_task = None
+
+                self._debug_event(
+                    "task_finish",
+                    task=task.name,
+                    success=result.success,
+                    error=result.error,
+                    next_run=next_run_after,
+                    duration_seconds=round((datetime.now() - now).total_seconds(), 3),
+                )
 
                 if result.success:
                     if self._on_task_done:

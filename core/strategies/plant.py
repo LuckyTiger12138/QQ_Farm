@@ -1268,13 +1268,7 @@ class PlantStrategy(BaseStrategy):
             cv_img, ['btn_land_right', 'btn_land_right_2', 'btn_land_left'],
             scales=[1.0, 0.9, 1.1],
         )
-        right_anchor = None
-        left_anchor = None
-        for det in anchors:
-            if det.name in ('btn_land_right', 'btn_land_right_2'):
-                right_anchor = (int(det.x), int(det.y))
-            elif det.name == 'btn_land_left':
-                left_anchor = (int(det.x), int(det.y))
+        right_anchor, left_anchor = self._select_land_anchor_pair(anchors)
 
         if not right_anchor and not left_anchor:
             logger.warning("施肥流程：锚点检测失败，未找到 btn_land_right / btn_land_left")
@@ -1298,6 +1292,73 @@ class PlantStrategy(BaseStrategy):
             ))
         logger.info(f"施肥流程：锚点检测成功，推算 {len(results)} 个地块")
         return results
+
+    def _select_land_anchor_pair(
+        self,
+        anchors: list[DetectResult],
+    ) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        """从多个锚点候选中选择最符合土地网格跨度的一对。
+
+        真实左右土地锚点的相对跨度接近 baseline: left - right ≈ (-439, 43)。
+        画面里偶尔会把土地纹理误识别成 btn_land_left；旧逻辑直接取最后
+        一个候选，会把 24 格坐标推偏，表现为逐块点击但找不到肥料按钮。
+        """
+        rights = [
+            det for det in anchors
+            if det.name in ("btn_land_right", "btn_land_right_2")
+        ]
+        lefts = [det for det in anchors if det.name == "btn_land_left"]
+
+        if rights and lefts:
+            expected_dx = -439
+            expected_dy = 43
+            best_pair = None
+            best_score = float("inf")
+            for right in rights:
+                for left in lefts:
+                    dx = int(left.x) - int(right.x)
+                    dy = int(left.y) - int(right.y)
+                    score = (
+                        abs(dx - expected_dx)
+                        + abs(dy - expected_dy) * 3
+                        - (float(right.confidence) + float(left.confidence)) * 20
+                    )
+                    if score < best_score:
+                        best_score = score
+                        best_pair = (right, left, dx, dy)
+            if best_pair:
+                right, left, dx, dy = best_pair
+                logger.info(
+                    "施肥流程：选择锚点对 "
+                    f"right=({int(right.x)},{int(right.y)}) "
+                    f"left=({int(left.x)},{int(left.y)}) span=({dx},{dy})"
+                )
+                return (int(right.x), int(right.y)), (int(left.x), int(left.y))
+
+        if rights:
+            best_right = max(rights, key=lambda det: float(det.confidence))
+            return (int(best_right.x), int(best_right.y)), None
+        if lefts:
+            best_left = max(lefts, key=lambda det: float(det.confidence))
+            return None, (int(best_left.x), int(best_left.y))
+        return None, None
+
+    def _filter_visible_lands(
+        self,
+        lands: list[DetectResult],
+        rect: tuple,
+    ) -> list[DetectResult]:
+        """过滤锚点推算中落到窗口外的地块，避免点击/拖拽无效坐标。"""
+        width, height = rect[2], rect[3]
+        margin = 8
+        visible = [
+            land for land in lands
+            if margin <= land.x <= width - margin and margin <= land.y <= height - margin
+        ]
+        dropped = len(lands) - len(visible)
+        if dropped:
+            logger.info(f"施肥流程：过滤窗口外地块 {dropped} 块，保留 {len(visible)} 块")
+        return visible
 
     def fertilize_all(self, rect: tuple, lands: list = None, is_test: bool = False) -> list[str]:
         """对所有地块施用普通肥料
@@ -1333,6 +1394,10 @@ class PlantStrategy(BaseStrategy):
             land_dets = self._detect_lands_by_anchor(cv_img)
             if not land_dets:
                 logger.info("施肥流程：锚点网格推算失败，无法施肥")
+                return all_actions
+            land_dets = self._filter_visible_lands(land_dets, rect)
+            if not land_dets:
+                logger.info("施肥流程：地块坐标均超出窗口，无法施肥")
                 return all_actions
 
             logger.info(f"施肥流程：检测到 {len(land_dets)} 块土地，开始点击检测...")

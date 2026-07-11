@@ -11,6 +11,7 @@
 
 import re
 import time
+import unicodedata
 from loguru import logger
 
 from models.farm_state import ActionType
@@ -32,14 +33,18 @@ VISIT_BTN_POS = (461, 304)
 HOME_BTN_POS = (487, 713)
 CLOSE_BTN_POS = (510, 71)
 
-SWIPE_START = (405, 920)
-SWIPE_END = (150, 920)
+# 好友列表翻页：必须纵向上滑。旧值是横向拖拽 (405,920)->(150,920)，
+# 只会左右拖动列表区域，导致翻页失败，一直在同一页找好友。
+SWIPE_START = (290, 820)
+SWIPE_END = (290, 360)
 
 FRIEND_NAME_OCR_X1 = 150
 FRIEND_NAME_OCR_X2 = 400
-FRIEND_NAME_OCR_Y1 = 265
+# 好友列表第一条可见行在搜索框下方约 y=110~230；旧值 265 会裁掉首行，
+# 例如昵称 "!!!" 明明可见却无法进入。
+FRIEND_NAME_OCR_Y1 = 100
 FRIEND_NAME_OCR_Y2 = 780
-FRIEND_NAME_ABOVE_Y_WINDOW = 40
+FRIEND_NAME_ABOVE_Y_WINDOW = 70
 
 MAX_SCROLL_FIND = 8
 
@@ -57,8 +62,37 @@ def _normalize_name(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    text = unicodedata.normalize("NFKC", text)
     text = re.sub(r"[\W_]+", "", text, flags=re.UNICODE)
     return text.lower()
+
+
+def _compact_name(value: str) -> str:
+    """保留符号的轻量归一化，用于 !!! / 纯符号昵称匹配。"""
+    text = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    return re.sub(r"\s+", "", text)
+
+
+def _name_matches(target_name: str, candidate_name: str) -> bool:
+    """好友名匹配：优先文本归一化，纯符号昵称回退到原样压缩匹配。"""
+    target_norm = _normalize_name(target_name)
+    candidate_norm = _normalize_name(candidate_name)
+    if target_norm and candidate_norm:
+        return (
+            target_norm.startswith(candidate_norm)
+            or candidate_norm.startswith(target_norm)
+        )
+
+    target_raw = _compact_name(target_name)
+    candidate_raw = _compact_name(candidate_name)
+    if not target_raw or not candidate_raw:
+        return False
+    return target_raw.startswith(candidate_raw) or candidate_raw.startswith(target_raw)
+
+
+def _is_symbol_only_name(value: str) -> bool:
+    """昵称归一化后没有文字/数字时，视为纯符号昵称。"""
+    return bool(_compact_name(value)) and not bool(_normalize_name(value))
 
 
 class TargetedPrankStrategy(BaseStrategy):
@@ -207,8 +241,8 @@ class TargetedPrankStrategy(BaseStrategy):
     # ── 好友搜索 ────────────────────────────────────────────────
 
     def _find_target_friend(self, target_name: str, rect: tuple) -> bool:
-        target_norm = _normalize_name(target_name)
-        if not target_norm:
+        target_raw = _compact_name(target_name)
+        if not target_raw:
             return False
 
         for scroll_round in range(MAX_SCROLL_FIND):
@@ -236,11 +270,10 @@ class TargetedPrankStrategy(BaseStrategy):
                 if self.stopped:
                     return False
                 name = self._detect_friend_name_near_visit(cv_img, vbtn.x, vbtn.y)
-                name_norm = _normalize_name(name)
-                if name_norm and (
-                    target_norm.startswith(name_norm)
-                    or name_norm.startswith(target_norm)
-                ):
+                logger.info(
+                    f"定点捣乱: 拜访按钮({vbtn.x},{vbtn.y})附近识别昵称=[{name}]"
+                )
+                if _name_matches(target_name, name):
                     logger.info(f"🎯 找到目标好友 [{name}]，点击进入")
                     self.click(vbtn.x, vbtn.y, f"进入好友[{name}]")
                     time.sleep(1.0)
@@ -255,10 +288,80 @@ class TargetedPrankStrategy(BaseStrategy):
                         time.sleep(0.3)
                     return True
 
+            symbol_visit = self._find_symbol_friend_visit_fallback(
+                target_name, cv_img, visit_buttons
+            )
+            if symbol_visit:
+                visit_x, visit_y, reason = symbol_visit
+                logger.info(
+                    f"🎯 纯符号昵称兜底命中 [{target_name}]：{reason}，点击拜访"
+                )
+                self.click(visit_x, visit_y, f"进入好友[{target_name}](符号昵称兜底)")
+                time.sleep(1.0)
+                for _ in range(6):
+                    if self.stopped:
+                        return False
+                    cv2_img, d2 = self._quick_detect(rect, ["btn_home"])
+                    if cv2_img is not None and any(d.name == "btn_home" for d in d2):
+                        return True
+                    time.sleep(0.3)
+                return True
+
+            logger.info(
+                f"定点捣乱: 第 {scroll_round + 1}/{MAX_SCROLL_FIND} 页未找到好友 "
+                f"[{target_name}]，继续滑动查找"
+            )
             self._swipe_friend_list(rect)
             time.sleep(0.5)
 
         return False
+
+    def _find_symbol_friend_visit_fallback(
+        self,
+        target_name: str,
+        cv_img,
+        visit_buttons: list[DetectResult],
+    ) -> tuple[int, int, str] | None:
+        """纯符号昵称兜底。
+
+        OCR 常会忽略 "!!!" 这类纯标点昵称；顶部第一行的拜访按钮也可能因
+        遮挡/裁切无法被 btn_visit_first 模板命中。此时根据已检测到的
+        拜访按钮行距推断漏检行，并点击昵称 OCR 为空的行。
+        """
+        if not _is_symbol_only_name(target_name) or not visit_buttons:
+            return None
+
+        ys = sorted({int(btn.y) for btn in visit_buttons})
+        xs = sorted(int(btn.x) for btn in visit_buttons)
+        visit_x = xs[len(xs) // 2]
+
+        spacing = 128
+        if len(ys) >= 2:
+            diffs = [b - a for a, b in zip(ys, ys[1:]) if 60 <= b - a <= 180]
+            if diffs:
+                spacing = int(round(sum(diffs) / len(diffs)))
+
+        candidate_rows: list[tuple[int, str]] = []
+        first_y = ys[0] - spacing
+        if 80 <= first_y <= cv_img.shape[0] - 40:
+            candidate_rows.append((first_y, "模板漏检的上一行"))
+        candidate_rows.extend((y, "已检测拜访按钮行") for y in ys)
+
+        seen: set[int] = set()
+        for row_y, source in candidate_rows:
+            if row_y in seen:
+                continue
+            seen.add(row_y)
+            name = self._detect_friend_name_near_visit(cv_img, visit_x, row_y)
+            logger.info(
+                f"定点捣乱: 纯符号兜底检查行 y={row_y} source={source} OCR=[{name}]"
+            )
+            if _name_matches(target_name, name):
+                return visit_x, row_y, f"{source} OCR直接匹配[{name}]"
+            if not _compact_name(name):
+                return visit_x, row_y, f"{source} OCR为空，疑似纯符号昵称"
+
+        return None
 
     def _detect_friend_name_near_visit(self, cv_img, visit_x: int, visit_y: int) -> str:
         if self._friend_name_ocr is None or cv_img is None:
@@ -293,38 +396,26 @@ class TargetedPrankStrategy(BaseStrategy):
     # ── 捣乱 ────────────────────────────────────────────────────
 
     def _do_prank(self, rect: tuple, daily_remaining: int) -> int:
-        """执行捣乱：放草 + 放虫，一次访问完成两种
+        """执行捣乱：点击地块打开工具栏 → 像施肥一样拖拽放草/放虫到地块
 
-        流程：网格定位 → 遍历找可捣乱地块 → 拖拽放草 → 点空白 → 再点地块 → 拖拽放虫
+        当前小程序机制与施肥一致：打开地块操作栏后，按住工具图标
+        （放草/放虫）拖到各个地块。旧逻辑逐块点地找菜单，进入好友农场
+        后如果菜单不随点击弹出，就会一直探测 24 块但没有真实操作。
         """
         all_lands = self._get_grid_positions(rect)
         if not all_lands:
             logger.info("定点捣乱: 好友农场无可捣乱地块")
             return 0
-
-        # 遍历网格找第一个弹菜单的地块
-        first = None
-        found = None
-        for i, pt in enumerate(all_lands):
-            if self.stopped:
-                return 0
-            self.click(pt.x, pt.y, f"探测{i+1}/{len(all_lands)}", ActionType.PRANK)
-            time.sleep(0.5)
-
-            cv_img, dets = self._quick_detect(rect, [
-                "btn_fangcao", "btn_fangchong",
-                "btn_plant", "btn_remove", "btn_fertilize",
-            ])
-            if dets:
-                first = pt
-                found = dets
-                break
-            self.click_blank(rect)
-            time.sleep(0.15)
-
-        if not found:
-            logger.info(f"定点捣乱: 遍历 {len(all_lands)} 个网格，无可捣乱地块")
+        all_lands = self._filter_visible_lands(all_lands, rect)
+        if not all_lands:
+            logger.info("定点捣乱: 地块坐标均超出窗口，跳过")
             return 0
+
+        opener, found = self._open_prank_toolbar(rect, all_lands)
+        if not opener or not found:
+            logger.info(f"定点捣乱: 遍历 {len(all_lands)} 个网格，未打开放草/放虫工具栏")
+            return 0
+        target_lands = self._prioritize_land(all_lands, opener)
 
         total = 0
 
@@ -333,45 +424,105 @@ class TargetedPrankStrategy(BaseStrategy):
         if weed_remaining > 0:
             btn = self._find_any_name(found, ["btn_fangcao"])
             if not btn:
-                btn = found[0]
-                logger.info(f"定点捣乱: 兜底放草按钮 ({btn.x},{btn.y})")
+                logger.info("定点捣乱: 未检测到放草按钮，跳过放草")
+            else:
+                count = min(len(target_lands), weed_remaining)
+                logger.info(f"定点捣乱: 放草拖拽 {count} 块")
+                weed_count = self._drag_prank_to_lands(btn, target_lands[:count])
+                total += weed_count
+                logger.info(f"定点捣乱: 放草完成 {weed_count} 次")
 
-            count = min(len(all_lands), weed_remaining)
-            logger.info(f"定点捣乱: 放草拖拽 {count} 块")
-            weed_count = self._drag_prank_to_lands(btn, all_lands[:count])
-            total += weed_count
-            logger.info(f"定点捣乱: 放草完成 {weed_count} 次")
-
-        # 第二轮：放虫（需要重新点地块开菜单）
+        # 第二轮：放虫（拖拽后工具栏可能关闭，需要重新打开）
         bug_remaining = daily_remaining - total
         if bug_remaining > 0 and not self.stopped:
             time.sleep(0.5)
             self.click_blank(rect)
             time.sleep(0.3)
 
-            # 重新点地块开菜单
-            self.click(first.x, first.y, "重新点地块(放虫)", ActionType.PRANK)
-            time.sleep(0.5)
-
-            cv_img2, dets2 = self._quick_detect(rect, [
-                "btn_fangcao", "btn_fangchong",
-                "btn_plant", "btn_remove", "btn_fertilize",
-            ])
-            if cv_img2 is not None and dets2:
+            _, dets2 = self._open_prank_toolbar(rect, all_lands, preferred=opener)
+            if dets2:
                 btn2 = self._find_any_name(dets2, ["btn_fangchong"])
-                if not btn2:
-                    btn2 = dets2[0]
-                    logger.info(f"定点捣乱: 兜底放虫按钮 ({btn2.x},{btn2.y})")
-
-                count2 = min(len(all_lands), bug_remaining)
-                logger.info(f"定点捣乱: 放虫拖拽 {count2} 块")
-                bug_count = self._drag_prank_to_lands(btn2, all_lands[:count2])
-                total += bug_count
-                logger.info(f"定点捣乱: 放虫完成 {bug_count} 次")
+                if btn2:
+                    count2 = min(len(target_lands), bug_remaining)
+                    logger.info(f"定点捣乱: 放虫拖拽 {count2} 块")
+                    bug_count = self._drag_prank_to_lands(btn2, target_lands[:count2])
+                    total += bug_count
+                    logger.info(f"定点捣乱: 放虫完成 {bug_count} 次")
+                else:
+                    logger.info("定点捣乱: 未检测到放虫按钮，跳过放虫")
             else:
-                logger.info("定点捣乱: 重新点地块后未检测到菜单，跳过放虫")
+                logger.info("定点捣乱: 重新打开工具栏失败，跳过放虫")
 
         return total
+
+    def _prioritize_land(
+        self,
+        lands: list[DetectResult],
+        first: DetectResult,
+    ) -> list[DetectResult]:
+        """把已成功打开工具栏的地块排到拖拽目标首位。"""
+        ordered = [first]
+        ordered.extend(
+            land for land in lands
+            if not (land.x == first.x and land.y == first.y)
+        )
+        return ordered
+
+    def _open_prank_toolbar(
+        self,
+        rect: tuple,
+        lands: list[DetectResult],
+        preferred: DetectResult | None = None,
+    ) -> tuple[DetectResult | None, list[DetectResult]]:
+        """点击一块地，打开包含放草/放虫的工具栏。"""
+        candidates = [preferred] if preferred else []
+        candidates.extend([land for land in lands if preferred is None or land is not preferred])
+        for i, pt in enumerate(candidates):
+            if self.stopped:
+                return None, []
+            if pt is None:
+                continue
+            self.click(pt.x, pt.y, f"打开捣乱工具栏{i+1}/{len(candidates)}", ActionType.PRANK)
+            start = time.time()
+            while time.time() - start < 1.3:
+                if self.stopped:
+                    return None, []
+                time.sleep(0.2)
+                cv_img, dets = self._quick_detect(rect, [
+                    "btn_fangcao", "btn_fangchong",
+                    "btn_plant", "btn_remove", "btn_fertilize",
+                ])
+                if cv_img is None:
+                    continue
+                prank_dets = [
+                    det for det in dets
+                    if det.name in {"btn_fangcao", "btn_fangchong"}
+                ]
+                if prank_dets:
+                    names = [det.name for det in prank_dets]
+                    elapsed = time.time() - start
+                    logger.info(f"定点捣乱: 工具栏已打开，检测到 {names}，耗时 {elapsed:.1f}s")
+                    return pt, dets
+            self.click_blank(rect)
+            time.sleep(0.15)
+        return None, []
+
+    def _filter_visible_lands(
+        self,
+        lands: list[DetectResult],
+        rect: tuple,
+    ) -> list[DetectResult]:
+        """过滤锚点推算中落到窗口外的地块，避免拖拽到无效坐标。"""
+        width, height = rect[2], rect[3]
+        margin = 8
+        visible = [
+            land for land in lands
+            if margin <= land.x <= width - margin and margin <= land.y <= height - margin
+        ]
+        dropped = len(lands) - len(visible)
+        if dropped:
+            logger.info(f"定点捣乱: 过滤窗口外地块 {dropped} 块，保留 {len(visible)} 块")
+        return visible
 
     def _detect_prankable_by_template(self, rect: tuple,
                                       btn_name: str) -> list[DetectResult]:
@@ -402,11 +553,7 @@ class TargetedPrankStrategy(BaseStrategy):
                 cv_img, ['btn_land_right', 'btn_land_left'],
                 scales=[1.0, 0.9, 1.1],
             )
-            for det in anchors:
-                if det.name == 'btn_land_right':
-                    anchor_right = (int(det.x), int(det.y))
-                elif det.name == 'btn_land_left':
-                    anchor_left = (int(det.x), int(det.y))
+            anchor_right, anchor_left = self._select_land_anchor_pair(anchors)
 
             if anchor_right or anchor_left:
                 break
@@ -432,6 +579,53 @@ class TargetedPrankStrategy(BaseStrategy):
         ]
         logger.info(f"定点捣乱: 锚点检测成功，推算 {len(lands)} 个地块")
         return lands
+
+    def _select_land_anchor_pair(
+        self,
+        anchors: list[DetectResult],
+    ) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        """从多个锚点候选中选择最符合土地网格跨度的一对。
+
+        真实左右土地锚点的相对跨度接近 baseline: left - right ≈ (-439, 43)。
+        好友农场画面里偶尔会把土地纹理误识别成 btn_land_left；旧逻辑直接取
+        最后一个候选，会把整套 24 格坐标推偏，表现就是点开土地后又空点返回。
+        """
+        rights = [det for det in anchors if det.name == 'btn_land_right']
+        lefts = [det for det in anchors if det.name == 'btn_land_left']
+        if rights and lefts:
+            expected_dx = -439
+            expected_dy = 43
+            best_pair = None
+            best_score = float("inf")
+            for right in rights:
+                for left in lefts:
+                    dx = int(left.x) - int(right.x)
+                    dy = int(left.y) - int(right.y)
+                    # y 方向假阳性危害更大，加权更高；置信度用于轻微打破平局。
+                    score = (
+                        abs(dx - expected_dx)
+                        + abs(dy - expected_dy) * 3
+                        - (float(right.confidence) + float(left.confidence)) * 20
+                    )
+                    if score < best_score:
+                        best_score = score
+                        best_pair = (right, left, dx, dy)
+            if best_pair:
+                right, left, dx, dy = best_pair
+                logger.info(
+                    "定点捣乱: 选择锚点对 "
+                    f"right=({int(right.x)},{int(right.y)}) "
+                    f"left=({int(left.x)},{int(left.y)}) span=({dx},{dy})"
+                )
+                return (int(right.x), int(right.y)), (int(left.x), int(left.y))
+
+        if rights:
+            best_right = max(rights, key=lambda det: float(det.confidence))
+            return (int(best_right.x), int(best_right.y)), None
+        if lefts:
+            best_left = max(lefts, key=lambda det: float(det.confidence))
+            return None, (int(best_left.x), int(best_left.y))
+        return None, None
 
     def _execute_prank(self, targets: list[DetectResult], rect: tuple,
                        btn_name: str, prank_type: str) -> int:
@@ -549,12 +743,15 @@ class TargetedPrankStrategy(BaseStrategy):
     def _swipe_friend_list(self, rect: tuple):
         if not self.action_executor:
             return
-        h, w = REF_WINDOW_SIZE[1], REF_WINDOW_SIZE[0]
+        h, w = rect[3], rect[2]
         sx, sy = _scale_pos(SWIPE_START, h, w)
         ex, ey = _scale_pos(SWIPE_END, h, w)
         dx, dy = ex - sx, ey - sy
         abs_sx = self.action_executor._window_left + sx
         abs_sy = self.action_executor._window_top + sy
+        logger.info(
+            f"定点捣乱: 好友列表纵向上滑 ({sx},{sy})->({ex},{ey})"
+        )
         self.action_executor.drag(abs_sx, abs_sy, dx, dy, duration=0.3, steps=10)
 
     def _find_any_name(self, dets: list[DetectResult],

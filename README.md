@@ -21,6 +21,7 @@
 | **自动启动** | 可通过 QQ 农场 `.lnk` 快捷方式自动拉起窗口，并用 OCR 自动选择账号 |
 | **窗口监控** | 游戏窗口关闭自动重启；支持黑屏、断网/异地登录、远程登录等异常检测 |
 | **恢复与状态** | 任务失败后可按勾选触发 repair/restart，支持限次保护；状态总览显示运行状态、任务队列和下次执行时间 |
+| **调试诊断** | 设置面板可开启调试模式，按实例写入 `debug_YYYY-MM-DD.log` 和 `task_trace_YYYY-MM-DD.jsonl` |
 | **安全体验** | 后台 PostMessageW 操作不抢占鼠标、F9/F10/F11 全局热键、老板键完美隐藏窗口 |
 | **界面工具** | PyQt6 GUI、任务面板、功能开关、模板管理、地块详情、全局设置、可选 FastAPI Web 面板 |
 | **模板管理** | 截图绑定 hwnd、多边形采集、阈值调节、批量测试、种子批量导入、采集图标支持 |
@@ -166,6 +167,11 @@ python tools/import_seeds.py
 
 旧版 `features` 开关会同步到 `tasks.<task>.features`，保持配置兼容。
 
+开启「设置 → 高级 → 启用 Debug 日志」后，每个实例会在 `instances/{id}/logs/` 下生成：
+
+- `debug_YYYY-MM-DD.log`：完整调试文本日志。
+- `task_trace_YYYY-MM-DD.jsonl`：任务调度诊断事件，可查看任务开始/结束、时间窗跳过、动态注入、恢复触发等原因。
+
 ## 异常与窗口监控
 
 当前已覆盖：
@@ -177,7 +183,8 @@ python tools/import_seeds.py
 - 远程登录场景处理
 - 商城、任务、邮件、活动返回按钮等干扰页面关闭
 - 端午活动返回按钮 `btn_dw_back`
-- repair/restart 仅在对应任务勾选且恢复配置允许时触发，并遵守 `max_repair_attempts` / `max_restart_attempts`
+- repair/restart 仅作为失败恢复许可使用：对应任务勾选且恢复配置允许时，才会由失败任务触发；不会按普通 interval 自行重启窗口。
+- repair/restart 遵守 `max_repair_attempts` / `max_restart_attempts`，调试模式会记录触发源任务和跳过原因。
 
 ## 状态总览
 
@@ -263,6 +270,8 @@ qq-farm/
 **模板匹配不准确？** 使用模板管理重新采集；不规则图标建议多边形框选。
 
 **游戏意外关闭或黑屏？** 窗口监控会自动检测并尝试重启；多实例场景下会避免占用其他实例窗口。
+
+**晚上/后台任务没按预期执行？** 打开调试模式后查看 `instances/{id}/logs/task_trace_YYYY-MM-DD.jsonl`，重点看 `task_out_of_time_range`、`task_start`、`task_finish`、`prank_task_skipped`、`recovery_task_skipped`。
 
 ## License
 
