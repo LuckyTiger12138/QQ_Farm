@@ -985,7 +985,7 @@ class PlantStrategy(BaseStrategy):
         if cv_img is None:
             return None
 
-        shop_btn = self.find_any(dets, ["btn_shop", "main_goto_mall"])
+        shop_btn = self.find_any(dets, ["btn_shop"])
         if not shop_btn:
             logger.warning("购买流程：未找到商店按钮")
             return None

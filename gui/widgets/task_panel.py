@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -56,15 +57,14 @@ DEFAULT_TASK_TITLES = {
     "profile": "个人信息",
     "friend": "好友巡查",
     "land_scan": "地块巡查",
-    "timed_harvest": "定时收获",
     "gift": "礼品领取",
     "sell": "仓库出售",
     "task": "任务奖励",
     "fertilize": "定时施肥",
     "share": "每日分享",
-    "repair": "异常修复",
-    "restart": "窗口重启",
     "捣乱": "好友捣乱",
+    "restart": "窗口重启",
+    "repair": "异常修复",
 }
 
 
@@ -81,6 +81,7 @@ class TaskPanel(QWidget):
         self._task_order: list[str] = []
         self._task_widgets: dict[str, dict[str, Any]] = {}
         self._loading = True
+        self._last_save_time: float = 0.0
         self._build_ui()
         self._load_config()
         self._loading = False
@@ -269,7 +270,7 @@ class TaskPanel(QWidget):
         next_run.setMinimumWidth(0)
         next_run.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         next_run.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        next_run.dateTimeChanged.connect(self._auto_save)
+        next_run.editingFinished.connect(self._auto_save)
         form.addRow(self._field_label("下次执行", card), next_run)
         widgets["next_run"] = next_run
 
@@ -448,6 +449,7 @@ class TaskPanel(QWidget):
                     task_cfg.next_run = qdt.toString("yyyy-MM-dd HH:mm:ss")
 
         c.save()
+        self._last_save_time = time.time()
         self.config_changed.emit(c)
 
     def set_config(self, config: AppConfig):
@@ -457,18 +459,15 @@ class TaskPanel(QWidget):
         self._loading = False
 
     def refresh_snapshots(self, snapshot):
-        """从 TaskExecutor 快照刷新 next_run 显示（不触发 auto_save）
-
-        兼容 copilot 风格 TaskSnapshot（pending_tasks + waiting_tasks）
-        和旧式扁平列表。
-        """
+        """从 TaskExecutor 快照刷新 next_run 显示（不触发 auto_save）"""
         if not snapshot:
+            return
+        # 用户刚保存过配置，3秒内不覆写（避免执行器旧快照覆盖手动修改）
+        if time.time() - self._last_save_time < 3.0:
             return
         self._loading = True
         from PyQt6.QtCore import QDateTime
-        from core.task_executor import TaskItem
 
-        # copilot 风格 TaskSnapshot
         if hasattr(snapshot, "pending_tasks"):
             items: list = list(snapshot.pending_tasks) + list(snapshot.waiting_tasks)
         elif isinstance(snapshot, list):
@@ -486,6 +485,8 @@ class TaskPanel(QWidget):
                 continue
             next_run = widgets.get("next_run")
             if not isinstance(next_run, QDateTimeEdit):
+                continue
+            if next_run.hasFocus():
                 continue
             next_run_dt = getattr(item, "next_run", None)
             if next_run_dt:

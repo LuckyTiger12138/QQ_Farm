@@ -107,6 +107,11 @@ class SettingsPanel(QWidget):
         self.secondary_crop.addItem("不使用次级", userData="")
         plant_form.addRow(self._field_label("次级作物", plant_card), self.secondary_crop)
 
+        self.tertiary_crop = ComboBox(plant_card)
+        self._limit_combo_popup(self.tertiary_crop, CROP_COMBO_MAX_VISIBLE_ITEMS)
+        self.tertiary_crop.addItem("不使用三级", userData="")
+        plant_form.addRow(self._field_label("三级作物", plant_card), self.tertiary_crop)
+
         self.warehouse_first = CheckBox("仓库优先", plant_card)
         warehouse_tip = CaptionLabel("建议开启，关闭后可能会因种子模板识别出错导致重复购买。", plant_card)
         warehouse_tip.setWordWrap(True)
@@ -416,6 +421,7 @@ class SettingsPanel(QWidget):
         self.strategy.currentIndexChanged.connect(self._auto_save)
         self.crop.currentIndexChanged.connect(self._auto_save)
         self.secondary_crop.currentIndexChanged.connect(self._auto_save)
+        self.tertiary_crop.currentIndexChanged.connect(self._auto_save)
         self.warehouse_first.toggled.connect(self._auto_save)
         self.skip_event_crops.toggled.connect(self._auto_save)
         # 窗口
@@ -467,6 +473,7 @@ class SettingsPanel(QWidget):
             c.planting.strategy = PlantMode(str(self.strategy.currentData() or PlantMode.PREFERRED.value))
             c.planting.preferred_crop = str(self.crop.currentData() or c.planting.preferred_crop)
             c.planting.secondary_crop = str(self.secondary_crop.currentData() or "")
+            c.planting.tertiary_crop = str(self.tertiary_crop.currentData() or "")
             c.planting.warehouse_first = bool(self.warehouse_first.isChecked())
             c.planting.skip_event_crops = bool(self.skip_event_crops.isChecked())
             # 窗口
@@ -518,17 +525,22 @@ class SettingsPanel(QWidget):
         self._loading += 1
         current_crop = str(self.crop.currentData() or "")
         current_secondary = str(self.secondary_crop.currentData() or "")
+        current_tertiary = str(self.tertiary_crop.currentData() or "")
         self.crop.clear()
         self.secondary_crop.clear()
+        self.tertiary_crop.clear()
         self.secondary_crop.addItem("不使用次级", userData="")
+        self.tertiary_crop.addItem("不使用三级", userData="")
         for name, _, req_level, grow_time, exp, _ in CROPS:
             time_str = format_grow_time(grow_time)
             if req_level <= level or req_level >= 999:
                 self.crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
                 self.secondary_crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
+                self.tertiary_crop.addItem(f"{name} (Lv{req_level}, {time_str}, {exp}exp)", userData=name)
             else:
                 self.crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
                 self.secondary_crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
+                self.tertiary_crop.addItem(f"[锁] {name} (需Lv{req_level})", userData=name)
         if current_crop in self._crop_names:
             idx = self._crop_names.index(current_crop)
             if idx < self.crop.count():
@@ -537,12 +549,17 @@ class SettingsPanel(QWidget):
             idx = self.secondary_crop.findData(current_secondary)
             if idx >= 0:
                 self.secondary_crop.setCurrentIndex(idx)
+        if current_tertiary:
+            idx = self.tertiary_crop.findData(current_tertiary)
+            if idx >= 0:
+                self.tertiary_crop.setCurrentIndex(idx)
         self._loading -= 1
 
     def _on_strategy_changed(self, *_):
         is_manual = str(self.strategy.currentData() or "") == PlantMode.PREFERRED.value
         self.crop.setEnabled(is_manual)
         self.secondary_crop.setEnabled(is_manual)
+        self.tertiary_crop.setEnabled(is_manual)
         self.auto_crop_label.setVisible(not is_manual)
         self._update_auto_crop_label()
 
@@ -704,6 +721,8 @@ class SettingsPanel(QWidget):
             self._set_combo_data(self.crop, c.planting.preferred_crop)
         secondary_crop = str(getattr(c.planting, "secondary_crop", "") or "")
         self._set_combo_data(self.secondary_crop, secondary_crop)
+        tertiary_crop = str(getattr(c.planting, "tertiary_crop", "") or "")
+        self._set_combo_data(self.tertiary_crop, tertiary_crop)
         self.warehouse_first.setChecked(bool(c.planting.warehouse_first))
         self.skip_event_crops.setChecked(bool(c.planting.skip_event_crops))
         # 窗口

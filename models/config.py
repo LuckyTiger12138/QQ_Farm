@@ -171,6 +171,7 @@ class PlantingConfig(BaseModel):
     strategy: PlantMode = PlantMode.BEST_EXP_RATE
     preferred_crop: str = "椰子"  # strategy=preferred 时使用
     secondary_crop: str = ""       # strategy=preferred 时，首选无种子/无法播种后的次级作物
+    tertiary_crop: str = ""        # strategy=preferred 时，次级也无种子后的三级作物
     player_level: int = 69
     window_width: int = 581
     window_height: int = 1054
@@ -370,6 +371,14 @@ class AppConfig(BaseModel):
                 interval_seconds=120,
                 enabled_time_range="05:00:00-23:59:59",
                 failure_interval_seconds=300,
+            ),
+            "restart": TaskScheduleItemConfig(
+                enabled=False, priority=2, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=1800, failure_interval_seconds=300,
+            ),
+            "repair": TaskScheduleItemConfig(
+                enabled=False, priority=3, trigger=TaskTriggerType.INTERVAL,
+                interval_seconds=600, failure_interval_seconds=60,
             ),
         }
 

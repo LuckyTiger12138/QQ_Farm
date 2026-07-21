@@ -344,6 +344,18 @@ class BotEngine(QObject):
             return ""
         return secondary
 
+    def _resolve_tertiary_crop_name(self) -> str:
+        """返回手动指定模式下的三级作物。"""
+        planting = self.config.planting
+        if planting.strategy != PlantMode.PREFERRED:
+            return ""
+        primary = str(planting.preferred_crop or "").strip()
+        secondary = str(getattr(planting, "secondary_crop", "") or "").strip()
+        tertiary = str(getattr(planting, "tertiary_crop", "") or "").strip()
+        if not tertiary or tertiary == primary or tertiary == secondary:
+            return ""
+        return tertiary
+
     def _setup_instance_dirs(self):
         """初始化实例独立的目录（日志和截图）"""
         paths = ensure_instance_layout(self.instance_id)
@@ -1025,8 +1037,8 @@ class BotEngine(QObject):
         )
         if not window:
             logger.error("窗口监控：自动重启游戏失败")
-            self.log_message.emit("❌ 自动重启游戏失败，请手动打开 QQ 农场")
-            # 失败后设置 30 秒冷却，避免反复重启占用资源（用户可能需要手动处理）
+            self.log_message.emit("❌ 自动重启游戏失败，等待 restart 任务兜底重试")
+            self._mark_recovery_task("restart", "window_monitor", "窗口监控检测到窗口丢失，直接重启失败")
             try:
                 self.scheduler.set_remote_login_cooldown(30)
             except Exception:
@@ -1519,6 +1531,7 @@ class BotEngine(QObject):
         rect = context.get("rect")
         crop_name = self._resolve_crop_name()
         secondary_crop = self._resolve_secondary_crop_name()
+        tertiary_crop = self._resolve_tertiary_crop_name()
         original_auto_buy_seed = bool(self.plant.auto_buy_seed)
 
         if secondary_crop and original_auto_buy_seed:
@@ -1590,6 +1603,52 @@ class BotEngine(QObject):
             if extra_actions:
                 logger.info("播种策略：次级作物已执行 | {} -> {}", secondary_crop, extra_actions)
                 pa.extend(extra_actions)
+            elif tertiary_crop and not self.popup.stopped:
+                logger.info(
+                    "播种策略：次级库存未命中，尝试三级库存补播 | 三级={}",
+                    tertiary_crop,
+                )
+                self._clear_screen(rect)
+                self.plant.auto_buy_seed = False
+                self.plant._auto_buy_seed_pause_reason = (
+                    f"播种策略：三级 '{tertiary_crop}' 仅作为库存回退，不自动购买；"
+                    f"三级也无种子时将购买首选 '{crop_name}'"
+                )
+                try:
+                    tertiary_actions = self.plant.plant_all(
+                        rect,
+                        tertiary_crop,
+                        auto_fertilize=self.config.features.auto_fertilize,
+                    )
+                finally:
+                    self.plant.auto_buy_seed = original_auto_buy_seed
+                    self.plant._auto_buy_seed_pause_reason = ""
+                if tertiary_actions:
+                    logger.info("播种策略：三级作物已执行 | {} -> {}", tertiary_crop, tertiary_actions)
+                    pa.extend(tertiary_actions)
+                elif original_auto_buy_seed and not self.popup.stopped:
+                    logger.info("播种策略：三级库存也未命中，开始购买首选 | 作物={}", crop_name)
+                    self._clear_screen(rect)
+                    primary_actions = self.plant.plant_all(
+                        rect,
+                        crop_name,
+                        auto_fertilize=self.config.features.auto_fertilize,
+                    )
+                    if primary_actions:
+                        pa.extend(primary_actions)
+                    else:
+                        logger.info("播种策略：plant_all 未播种，尝试直接购买首选种子后重新播种")
+                        self._clear_screen(rect)
+                        buy_result = self.plant._buy_seeds(rect, crop_name, skip_warehouse_check=True)
+                        if buy_result:
+                            self._clear_screen(rect)
+                            retry_actions = self.plant.plant_all(
+                                rect,
+                                crop_name,
+                                auto_fertilize=self.config.features.auto_fertilize,
+                            )
+                            if retry_actions:
+                                pa.extend(retry_actions)
             elif original_auto_buy_seed and not self.popup.stopped:
                 logger.info(
                     "播种策略：次级库存也未命中，开始购买首选 | 作物={}",
@@ -1603,6 +1662,19 @@ class BotEngine(QObject):
                 )
                 if primary_actions:
                     pa.extend(primary_actions)
+                else:
+                    logger.info("播种策略：plant_all 未播种，尝试直接购买首选种子后重新播种")
+                    self._clear_screen(rect)
+                    buy_result = self.plant._buy_seeds(rect, crop_name, skip_warehouse_check=True)
+                    if buy_result:
+                        self._clear_screen(rect)
+                        retry_actions = self.plant.plant_all(
+                            rect,
+                            crop_name,
+                            auto_fertilize=self.config.features.auto_fertilize,
+                        )
+                        if retry_actions:
+                            pa.extend(retry_actions)
 
         if pa:
             context.setdefault("actions_done", []).extend(pa)
@@ -2070,25 +2142,15 @@ class BotEngine(QObject):
             or "未找到窗口" in error_text
             or "截屏失败" in error_text
         )
-        repair_cfg = self.config.tasks.get("repair")
-        restart_cfg = self.config.tasks.get("restart")
-        repair_enabled = (
-            repair_cfg is not None
-            and repair_cfg.enabled
-            and recovery.repair_before_restart
-        )
-        restart_enabled = (
-            restart_cfg is not None
-            and restart_cfg.enabled
-            and recovery.auto_restart_on_window_lost
-        )
+        repair_enabled = recovery.repair_before_restart
+        restart_enabled = recovery.auto_restart_on_window_lost
 
         attempts = self._recovery_attempts.setdefault(task_name, {"repair": 0, "restart": 0})
         max_repair = max(0, int(getattr(recovery, "max_repair_attempts", 0) or 0))
         max_restart = max(0, int(getattr(recovery, "max_restart_attempts", 0) or 0))
 
         if repair_enabled:
-            if attempts["repair"] < max_repair and self._async_executor.task_call("repair", force_call=False):
+            if attempts["repair"] < max_repair:
                 self._mark_recovery_task("repair", task_name, error)
                 attempts["repair"] += 1
                 logger.info(f"任务恢复: [{display_name}] 失败后已触发 repair")
@@ -2099,7 +2161,7 @@ class BotEngine(QObject):
                     f"{attempts['repair']}/{max_repair}，本次不再触发"
                 )
         if prefer_restart and restart_enabled:
-            if attempts["restart"] < max_restart and self._async_executor.task_call("restart", force_call=False):
+            if attempts["restart"] < max_restart:
                 self._mark_recovery_task("restart", task_name, error)
                 attempts["restart"] += 1
                 logger.info(f"任务恢复: [{display_name}] 窗口/截图异常，已触发 restart")
@@ -2110,17 +2172,30 @@ class BotEngine(QObject):
                 )
 
     def _mark_recovery_task(self, recovery_task: str, source_task: str, error: str) -> None:
-        """给 repair/restart 写入一次性恢复触发标记。"""
+        """给 repair/restart 写入恢复标记，不存在则动态创建并启用。"""
         if not self._async_executor:
             return
+        from core.task_executor import TaskItem as _TI
         with self._async_executor._lock:
             item = self._async_executor._tasks.get(recovery_task)
             if not item:
-                return
+                item = _TI(
+                    name=recovery_task,
+                    enabled=True,
+                    priority=2,
+                    next_run=datetime.now(),
+                    success_interval=1800,
+                    failure_interval=300,
+                )
+                self._async_executor._tasks[recovery_task] = item
+                logger.info(f"异常恢复: 动态创建任务 [{recovery_task}]")
+            item.enabled = True
+            item.next_run = datetime.now()
             item.features = dict(item.features or {})
             item.features["_recovery_source_task"] = source_task
             item.features["_recovery_error"] = str(error or "")
             item.features["_recovery_requested_at"] = datetime.now().isoformat(timespec="seconds")
+        self._async_executor._wake_event.set()
         self._debug_event(
             "recovery_task_marked",
             recovery_task=recovery_task,
@@ -2149,6 +2224,15 @@ class BotEngine(QObject):
                     "requested_at": requested_at,
                 }
         return marker
+
+    def _disable_recovery_task(self, task_name: str) -> None:
+        """异常恢复任务执行完毕后自动禁用自身（避免定时轮询）。"""
+        if not self._async_executor:
+            return
+        with self._async_executor._lock:
+            item = self._async_executor._tasks.get(task_name)
+            if item:
+                item.enabled = False
 
     def _persist_task_next_run(self, task_name: str):
         """将任务下次执行时间回写到配置文件（移植自 copilot）"""
@@ -2707,18 +2791,14 @@ class BotEngine(QObject):
         return TaskResult(success=True)
 
     def _run_task_repair(self, ctx: TaskContext) -> TaskResult:
-        """任务级修复：重置停止标志、重建窗口上下文、关闭干扰弹窗。"""
+        """异常修复：重置停止标志、重建窗口上下文、关闭干扰弹窗。无恢复标记时跳过。"""
         marker = self._consume_recovery_marker(ctx.task_name)
         if not marker:
-            logger.info("任务恢复: repair 未由失败任务触发，本轮跳过")
-            self._debug_event("recovery_task_skipped", task="repair", reason="not_triggered_by_failure")
-            return TaskResult(success=True, next_run_seconds=86400)
+            return TaskResult(success=True)
 
         logger.info(
-            f"任务恢复: repair 由 [{self._task_display_name(marker.get('source_task', ''))}] 触发"
+            f"异常修复: 由 [{self._task_display_name(marker.get('source_task', ''))}] 触发"
         )
-        recovery = getattr(self.config, "recovery", None)
-        delay = int(getattr(recovery, "repair_retry_delay_seconds", 5) or 5)
 
         for strategy in self._strategies:
             strategy._stop_requested = False
@@ -2726,7 +2806,7 @@ class BotEngine(QObject):
 
         rect = self._prepare_window()
         if not rect:
-            return TaskResult(success=False, error="修复失败：窗口未找到", next_run_seconds=delay)
+            return TaskResult(success=False, error="修复失败：窗口未找到")
 
         if not self.action_executor:
             wnd = self.window_manager._cached_window
@@ -2749,31 +2829,35 @@ class BotEngine(QObject):
             try:
                 self._clear_screen(rect)
             except Exception as exc:
-                logger.debug(f"任务修复清屏失败: {exc}")
+                logger.debug(f"异常修复清屏失败: {exc}")
 
-        self.log_message.emit("任务恢复：repair 已完成")
-        return TaskResult(success=True, next_run_seconds=300)
+        self.log_message.emit("异常修复: ✓ 已完成")
+        return TaskResult(success=True)
 
     def _run_task_restart(self, ctx: TaskContext) -> TaskResult:
-        """任务级重启：释放缓存窗口并通过快捷方式重新定位/启动窗口。"""
-        marker = self._consume_recovery_marker(ctx.task_name)
-        if not marker:
-            logger.info("任务恢复: restart 未由窗口/截图异常触发，本轮跳过")
-            self._debug_event("recovery_task_skipped", task="restart", reason="not_triggered_by_failure")
-            return TaskResult(success=True, next_run_seconds=86400)
+        """定时窗口重启：到点就关闭当前游戏窗口并重新启动。"""
+        if is_silent_time(self.config.silent_hours):
+            remaining = get_silent_remaining_seconds(self.config.silent_hours)
+            return TaskResult(success=True, next_run_seconds=min(remaining, 300))
 
-        logger.info(
-            f"任务恢复: restart 由 [{self._task_display_name(marker.get('source_task', ''))}] 触发"
-        )
-        recovery = getattr(self.config, "recovery", None)
-        wait_seconds = int(getattr(recovery, "restart_wait_seconds", 30) or 30)
+        if self._bot_stop_requested:
+            return TaskResult(success=False, error="已停止")
+
+        logger.info("[窗口重启] 定时重启开始")
+        self.log_message.emit("[窗口重启] 正在重启游戏窗口...")
+
+        # 暂停窗口监控，防止重启过程中触发 _on_window_lost 导致重复重启
+        self.scheduler._window_monitor_paused = True
 
         lost_hwnd = getattr(self.window_manager, "_pinned_hwnd", None)
         if lost_hwnd:
             try:
                 self.window_manager._all_claimed_hwnds.discard(lost_hwnd)
+                ctypes.windll.user32.PostMessageW(lost_hwnd, 0x0010, 0, 0)
             except Exception:
                 pass
+            time.sleep(1)
+
         self.window_manager._pinned_hwnd = None
         self.window_manager._cached_window = None
         self.config.planting.last_hwnd = 0
@@ -2787,7 +2871,15 @@ class BotEngine(QObject):
             saved_hwnd=0,
         )
         if not window:
-            return TaskResult(success=False, error="重启失败：窗口未找到", next_run_seconds=wait_seconds)
+            self.scheduler._window_monitor_paused = False
+            return TaskResult(success=False, error="重启失败：窗口未找到")
+
+        w, h = self.config.planting.window_width, self.config.planting.window_height
+        if w > 0 and h > 0:
+            time.sleep(1)
+            self.window_manager.resize_window(w, h, self.config.safety.window_position)
+            time.sleep(0.5)
+            window = self.window_manager._cached_window
 
         rect = (window.left, window.top, window.width, window.height)
         hwnd = window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
@@ -2802,14 +2894,16 @@ class BotEngine(QObject):
         self.config.planting.last_hwnd = window.hwnd
         try:
             self.config.save()
-        except Exception as exc:
-            logger.debug(f"重启后保存窗口句柄失败: {exc}")
+        except Exception:
+            pass
         self._init_strategies()
 
-        if self._async_executor and self._async_executor.is_task_enabled("main"):
-            self._async_executor.task_call("main", force_call=False)
-        self.log_message.emit("任务恢复：restart 已重新绑定游戏窗口")
-        return TaskResult(success=True, next_run_seconds=wait_seconds)
+        # 恢复窗口监控
+        self.scheduler._window_monitor_paused = False
+
+        self.log_message.emit(f"[窗口重启] ✓ 已重启: {window.title}")
+        logger.info(f"[窗口重启] 完成: {window.title}")
+        return TaskResult(success=True)
 
     def _run_task_keepalive(self, ctx: TaskContext) -> TaskResult:
         """保活任务：检测锚点 → 点击 → 小幅滑动，防止游戏超时下线"""

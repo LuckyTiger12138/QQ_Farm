@@ -146,7 +146,11 @@ def build_task_item(name: str, cfg: TaskScheduleItemConfig) -> TaskItem:
         try:
             next_run = datetime.fromisoformat(cfg.next_run)
             if next_run < now:
-                next_run = now
+                # restart/repair 不立即触发，推后一个间隔
+                if name in ("restart", "repair"):
+                    next_run = now + timedelta(seconds=max(60, cfg.interval_seconds))
+                else:
+                    next_run = now
         except (ValueError, TypeError):
             next_run = now
     else:

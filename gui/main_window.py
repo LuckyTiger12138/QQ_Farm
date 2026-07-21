@@ -1040,20 +1040,23 @@ class MainWindow(QMainWindow):
                 self._btn_pause.setText("暂停")
 
     def _on_start_all(self):
-        """启动所有实例"""
-        self._refresh_claimed_hwnds()
+        """启动所有实例（顺序启动，避免同时抢占窗口）"""
+        import time as _time
         sessions = self.instance_manager.iter_sessions()
         started = 0
         for session in sessions:
             engine = self._get_or_create_engine(session)
-            # 只启动未运行的实例
             from core.task_scheduler import BotState
             if engine.scheduler.state != BotState.RUNNING:
+                self._refresh_claimed_hwnds()
                 if engine.start():
                     self._instance_sidebar.update_instance_state(session.instance_id, 'running')
                     started += 1
+                    # 等待窗口绑定完成，避免下个实例抢占
+                    _time.sleep(5)
         logger.info(f"已启动 {started} 个实例")
-        self.engine.log_message.emit(f"✓ 已启动 {started} 个实例")
+        if self.engine:
+            self.engine.log_message.emit(f"✓ 已启动 {started} 个实例")
 
     def _on_stop_all(self):
         """停止所有实例"""
