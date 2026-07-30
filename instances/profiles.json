@@ -3,11 +3,15 @@
   "instances": [
     {
       "id": "default",
-      "name": "default"
+      "name": "default",
+      "created_at": "2026-07-30T10:24:20",
+      "updated_at": "2026-07-30T10:24:20"
     },
     {
       "id": "qq2",
-      "name": "qq2"
+      "name": "qq2",
+      "created_at": "2026-07-30T10:24:20",
+      "updated_at": "2026-07-30T10:24:20"
     }
   ]
 }
