@@ -53,6 +53,8 @@ class TaskScheduler(QObject):
             "running_tasks": 0,
             "pending_tasks": 0,
             "waiting_tasks": 0,
+            "pending_task_details": "--",
+            "waiting_task_details": "--",
         }
 
     @property
@@ -127,6 +129,8 @@ class TaskScheduler(QObject):
             "running_tasks": 0,
             "pending_tasks": 0,
             "waiting_tasks": 0,
+            "pending_task_details": "--",
+            "waiting_task_details": "--",
         })
         self._set_state(BotState.IDLE)
         logger.info("调度器已停止")
@@ -253,6 +257,7 @@ class TaskScheduler(QObject):
         for key in (
             "current_task", "next_task", "next_run",
             "running_tasks", "pending_tasks", "waiting_tasks",
+            "pending_task_details", "waiting_task_details",
         ):
             if key in kwargs and self._runtime_metrics.get(key) != kwargs[key]:
                 self._runtime_metrics[key] = kwargs[key]

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -49,6 +49,8 @@ class StatusPanel(QWidget):
         self._add_cell(tasks_grid, 0, 3, "等待中", "waiting_tasks", "0")
         self._add_cell(tasks_grid, 1, 0, "下一任务", "next_task", "--")
         self._add_cell(tasks_grid, 1, 1, "下次执行", "next_run", "--")
+        self._add_cell(tasks_grid, 2, 0, "待执行明细", "pending_task_details", "--", col_span=4)
+        self._add_cell(tasks_grid, 3, 0, "等待中明细", "waiting_task_details", "--", col_span=4)
         root.addWidget(tasks_card)
 
         root.addStretch()
@@ -90,7 +92,17 @@ class StatusPanel(QWidget):
         wrapper.addLayout(grid)
         return card, grid
 
-    def _add_cell(self, grid: QGridLayout, row: int, col: int, title: str, key: str, default: str):
+    def _add_cell(
+        self,
+        grid: QGridLayout,
+        row: int,
+        col: int,
+        title: str,
+        key: str,
+        default: str,
+        *,
+        col_span: int = 1,
+    ):
         row_widget = QWidget(self)
         row_widget.setObjectName("statusItem")
         row_widget.setStyleSheet("QWidget#statusItem { border: none; border-radius: 6px; background: transparent; }")
@@ -104,12 +116,19 @@ class StatusPanel(QWidget):
         if key in self._numeric_keys:
             value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             value.setMinimumWidth(value.fontMetrics().horizontalAdvance("00000"))
+        if key in {"pending_task_details", "waiting_task_details"}:
+            value.setWordWrap(True)
+            value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            value.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         if key in {"current_task", "next_run"}:
             value.setStyleSheet("font-weight: 700;")
         value.setTextColor(QColor("#0F172A"), QColor("#E5E7EB"))
         row_layout.addWidget(value)
         row_layout.addStretch()
-        grid.addWidget(row_widget, row, col)
+        if col_span > 1:
+            grid.addWidget(row_widget, row, col, 1, col_span)
+        else:
+            grid.addWidget(row_widget, row, col)
         self._labels[key] = value
 
     def _set_value(self, key: str, value: str, *, tooltip: str | None = None):
@@ -248,6 +267,10 @@ class StatusPanel(QWidget):
         self._set_value("next_task", self._short_text(stats.get("next_task", "--")))
         next_run_text, next_run_tooltip = self._format_next_run(stats.get("next_run", "--"))
         self._set_value("next_run", next_run_text, tooltip=next_run_tooltip)
+        pending_details = str(stats.get("pending_task_details", "--") or "--")
+        waiting_details = str(stats.get("waiting_task_details", "--") or "--")
+        self._set_value("pending_task_details", pending_details, tooltip=pending_details)
+        self._set_value("waiting_task_details", waiting_details, tooltip=waiting_details)
 
         # 向后兼容：旧字段
         if "next_farm_check" in self._labels:

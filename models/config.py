@@ -203,7 +203,7 @@ class CrossInstanceConfig(BaseModel):
     accept_steal: bool = False             # 是否接收偷菜任务
     accept_prank: bool = False             # 是否接收捣乱任务
     alert_threshold_seconds: int = 300     # 成熟阈值（默认5分钟）
-    max_prank_per_day: int = 100           # 每日捣乱次数上限
+    max_prank_per_day: int = 120           # 每日捣乱次数上限
     prank_count_today: int = 0             # 今日捣乱次数
     prank_count_date: str = ""             # 捣乱计数日期 (YYYY-MM-DD)
     last_prank_type: str = ""              # 上次捣乱类型 "weed"/"bug"，用于交替

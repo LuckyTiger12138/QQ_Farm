@@ -260,7 +260,7 @@
     "accept_steal": false,
     "accept_prank": false,
     "alert_threshold_seconds": 300,
-    "max_prank_per_day": 100,
+    "max_prank_per_day": 120,
     "prank_count_today": 0,
     "prank_count_date": "",
     "last_prank_type": "",

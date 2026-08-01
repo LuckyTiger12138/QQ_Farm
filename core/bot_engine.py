@@ -2060,6 +2060,24 @@ class BotEngine(QObject):
         from gui.widgets.task_panel import DEFAULT_TASK_TITLES
         return DEFAULT_TASK_TITLES.get(task_name, task_name)
 
+    @staticmethod
+    def _format_snapshot_time(value: datetime) -> str:
+        """格式化任务快照中的执行时间。"""
+        now = datetime.now()
+        return value.strftime("%H:%M:%S") if value.date() == now.date() else value.strftime("%m-%d %H:%M:%S")
+
+    def _format_task_queue_details(self, tasks: list[TaskItem], *, limit: int = 8) -> str:
+        """格式化任务队列明细：任务名 + 执行时间。"""
+        if not tasks:
+            return "--"
+        items = [
+            f"{self._task_display_name(item.name)} {self._format_snapshot_time(item.next_run)}"
+            for item in tasks[:limit]
+        ]
+        if len(tasks) > limit:
+            items.append(f"另{len(tasks) - limit}项")
+        return "；".join(items)
+
     def _on_executor_snapshot(self, snapshot: TaskSnapshot):
         """执行器快照回调（立即推送 GUI 状态总览）。"""
         # 兼容旧 flat_snapshot 调用
@@ -2083,6 +2101,8 @@ class BotEngine(QObject):
             running_tasks=1 if snapshot.running_task else 0,
             pending_tasks=len(snapshot.pending_tasks),
             waiting_tasks=len(snapshot.waiting_tasks),
+            pending_task_details=self._format_task_queue_details(snapshot.pending_tasks),
+            waiting_task_details=self._format_task_queue_details(snapshot.waiting_tasks),
         )
 
     def _on_executor_task_done(self, task_name: str, result: TaskResult):
