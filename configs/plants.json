@@ -6230,5 +6230,87 @@
       "exp_alter": 0,
       "fruit_root": 0,
       "fruit_alter": 0
+    },
+    {
+      "id": 3000024,
+      "name": "银星海棠",
+      "mutant": "",
+      "fruit": {
+        "id": 40524,
+        "count": 50
+      },
+      "seed_id": 30024,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000024",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
+    },
+    {
+      "id": 3000025,
+      "name": "月见草",
+      "mutant": "",
+      "fruit": {
+        "id": 40525,
+        "count": 50
+      },
+      "seed_id": 30025,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000025",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
     }
   ]
