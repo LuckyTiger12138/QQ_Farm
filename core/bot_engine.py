@@ -102,7 +102,7 @@ SCENE_TEMPLATES = [
     "icon_weed_in_friend_detail",
     "icon_bug_in_friend_detail",
     # 状态图标
-    "icon_mature", "icon_bug", "icon_water",
+    "icon_mature", "icon_caiji", "icon_bug", "icon_water",
     # 地块状态图标（地块巡查用）
     "icon_land_stand", "icon_land_red", "icon_land_black",
     "icon_land_gold", "icon_land_gold_2", "icon_land_amethyst",
