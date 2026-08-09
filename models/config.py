@@ -65,7 +65,7 @@ class SafetyConfig(BaseModel):
     max_actions_per_round: int = 20
     run_mode: RunMode = RunMode.BACKGROUND
     window_position: WindowPosition = WindowPosition.BOTTOM_LEFT  # 窗口位置
-    auto_remote_login: bool = False  # 掉线重登（默认关闭，多实例下不建议开启）
+    auto_remote_login: bool = False  # 掉线重登（窗口丢失/黑屏/断网时自动重启游戏）
     debug_log_enabled: bool = False  # 调试日志开关
     stuck_seconds: int = 180          # 任务卡死阈值（预留给任务级恢复）
     stuck_long_wait_seconds: int = 600  # 长时间卡死阈值（预留给重启策略）
