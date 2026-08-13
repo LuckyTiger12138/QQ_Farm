@@ -6435,5 +6435,191 @@
       "exp_alter": 0,
       "fruit_root": 0,
       "fruit_alter": 0
+    },
+    {
+      "id": 3000029,
+      "name": "青梅",
+      "mutant": "",
+      "fruit": {
+        "id": 40529,
+        "count": 50
+      },
+      "seed_id": 30029,
+      "land_level_need": 999,
+      "seasons": 1,
+      "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+      "exp": 2911,
+      "size": 2,
+      "offsetPosition": {
+        "x": 100,
+        "y": 0
+      },
+      "mutantEffectScale": {
+        "x": 1.75,
+        "y": 1.5
+      },
+      "harvestOffsetPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "harvestRandom": true,
+      "harvestAllSpineRes": "spine/v2/shouge/Crop_sg_final",
+      "harvestAllOffsetPosition": "5:30;50:-30;150:-75;200:-25;150:-30",
+      "all_state_spine": "spine/v2/xiyouzhongzi/3000029",
+      "mature_effect": "effect/prefab/effect_plant_maturation",
+      "mature_effect_offset": {
+        "x": 0,
+        "y": 60
+      },
+      "rare_plant_light_pos": "{\"x\":113,\"y\":125,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}}",
+      "exp_root": 0,
+      "exp_alter": 0,
+      "fruit_root": 0,
+      "fruit_alter": 0
     }
+  ,
+  {
+    "id": 1020174,
+    "name": "晚香玉",
+    "mutant": "",
+    "fruit": {"id": 40174, "count": 200},
+    "seed_id": 20174,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:2400;发芽:2400;小叶子:2400;大叶子:3600;花蕾:3600;盛开:0;",
+    "exp": 867,
+    "size": 0
+  },
+  {
+    "id": 1020188,
+    "name": "文殊兰",
+    "mutant": "",
+    "fruit": {"id": 40188, "count": 200},
+    "seed_id": 20188,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:2400;发芽:2400;小叶子:2400;大叶子:3600;花蕾:3600;盛开:0;",
+    "exp": 906,
+    "size": 0
+  },
+  {
+    "id": 1020106,
+    "name": "郁金香",
+    "mutant": "",
+    "fruit": {"id": 40106, "count": 200},
+    "seed_id": 20106,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:4800;发芽:4800;小叶子:4800;大叶子:7200;花蕾:7200;盛开:0;",
+    "exp": 1812,
+    "size": 0
+  },
+  {
+    "id": 1020101,
+    "name": "薰衣草",
+    "mutant": "",
+    "fruit": {"id": 40101, "count": 200},
+    "seed_id": 20101,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:7200;发芽:7200;小叶子:7200;大叶子:10800;花蕾:10800;盛开:0;",
+    "exp": 2718,
+    "size": 0
+  },
+  {
+    "id": 1020102,
+    "name": "马蹄莲",
+    "mutant": "",
+    "fruit": {"id": 40102, "count": 200},
+    "seed_id": 20102,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:14400;发芽:14400;小叶子:14400;大叶子:21600;初熟:21600;成熟:0;",
+    "exp": 5436,
+    "size": 0
+  },
+  {
+    "id": 1020182,
+    "name": "艳蝶兰",
+    "mutant": "",
+    "fruit": {"id": 40182, "count": 200},
+    "seed_id": 20182,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:2400;发芽:2400;小叶子:2400;大叶子:3600;花蕾:3600;盛开:0;",
+    "exp": 945,
+    "size": 0
+  },
+  {
+    "id": 1020124,
+    "name": "月季花",
+    "mutant": "",
+    "fruit": {"id": 40124, "count": 200},
+    "seed_id": 20124,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:7200;发芽:7200;小叶子:7200;大叶子:10800;花蕾:10800;盛开:0;",
+    "exp": 2835,
+    "size": 0
+  },
+  {
+    "id": 1020115,
+    "name": "兰花",
+    "mutant": "",
+    "fruit": {"id": 40115, "count": 200},
+    "seed_id": 20115,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:14400;小叶子:14400;大叶子:14400;花蕾:21600;盛开:21600;成熟:0;",
+    "exp": 5670,
+    "size": 0
+  },
+  {
+    "id": 1020187,
+    "name": "君子兰",
+    "mutant": "",
+    "fruit": {"id": 40187, "count": 200},
+    "seed_id": 20187,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:2400;发芽:2400;小叶子:2400;大叶子:3600;花蕾:3600;盛开:0;",
+    "exp": 981,
+    "size": 0
+  },
+  {
+    "id": 1020131,
+    "name": "六月雪",
+    "mutant": "",
+    "fruit": {"id": 40131, "count": 200},
+    "seed_id": 20131,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:4800;发芽:4800;小叶子:4800;大叶子:7200;花蕾:7200;盛开:0;",
+    "exp": 1962,
+    "size": 0
+  },
+  {
+    "id": 1020132,
+    "name": "蓝铃花",
+    "mutant": "",
+    "fruit": {"id": 40132, "count": 200},
+    "seed_id": 20132,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:7200;发芽:7200;小叶子:7200;大叶子:10800;花蕾:10800;盛开:0;",
+    "exp": 2943,
+    "size": 0
+  },
+  {
+    "id": 1020172,
+    "name": "宋梅",
+    "mutant": "",
+    "fruit": {"id": 40172, "count": 200},
+    "seed_id": 20172,
+    "land_level_need": 1,
+    "seasons": 2,
+    "grow_phases": "种子:14400;发芽:14400;小叶子:14400;大叶子:21600;花蕾:21600;盛开:0;",
+    "exp": 5886,
+    "size": 0
+  }
   ]
