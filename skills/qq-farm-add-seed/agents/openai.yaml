@@ -1,0 +1,4 @@
+interface:
+  display_name: "QQ 农场新增种子"
+  short_description: "新增作物数据和可替换模板"
+  default_prompt: "Use $qq-farm-add-seed to add a seed crop in D:\\qq-farm with data records and replaceable X placeholder templates."

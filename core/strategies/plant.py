@@ -208,10 +208,15 @@ class PlantStrategy(BaseStrategy):
             valid_btns = []
             if page_btns:
                 valid_btns = [btn for btn in page_btns if btn.x >= min_x]
-                # 如果有多个，选置信度最高的
                 if valid_btns:
+                    # 如果有多个，选置信度最高的
                     page_btn = max(valid_btns, key=lambda b: b.confidence)
                     logger.debug(f"检测到翻页按钮 ({page_btn.x}, {page_btn.y}) 在有效区域 (>{min_x})")
+                else:
+                    logger.debug(
+                        f"翻页按钮命中但被位置过滤 (要求 x>={min_x}): "
+                        f"{[(b.x, b.y, f'{b.confidence:.0%}') for b in page_btns]}"
+                    )
             
             if valid_btns:
                 # 还有下一页，点击翻页
@@ -229,6 +234,31 @@ class PlantStrategy(BaseStrategy):
                 break
 
         return None
+
+    def _seed_panel_open(self, cv_img, land_det) -> bool:
+        """点击空地后判断选种面板是否弹出（廉价判据：原空地是否仍可见）
+
+        选种面板弹出会遮挡土地区。若点击后原空地模板仍在原坐标附近命中，
+        说明面板未弹出（土地误判/点击落空）；命中不到则认为面板已弹出。
+
+        Args:
+            cv_img: 点击空地后的截图
+            land_det: 点击前命中的空地检测结果（含模板名和坐标）
+
+        Returns:
+            bool: True 表示面板已弹出（找不到种子是列表问题，不是误判）
+        """
+        if cv_img is None or land_det is None:
+            return True  # 无法判断时保守认为已弹出，避免误跳真实空地
+        thresh = self.cv_detector.get_template_threshold(land_det.name)
+        hits = self.cv_detector.detect_single_template(
+            cv_img, land_det.name, threshold=thresh)
+        if not hits:
+            return True  # 空地被遮挡 → 面板已弹出
+        for h in hits:
+            if abs(h.x - land_det.x) < 50 and abs(h.y - land_det.y) < 50:
+                return False  # 原空地仍然可见 → 面板未弹出
+        return True  # 有命中但都在别处，原位置已被遮挡
 
     def _swipe_seed_list(self, rect: tuple):
         """滑动种子列表以加载更多种子（翻页）- 已废弃，保留兼容
@@ -304,8 +334,18 @@ class PlantStrategy(BaseStrategy):
         seed_det = self._find_seed_with_pagination(cv_img, crop_name, rect, max_attempts=10)
 
         if not seed_det:
-            # 还是没有种子，这块地也可能不是空地
-            logger.info(f"剩余地块中仍未找到种子，跳过 {lands[0]}")
+            panel_img, _, _ = self.capture(rect)
+            if self._seed_panel_open(panel_img, lands[0]):
+                # 面板已打开但列表无目标种子，换地重试无意义（面板内容相同），直接结束
+                logger.info(f"播种流程：选种面板已打开但无 '{crop_name}' 种子，停止逐块重试")
+                self.click_blank(rect)
+                for _ in range(10):
+                    if self.stopped:
+                        return all_actions
+                    time.sleep(0.05)
+                return all_actions
+            # 面板未弹出：这块地疑似误判，换下一块继续
+            logger.info(f"播种流程：剩余地块点击后未弹出选种面板，疑似误判，跳过 {lands[0]}")
             self.click_blank(rect)
             for _ in range(10):
                 if self.stopped:
@@ -429,14 +469,31 @@ class PlantStrategy(BaseStrategy):
         seed_det = self._find_seed_with_pagination(cv_img, crop_name, rect, max_attempts=10)
 
         if not seed_det:
+            # 廉价判据区分失败原因：原空地是否仍可见（面板弹出会遮挡它）
+            panel_img, _, _ = self.capture(rect)
+            panel_open = self._seed_panel_open(panel_img, lands[0])
+
             # 没找到种子，先关闭种子弹窗
-            logger.info(f"播种流程：未找到 '{crop_name}' 种子，关闭弹窗...")
+            logger.info(
+                f"播种流程：未找到 '{crop_name}' 种子（选种面板{'已打开' if panel_open else '未弹出'}），关闭弹窗...")
             self.click_blank(rect)
             for _ in range(10):
                 if self.stopped:
                     return all_actions
                 time.sleep(0.05)
             if self.stopped:
+                return all_actions
+
+            if not panel_open:
+                # 面板没弹出说明这块"空地"是误判，换下一块地重试，避免真正的空地排在后面被跳过
+                if len(lands) > 1:
+                    logger.warning(
+                        f"播种流程：第 1 块'空地'疑似误判（未弹出选种面板），"
+                        f"继续尝试剩余 {len(lands) - 1} 块空地"
+                    )
+                    return all_actions + self._plant_remaining_lands(
+                        rect, lands[1:], crop_name, total_lands, 1)
+                logger.warning("播种流程：'空地'疑似误判且无其他空地可试，本轮跳过播种")
                 return all_actions
 
             # 只有开启自动买种时才检查仓库

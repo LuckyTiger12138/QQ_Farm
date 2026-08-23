@@ -96,6 +96,16 @@ python tools/import_seeds.py
 | **锁定格兼容** | 已预留 `icon_item_locked` / `icon_seed_locked` 锁图标识别，有模板时自动启用；没有锁模板时不阻塞正常买种 |
 | **建议配置** | 自动买种仍受商店截图/OCR 影响，识别不稳时先关闭该功能，手动补种；下一阶段会继续补“按仓库序号在播种弹窗选种” |
 
+### 新增作物维护
+
+项目内置 Codex skill：`skills/qq-farm-add-seed/`。它会为特殊作物分配连续 ID，更新 `configs/plants.json`，并创建可替换的 `seed_` / `ws_` X 占位模板：
+
+```powershell
+python skills/qq-farm-add-seed/scripts/add_seed.py --repo . --name "新作物"
+```
+
+脚本拒绝覆盖已存在的模板，只会为新作物追加禁用项；用户替换为实际截图后，在模板管理中启用对应模板即可。设置面板的作物下拉框由 `plants.json` 动态加载，无需额外修改界面代码。
+
 ## 多实例与大小号通讯
 
 程序支持同时运行多个农场实例，每个实例拥有独立配置、日志、截图和任务状态。
@@ -254,6 +264,7 @@ qq-farm/
 ├── configs/                   # 配置模板、作物数据、UI 文案
 ├── templates/                 # 模板图片与阈值
 ├── tools/                     # 模板采集、种子导入等工具
+├── skills/                    # 项目内维护的 Codex 技能
 └── .github/                   # GitHub Actions 与 Release Notes
 ```
 
