@@ -13,6 +13,7 @@
   shop_xx           — 仓库果实图标（复用商店模板）
 """
 import time
+from typing import Any
 import pyautogui
 from loguru import logger
 
@@ -23,8 +24,15 @@ from core.strategies.base import BaseStrategy
 
 class TaskStrategy(BaseStrategy):
 
-    def __init__(self, cv_detector):
+    # 每日任务页上的领取按钮会随窗口 DPI/缩放变化，OCR 定位比固定模板更稳。
+    _DAILY_ENTRY_TEMPLATES = ["btn_task", "btn_rw"]
+    _DAILY_CLAIM_TEMPLATES = [
+        "btn_claim_task", "btn_claim_yellow", "btn_claim", "btn_direct_claim",
+    ]
+
+    def __init__(self, cv_detector, ocr_tool=None):
         super().__init__(cv_detector)
+        self.ocr_tool = ocr_tool
 
     def try_sell_direct(self, rect: tuple) -> list[str]:
         """直接出售入口（不依赖任务条），移植自 copilot 的独立出售流程
@@ -85,17 +93,188 @@ class TaskStrategy(BaseStrategy):
         return []
 
     def try_task(self, rect: tuple, detections: list[DetectResult]) -> list[str]:
-        """检测任务条并执行"""
+        """兼容旧调用方，但始终走每日任务安全流程。"""
+        return self.try_daily_tasks(rect, detections)
+
+    def try_daily_tasks(self, rect: tuple,
+                        detections: list[DetectResult] | None = None) -> list[str]:
+        """只领取“每日任务”页的已完成奖励。
+
+        任务页同时包含“成长任务”，所以不能看到通用 ``领取`` 按钮就直接点击。
+        必须先通过 OCR 确认页面标题为“每日任务”；OCR 不可用或标题不明确时采用
+        fail-closed 策略，不执行任何领取操作。
+        """
         if self.stopped:
             return []
-        btn = self.find_by_name(detections, "btn_task")
-        if not btn:
+
+        cv_img, page_dets, _ = self.capture(rect)
+        if cv_img is None:
             return []
 
-        self.click(btn.x, btn.y, "点击任务")
-        time.sleep(1.0)  # 等待任务弹窗或页面跳转
+        # 已经在任务页时直接校验；否则从农场入口打开任务页。
+        daily_state = self._daily_page_state(cv_img)
+        if daily_state != "daily":
+            entry_dets = detections or page_dets
+            entry = self.find_any(entry_dets, self._DAILY_ENTRY_TEMPLATES)
+            if entry is None:
+                _, entry_dets = self.quick_detect(rect, self._DAILY_ENTRY_TEMPLATES)
+                entry = self.find_any(entry_dets, self._DAILY_ENTRY_TEMPLATES)
+            if entry is None:
+                return []
 
-        return self._handle_task_result(rect)
+            if not self.click(entry.x, entry.y, "打开每日任务"):
+                return []
+            time.sleep(0.8)
+
+            # 等待页面动画完成，同时把成长任务和 OCR 失败都挡在领取之前。
+            for _ in range(5):
+                if self.stopped:
+                    return []
+                cv_img, _, _ = self.capture(rect)
+                if cv_img is None:
+                    return []
+                daily_state = self._daily_page_state(cv_img)
+                if daily_state != "unknown":
+                    break
+                time.sleep(0.25)
+
+        if daily_state != "daily":
+            logger.info("任务页不是每日任务或标题无法确认，跳过领取")
+            self._close_daily_page(rect)
+            return []
+
+        actions: list[str] = []
+        # 每次点击后重新 OCR，避免列表刷新后沿用旧坐标。
+        for _ in range(12):
+            if self.stopped:
+                break
+            cv_img, _, _ = self.capture(rect)
+            if cv_img is None or self._daily_page_state(cv_img) != "daily":
+                break
+
+            claim = self._find_daily_claim(cv_img)
+            if claim is None:
+                break
+            if not self.click(claim[0], claim[1], "领取每日任务奖励", ActionType.CLOSE_POPUP):
+                break
+            actions.append("领取每日任务奖励")
+            time.sleep(0.35)
+
+        self._close_daily_page(rect)
+        if actions:
+            logger.info(f"每日任务：领取 {len(actions)} 项奖励")
+        else:
+            logger.info("每日任务：没有可领取奖励")
+        return actions
+
+    def _ensure_ocr(self) -> Any | None:
+        """懒加载 OCR；缺少可选依赖时返回 None。"""
+        if self.ocr_tool is not None:
+            return self.ocr_tool
+        try:
+            from utils.ocr_provider import get_ocr_tool
+            self.ocr_tool = get_ocr_tool(scope="task")
+        except Exception as exc:
+            logger.debug(f"每日任务 OCR 不可用: {exc}")
+            self.ocr_tool = False
+        return self.ocr_tool or None
+
+    @staticmethod
+    def _ocr_item_text(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("text", ""))
+        return str(getattr(item, "text", ""))
+
+    @staticmethod
+    def _ocr_item_center(item: Any) -> tuple[int, int] | None:
+        box = item.get("box") if isinstance(item, dict) else getattr(item, "box", None)
+        if not box:
+            return None
+        try:
+            xs = [float(p[0]) for p in box]
+            ys = [float(p[1]) for p in box]
+            return int(sum(xs) / len(xs)), int(sum(ys) / len(ys))
+        except (TypeError, ValueError, IndexError, ZeroDivisionError):
+            return None
+
+    def _ocr_items(self, cv_img: Any) -> list[Any]:
+        ocr = self._ensure_ocr()
+        if ocr is None:
+            return []
+        try:
+            if hasattr(ocr, "detect"):
+                return ocr.detect(cv_img, scale=1.5, alpha=1.1, beta=0.0) or []
+            text, _ = ocr.detect_text(cv_img, scale=1.5, alpha=1.1, beta=0.0)
+            return [{"text": text, "box": []}] if text else []
+        except Exception as exc:
+            logger.debug(f"每日任务 OCR 失败: {exc}")
+            return []
+
+    def _daily_page_state(self, cv_img: Any) -> str:
+        """返回 daily/growth/unknown；unknown 必须按禁止领取处理。"""
+        items = self._ocr_items(cv_img)
+        if not items:
+            return "unknown"
+        text = "".join(self._ocr_item_text(item).replace(" ", "") for item in items)
+        # 真实任务面板会同时显示“成长任务”和“每日任务”。只要每日任务
+        # 分区存在，就按每日任务页处理；不能因为顶部的成长任务标题而跳过。
+        if "每日任务" in text:
+            return "daily"
+        if "成长任务" in text:
+            return "growth"
+        return "unknown"
+
+    def _daily_section_top(self, items: list[Any]) -> int | None:
+        """返回每日任务分区标题的 y 坐标，找不到时禁止领取。"""
+        tops: list[int] = []
+        for item in items:
+            text = self._ocr_item_text(item).replace(" ", "")
+            center = self._ocr_item_center(item)
+            if center is not None and "每日任务" in text:
+                tops.append(center[1])
+        return min(tops) if tops else None
+
+    def _find_daily_claim(self, cv_img: Any) -> tuple[int, int] | None:
+        """在已确认的每日任务页中定位最上方领取按钮。"""
+        items = self._ocr_items(cv_img)
+        w = cv_img.shape[1]
+        daily_top = self._daily_section_top(items)
+        if daily_top is None:
+            return None
+        claims: list[tuple[int, int]] = []
+        for item in items:
+            text = self._ocr_item_text(item).replace(" ", "")
+            center = self._ocr_item_center(item)
+            if center is None or "领取" not in text:
+                continue
+            # 领取按钮位于每行右侧，过滤标题/奖励说明中的同名文字。
+            if center[0] < int(w * 0.45) or center[1] <= daily_top:
+                continue
+            claims.append(center)
+        if claims:
+            return min(claims, key=lambda p: p[1])
+
+        # OCR 没识别到按钮文字时，仍只在已确认的每日页使用模板兜底。
+        dets = self.cv_detector.detect_targeted(
+            cv_img,
+            self._DAILY_CLAIM_TEMPLATES,
+            scales=[0.8, 0.9, 1.0, 1.1, 1.2],
+        )
+        candidates = [d for d in dets if d.x >= int(w * 0.45) and d.y > daily_top]
+        if not candidates:
+            return None
+        candidate = min(candidates, key=lambda d: d.y)
+        return candidate.x, candidate.y
+
+    def _close_daily_page(self, rect: tuple) -> None:
+        """离开任务页，避免后续通用弹窗逻辑误处理页面按钮。"""
+        cv_img, dets = self.quick_detect(rect, ["btn_rw_close", "btn_close"])
+        if cv_img is not None:
+            close = self.find_any(dets, ["btn_rw_close", "btn_close"])
+            if close:
+                self.click(close.x, close.y, "关闭每日任务", ActionType.CLOSE_POPUP)
+                time.sleep(0.25)
+                return
 
     def _handle_task_result(self, rect: tuple) -> list[str]:
         """根据点击任务后的页面判断执行什么"""

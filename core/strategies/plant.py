@@ -36,6 +36,9 @@ class PlantStrategy(BaseStrategy):
         # 翻页按钮位置校验：记录第一次检测到的真实翻页按钮坐标，用于后续防伪
         self._last_page_btn_pos = None
         self._purchase_verify_failures: dict[str, float] = {}
+        self.last_seed_missing = False
+        self.last_purchase_succeeded = False
+        self._seed_lookup_complete = False
 
     def _check_and_close_info_page(self, rect: tuple, exclude: list[str] = None) -> bool:
         """检测并关闭干扰页面（个人信息/任务/宠物/图鉴/仓库），返回是否成功关闭
@@ -179,6 +182,9 @@ class PlantStrategy(BaseStrategy):
         Returns:
             DetectResult | None: 找到的种子检测结果，或 None
         """
+        self._seed_lookup_complete = False
+        if cv_img is None:
+            return None
         seed_threshold = self.cv_detector.get_template_threshold(f"seed_{crop_name}")
         current_img = cv_img
 
@@ -231,6 +237,7 @@ class PlantStrategy(BaseStrategy):
             else:
                 # 翻页按钮消失 = 到达末页或面板已关闭
                 logger.warning("播种流程：未找到种子且未检测到翻页按钮（请检查是否存在 btn_seed_select_right.png 模板），视为到达末页")
+                self._seed_lookup_complete = True
                 break
 
         return None
@@ -335,7 +342,12 @@ class PlantStrategy(BaseStrategy):
 
         if not seed_det:
             panel_img, _, _ = self.capture(rect)
-            if self._seed_panel_open(panel_img, lands[0]):
+            if panel_img is not None and self._seed_panel_open(panel_img, lands[0]):
+                self.last_seed_missing = bool(
+                    self._seed_lookup_complete and not self.stopped
+                    and self._template_exists(f"seed_{crop_name}")
+                    and self._template_exists("btn_seed_select_right")
+                )
                 # 面板已打开但列表无目标种子，换地重试无意义（面板内容相同），直接结束
                 logger.info(f"播种流程：选种面板已打开但无 '{crop_name}' 种子，停止逐块重试")
                 self.click_blank(rect)
@@ -378,6 +390,7 @@ class PlantStrategy(BaseStrategy):
             return all_actions
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
+        self.last_seed_missing = False
 
         # 验证：检查是否弹出商店
         time.sleep(0.5)
@@ -418,6 +431,7 @@ class PlantStrategy(BaseStrategy):
         """
         # 重置购买计数器（新一轮播种）
         self._purchase_count = 0
+        self.last_seed_missing = False
 
         all_actions = []
 
@@ -471,7 +485,12 @@ class PlantStrategy(BaseStrategy):
         if not seed_det:
             # 廉价判据区分失败原因：原空地是否仍可见（面板弹出会遮挡它）
             panel_img, _, _ = self.capture(rect)
-            panel_open = self._seed_panel_open(panel_img, lands[0])
+            panel_open = panel_img is not None and self._seed_panel_open(panel_img, lands[0])
+            self.last_seed_missing = bool(
+                panel_open and self._seed_lookup_complete and not self.stopped
+                and self._template_exists(f"seed_{crop_name}")
+                and self._template_exists("btn_seed_select_right")
+            )
 
             # 没找到种子，先关闭种子弹窗
             logger.info(
@@ -570,6 +589,7 @@ class PlantStrategy(BaseStrategy):
             return all_actions
         logger.info(f"播种流程：拖拽播种完成，共 {planted_count} 块")
         all_actions.append(f"播种{crop_name}×{planted_count}")
+        self.last_seed_missing = False
         logger.info(f"播种流程：准备验证弹窗，planted_count={planted_count}")
 
         # 验证：检查是否弹出商店（种子用完）或施肥弹窗
@@ -1282,6 +1302,7 @@ class PlantStrategy(BaseStrategy):
                     self._close_shop(rect)
                     if not self._verify_purchase_in_warehouse(rect, crop_name):
                         return None
+                    self.last_purchase_succeeded = True
                     return f"购买{crop_name}"
 
             elif scene == Scene.POPUP:

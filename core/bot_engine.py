@@ -18,6 +18,7 @@ import ctypes
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 import cv2
@@ -30,6 +31,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from models.config import AppConfig, PlantMode, RunMode, TaskScheduleItemConfig
 from models.farm_state import ActionType
 from models.game_data import get_best_crop_for_level, get_crop_by_name, get_latest_crop_for_level, format_grow_time
+from utils.pushplus import format_seed_shortage_message, send_pushplus
 from core.window_manager import WindowManager
 from core.screen_capture import ScreenCapture
 from core.cv_detector import CVDetector, DetectResult
@@ -85,7 +87,8 @@ class BotWorker(QThread):
 SCENE_TEMPLATES = [
     # 弹窗指标
     "btn_close", "btn_info", "btn_info_close", "btn_buy_confirm", "btn_buy_max",
-    "btn_shop_close", "btn_shop", "btn_claim", "btn_rw_close",
+    "btn_shop_close", "btn_shop", "btn_claim", "btn_claim_task",
+    "btn_claim_yellow", "btn_direct_claim", "btn_rw", "btn_rw_close",
     "btn_share", "btn_confirm", "btn_cancel", "btn_dw_back",
     # 场景指标
     "btn_home", "btn_zhongzi", "btn_warehouse",
@@ -183,6 +186,14 @@ class BotEngine(QObject):
         self._bot_stop_requested = False  # 通用停止标志（任务级别）
         self._recovery_attempts: dict[str, dict[str, int]] = {}
         self._instance_paths: InstancePaths | None = None
+        self._seed_shortage_key: tuple[str, str, str] | None = None
+        self._seed_shortage_notified = False
+        self._seed_shortage_last_attempt = 0.0
+
+        self.window_manager.stopped = lambda: self._bot_stop_requested
+        self.window_manager.qq_recovery_allowed = self._qq_resource_recovery_allowed
+        self.window_manager.qq_restart_wait_seconds = lambda: self.config.recovery.restart_wait_seconds
+        self.window_manager.notify = self.log_message.emit
 
         # OCR 工具（延迟初始化）
         self._head_info_ocr = None
@@ -196,6 +207,16 @@ class BotEngine(QObject):
         self.scheduler.stats_updated.connect(self.stats_updated.emit)
         self.scheduler.window_lost.connect(self._on_window_lost)
         self.scheduler.set_window_check_fn(self._is_window_alive)
+
+    def _qq_resource_recovery_allowed(self) -> bool:
+        """资源弹窗恢复受现有自动恢复、窗口重启开关及重启次数限制控制。"""
+        restart = self.config.tasks.get("restart")
+        recovery = self.config.recovery
+        return bool(
+            recovery.enabled and recovery.auto_restart_on_window_lost
+            and recovery.max_restart_attempts > 0 and restart and restart.enabled
+            and not self._bot_stop_requested
+        )
 
     def _ensure_head_info_ocr(self):
         """延迟初始化 HeadInfoOCR。"""
@@ -236,9 +257,11 @@ class BotEngine(QObject):
         "btn_expand_confirm", "btn_fertilize_popup",
         "bth_feiliao2_yj", "bth_feiliao_pt",
         "btn_batch_sell", "btn_sell", "btn_cangku",
-        "btn_haoyou", "btn_task",
+        "btn_haoyou", "btn_task", "btn_rw", "btn_claim_task",
+        "btn_claim_yellow", "btn_direct_claim",
         # 礼品领取相关
-        "btn_qqsvip", "btn_mall_free", "btn_mall_free_done",
+        "btn_qqsvip", "ui_svip_page", "btn_svip_close",
+        "btn_mall_free", "btn_mall_free_done",
         "btn_oneclick_open", "mall_goto_main", "btn_shangcehng_fanhui",
     ]
 
@@ -469,9 +492,13 @@ class BotEngine(QObject):
 
 
     def start(self) -> bool:
+        if not self._stop_executor():
+            self.log_message.emit("启动失败：上一个任务仍在停止中，请稍后再试")
+            return False
         # 重置状态
         self._planted = False
         self._fertilized = False
+        self._bot_stop_requested = False
 
         # 初始化实例独立的目录（日志和截图）
         self._setup_instance_dirs()
@@ -491,7 +518,7 @@ class BotEngine(QObject):
             saved_hwnd=self.config.planting.last_hwnd,
         )
         if not window:
-            self.log_message.emit("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场")
+            self.log_message.emit(self.window_manager.last_launch_error or ("启动游戏失败，请检查快捷方式路径是否正确" if self.config.planting.game_shortcut_path else "未找到 QQ 农场窗口，请先打开微信小程序中的 QQ 农场"))
             return False
 
         # 持久化窗口句柄：下次重启时优先复用
@@ -966,6 +993,8 @@ class BotEngine(QObject):
         注意：不走 find_window，避免多实例过滤逻辑误判（自身 _pinned_hwnd 已清空时，
         其他实例的窗口会被过滤掉，导致误报窗口丢失）。
         """
+        if WindowManager.launch_in_progress():
+            return True
         hwnd = self.window_manager._pinned_hwnd
         if not hwnd:
             # 未锁定窗口（尚未启动或已丢失），由调度器决定是否触发 _on_window_lost
@@ -1014,19 +1043,10 @@ class BotEngine(QObject):
 
     def _on_window_lost(self):
         """窗口监控检测到游戏窗口关闭/黑屏，尝试自动重启"""
+        if WindowManager.launch_in_progress() or self._bot_stop_requested:
+            return
         logger.warning("窗口监控：检测到游戏窗口异常，尝试自动重启...")
         self.log_message.emit("⚠ 检测到游戏窗口异常，正在尝试自动重启...")
-
-        # 关闭可能冻结的旧窗口，清除占用
-        old_hwnd = self.window_manager._pinned_hwnd
-        if old_hwnd:
-            self.window_manager._all_claimed_hwnds.discard(old_hwnd)
-            self.window_manager._pinned_hwnd = None
-            try:
-                ctypes.windll.user32.PostMessageW(old_hwnd, 0x0010, 0, 0)
-            except Exception:
-                pass
-            time.sleep(1)
 
         window = self.window_manager.find_window(
             self.config.window_title_keyword,
@@ -1034,6 +1054,7 @@ class BotEngine(QObject):
             shortcut_path=self.config.planting.game_shortcut_path,
             select_rule=self.config.window_select_rule,
             select_account_keyword=self.config.planting.select_account_keyword,
+            force_restart=True,
         )
         if not window:
             logger.error("窗口监控：自动重启游戏失败")
@@ -1533,6 +1554,7 @@ class BotEngine(QObject):
         secondary_crop = self._resolve_secondary_crop_name()
         tertiary_crop = self._resolve_tertiary_crop_name()
         original_auto_buy_seed = bool(self.plant.auto_buy_seed)
+        self.plant.last_purchase_succeeded = False
 
         if secondary_crop and original_auto_buy_seed:
             logger.info(
@@ -1547,6 +1569,7 @@ class BotEngine(QObject):
 
         try:
             pa = self.plant.plant_all(rect, crop_name, auto_fertilize=self.config.features.auto_fertilize)
+            primary_missing = self.plant.last_seed_missing
         finally:
             self.plant.auto_buy_seed = original_auto_buy_seed
             self.plant._auto_buy_seed_pause_reason = ""
@@ -1558,6 +1581,7 @@ class BotEngine(QObject):
                 if self.popup.stopped:
                     return False
                 if warehouse_result.get("has_seed"):
+                    primary_missing = False
                     logger.info(
                         "播种策略：仓库仍有首选种子，重试首选播种 | 作物={} slot={} confidence={:.0%}",
                         crop_name,
@@ -1579,6 +1603,8 @@ class BotEngine(QObject):
             else:
                 logger.warning("播种策略：缺少 ws_{} 仓库模板，无法复查首选库存，回退次级", crop_name)
 
+        secondary_missing = False
+        tertiary_missing = False
         if secondary_crop and not self.popup.stopped:
             logger.info(
                 "播种策略：检查是否需要次级库存补播 | 首选={} 次级={} 自动买种临时暂停",
@@ -1597,6 +1623,7 @@ class BotEngine(QObject):
                     secondary_crop,
                     auto_fertilize=self.config.features.auto_fertilize,
                 )
+                secondary_missing = self.plant.last_seed_missing
             finally:
                 self.plant.auto_buy_seed = original_auto_buy_seed
                 self.plant._auto_buy_seed_pause_reason = ""
@@ -1620,6 +1647,7 @@ class BotEngine(QObject):
                         tertiary_crop,
                         auto_fertilize=self.config.features.auto_fertilize,
                     )
+                    tertiary_missing = self.plant.last_seed_missing
                 finally:
                     self.plant.auto_buy_seed = original_auto_buy_seed
                     self.plant._auto_buy_seed_pause_reason = ""
@@ -1641,6 +1669,8 @@ class BotEngine(QObject):
                         self._clear_screen(rect)
                         buy_result = self.plant._buy_seeds(rect, crop_name, skip_warehouse_check=True)
                         if buy_result:
+                            pa.append(buy_result)
+                            primary_missing = False
                             self._clear_screen(rect)
                             retry_actions = self.plant.plant_all(
                                 rect,
@@ -1667,6 +1697,8 @@ class BotEngine(QObject):
                     self._clear_screen(rect)
                     buy_result = self.plant._buy_seeds(rect, crop_name, skip_warehouse_check=True)
                     if buy_result:
+                        pa.append(buy_result)
+                        primary_missing = False
                         self._clear_screen(rect)
                         retry_actions = self.plant.plant_all(
                             rect,
@@ -1676,8 +1708,15 @@ class BotEngine(QObject):
                         if retry_actions:
                             pa.extend(retry_actions)
 
+        if (primary_missing and secondary_missing and tertiary_missing
+                and not self.plant.last_purchase_succeeded and not pa and not self.popup.stopped):
+            self._notify_seed_shortage(crop_name, secondary_crop, tertiary_crop)
+
         if pa:
             context.setdefault("actions_done", []).extend(pa)
+            if self.plant.last_purchase_succeeded or any("播种" in action for action in pa):
+                self._seed_shortage_notified = False
+                self._seed_shortage_key = None
             if any("播种" in action for action in pa):
                 self._planted = True
                 self._planted_idle_rounds = 0
@@ -1685,6 +1724,34 @@ class BotEngine(QObject):
                 self._fertilized = True
             return True
         return False
+
+    def _notify_seed_shortage(self, primary: str, secondary: str, tertiary: str) -> None:
+        """同一实例的一次连续缺种只提交一条消息。"""
+        config = self.config.notification
+        token = config.pushplus_token.strip()
+        if not config.enabled or not token:
+            return
+        key = (primary, secondary, tertiary)
+        if key != self._seed_shortage_key:
+            self._seed_shortage_key = key
+            self._seed_shortage_notified = False
+            self._seed_shortage_last_attempt = 0.0
+        if self._seed_shortage_notified or time.monotonic() - self._seed_shortage_last_attempt < 1800:
+            return
+
+        self._seed_shortage_last_attempt = time.monotonic()
+        self._seed_shortage_notified = True
+        instance_id = self.instance_id
+        title, content = format_seed_shortage_message(instance_id, primary, secondary, tertiary)
+
+        def send() -> None:
+            success, message = send_pushplus(token, title, content)
+            if not success and self._seed_shortage_key == key:
+                self._seed_shortage_notified = False
+            logger.info("PushPlus 缺种提醒 | 实例={} | {}", instance_id, message)
+            self.log_message.emit(f"PushPlus 缺种提醒：{message}")
+
+        threading.Thread(target=send, name=f"pushplus-{instance_id}", daemon=True).start()
 
     def _task_expand(self, context: dict) -> bool:
         """扩建任务"""
@@ -1707,10 +1774,10 @@ class BotEngine(QObject):
         return False
 
     def _task_task(self, context: dict) -> bool:
-        """任务/出售任务"""
+        """只领取每日任务奖励。"""
         rect = context.get("rect")
         detections = context.get("detections", [])
-        ta = self.task.try_task(rect, detections)
+        ta = self.task.try_daily_tasks(rect, detections)
         if ta:
             context.setdefault("actions_done", []).extend(ta)
             return True
@@ -2147,6 +2214,9 @@ class BotEngine(QObject):
 
     def _queue_recovery_after_failure(self, task_name: str, error: str) -> None:
         """任务失败后按配置排队 repair/restart，形成任务级恢复闭环。"""
+        if WindowManager.launch_in_progress():
+            logger.debug("其他实例正在启动或恢复 QQ，暂缓任务级恢复")
+            return
         recovery = getattr(self.config, "recovery", None)
         if not recovery or not recovery.enabled:
             return
@@ -2788,10 +2858,11 @@ class BotEngine(QObject):
         if cv_image is None:
             return TaskResult(success=False, error="截屏失败")
 
-        ta = self.task.try_task(rect, detections)
+        ta = self.task.try_daily_tasks(rect, detections)
         if ta:
             self._record_actions({"actions_done": ta})
-        return TaskResult(success=ta is not None and len(ta) > 0)
+        # 没有可领取奖励也是一次成功检查，避免任务调度器重复重试。
+        return TaskResult(success=True)
 
     def _run_task_share(self, ctx: TaskContext) -> TaskResult:
         """分享任务（daily 触发）"""
@@ -2863,67 +2934,59 @@ class BotEngine(QObject):
         if self._bot_stop_requested:
             return TaskResult(success=False, error="已停止")
 
+        if WindowManager.launch_in_progress():
+            return TaskResult(success=True, next_run_seconds=5)
+
         logger.info("[窗口重启] 定时重启开始")
         self.log_message.emit("[窗口重启] 正在重启游戏窗口...")
 
         # 暂停窗口监控，防止重启过程中触发 _on_window_lost 导致重复重启
+        was_paused = self.scheduler._window_monitor_paused
         self.scheduler._window_monitor_paused = True
+        try:
+            window = self.window_manager.find_window(
+                self.config.window_title_keyword,
+                auto_launch=True,
+                shortcut_path=self.config.planting.game_shortcut_path,
+                select_rule=self.config.window_select_rule,
+                select_account_keyword=self.config.planting.select_account_keyword,
+                saved_hwnd=0,
+                force_restart=True,
+            )
+            if not window:
+                if WindowManager.launch_in_progress():
+                    return TaskResult(success=True, next_run_seconds=5)
+                return TaskResult(success=False, error=self.window_manager.last_launch_error or "重启失败：窗口未找到")
 
-        lost_hwnd = getattr(self.window_manager, "_pinned_hwnd", None)
-        if lost_hwnd:
+            w, h = self.config.planting.window_width, self.config.planting.window_height
+            if w > 0 and h > 0:
+                time.sleep(1)
+                self.window_manager.resize_window(w, h, self.config.safety.window_position)
+                time.sleep(0.5)
+                window = self.window_manager._cached_window
+
+            rect = (window.left, window.top, window.width, window.height)
+            hwnd = window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
+            self.action_executor = ActionExecutor(
+                window_rect=rect,
+                hwnd=hwnd,
+                run_mode=self.config.safety.run_mode,
+                delay_min=self.config.safety.random_delay_min,
+                delay_max=self.config.safety.random_delay_max,
+                click_offset=self.config.safety.click_offset_range,
+            )
+            self.config.planting.last_hwnd = window.hwnd
             try:
-                self.window_manager._all_claimed_hwnds.discard(lost_hwnd)
-                ctypes.windll.user32.PostMessageW(lost_hwnd, 0x0010, 0, 0)
+                self.config.save()
             except Exception:
                 pass
-            time.sleep(1)
+            self._init_strategies()
 
-        self.window_manager._pinned_hwnd = None
-        self.window_manager._cached_window = None
-        self.config.planting.last_hwnd = 0
-
-        window = self.window_manager.find_window(
-            self.config.window_title_keyword,
-            auto_launch=True,
-            shortcut_path=self.config.planting.game_shortcut_path,
-            select_rule=self.config.window_select_rule,
-            select_account_keyword=self.config.planting.select_account_keyword,
-            saved_hwnd=0,
-        )
-        if not window:
-            self.scheduler._window_monitor_paused = False
-            return TaskResult(success=False, error="重启失败：窗口未找到")
-
-        w, h = self.config.planting.window_width, self.config.planting.window_height
-        if w > 0 and h > 0:
-            time.sleep(1)
-            self.window_manager.resize_window(w, h, self.config.safety.window_position)
-            time.sleep(0.5)
-            window = self.window_manager._cached_window
-
-        rect = (window.left, window.top, window.width, window.height)
-        hwnd = window.hwnd if self.config.safety.run_mode == RunMode.BACKGROUND else None
-        self.action_executor = ActionExecutor(
-            window_rect=rect,
-            hwnd=hwnd,
-            run_mode=self.config.safety.run_mode,
-            delay_min=self.config.safety.random_delay_min,
-            delay_max=self.config.safety.random_delay_max,
-            click_offset=self.config.safety.click_offset_range,
-        )
-        self.config.planting.last_hwnd = window.hwnd
-        try:
-            self.config.save()
-        except Exception:
-            pass
-        self._init_strategies()
-
-        # 恢复窗口监控
-        self.scheduler._window_monitor_paused = False
-
-        self.log_message.emit(f"[窗口重启] ✓ 已重启: {window.title}")
-        logger.info(f"[窗口重启] 完成: {window.title}")
-        return TaskResult(success=True)
+            self.log_message.emit(f"[窗口重启] ✓ 已重启: {window.title}")
+            logger.info(f"[窗口重启] 完成: {window.title}")
+            return TaskResult(success=True)
+        finally:
+            self.scheduler._window_monitor_paused = was_paused
 
     def _run_task_keepalive(self, ctx: TaskContext) -> TaskResult:
         """保活任务：检测锚点 → 点击 → 小幅滑动，防止游戏超时下线"""

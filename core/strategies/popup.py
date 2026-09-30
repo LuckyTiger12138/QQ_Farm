@@ -11,8 +11,12 @@ from core.strategies.base import BaseStrategy, SCALES_FAST
 POPUP_TEMPLATES = [
     "btn_share",      # 分享（拿双倍奖励）
     "btn_claim",      # 领取
+    "btn_claim_task", # 每日任务领取
+    "btn_claim_yellow", # 每日任务领取（黄色按钮）
+    "btn_direct_claim", # 每日任务直接领取
     "btn_confirm",    # 确认
     "btn_close",      # 关闭
+    "btn_rw_close",   # 任务面板关闭
     "btn_cancel",     # 取消
     "btn_dw_back",    # 端午节活动返回
 ]
@@ -28,6 +32,10 @@ class PopupStrategy(BaseStrategy):
     def handle_popup(self, detections: list[DetectResult]) -> str | None:
         """处理弹窗：分享 (双倍奖励) > 领取 > 确认 > 关闭 > 取消（兼容旧接口）"""
         if self.stopped:
+            return None
+        # 任务面板同时包含成长任务和每日任务。通用弹窗策略不能凭“领取”
+        # 按钮直接点击，必须交给 TaskStrategy 先确认每日任务分区。
+        if self._is_task_panel(detections):
             return None
         # 优先检测分享按钮（任务奖励弹窗，拿双倍）
         share_btn = self.find_by_name(detections, "btn_share")
@@ -62,6 +70,9 @@ class PopupStrategy(BaseStrategy):
         if cv_img is None:
             return None
 
+        if self._is_task_panel(dets):
+            return None
+
         # 优先分享（拿双倍奖励）
         share_btn = self.find_by_name(dets, "btn_share")
         if share_btn:
@@ -80,6 +91,17 @@ class PopupStrategy(BaseStrategy):
                 self.click(det.x, det.y, f"关闭弹窗 ({label})", ActionType.CLOSE_POPUP)
                 return f"关闭弹窗 ({label})"
         return None
+
+    @staticmethod
+    def _is_task_panel(detections: list[DetectResult]) -> bool:
+        """识别任务面板，避免领取按钮被通用弹窗逻辑抢先点击。"""
+        names = {d.name for d in detections}
+        has_close = "btn_rw_close" in names
+        has_task_action = bool(names & {
+            "btn_claim", "btn_claim_task", "btn_claim_yellow", "btn_direct_claim",
+            "btn_share",
+        })
+        return has_close and has_task_action
 
     def _share_and_cancel(self, share_btn: DetectResult) -> str:
         """点分享 → 等微信窗口弹出 → 点取消 → 回游戏，拿双倍奖励

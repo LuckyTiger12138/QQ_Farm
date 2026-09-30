@@ -5,14 +5,17 @@ from __future__ import annotations
 import ctypes
 import os
 import pathlib
+import threading
 
 import pygetwindow as gw
-from PyQt6.QtCore import QTime, Qt, pyqtSignal
+from PyQt6.QtCore import QTime, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QLineEdit,
     QSizePolicy,
     QTimeEdit,
     QVBoxLayout,
@@ -34,6 +37,7 @@ from gui.styles import Colors
 from gui.widgets.fluent_container import StableElevatedCardWidget, TransparentCardContainer
 from models.config import AppConfig, PlantMode, RunMode, WindowPosition, CrossInstancePartnerConfig
 from models.game_data import CROPS, format_grow_time, get_best_crop_for_level, get_crop_names
+from utils.pushplus import format_seed_shortage_message, send_pushplus
 
 
 CROP_COMBO_MAX_VISIBLE_ITEMS = 10
@@ -44,6 +48,7 @@ class SettingsPanel(QWidget):
 
     config_changed = pyqtSignal(object)
     web_server_toggled = pyqtSignal(bool)
+    pushplus_test_finished = pyqtSignal(object, bool, str)
 
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -204,6 +209,37 @@ class SettingsPanel(QWidget):
         web_addr_layout.addWidget(self.web_port)
         web_addr_layout.addStretch()
         web_form.addRow(self._field_label("", web_card), web_addr_row)
+
+        # ── 微信提醒卡片 ──
+        notify_card, notify_form = self._build_group_card(content, "微信提醒", "settingsNotificationCard")
+        layout.addWidget(notify_card)
+        self.pushplus_enabled = CheckBox("三级作物均缺种时推送", notify_card)
+        notify_form.addRow(self._field_label("PushPlus", notify_card), self.pushplus_enabled)
+        self.pushplus_token = LineEdit(notify_card)
+        self.pushplus_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pushplus_token.setPlaceholderText("PushPlus Token")
+        token_row = QWidget(notify_card)
+        token_layout = QHBoxLayout(token_row)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.setSpacing(8)
+        token_layout.addWidget(self.pushplus_token, 1)
+        self.pushplus_token_link = PushButton("获取 Token", token_row)
+        self.pushplus_token_link.setToolTip("打开 PushPlus 官网")
+        token_layout.addWidget(self.pushplus_token_link)
+        notify_form.addRow(self._field_label("Token", notify_card), token_row)
+        token_help = CaptionLabel("微信登录 PushPlus，进入个人中心复制 Token；关注推送加服务号以接收消息。", notify_card)
+        token_help.setWordWrap(True)
+        notify_form.addRow(self._field_label("", notify_card), token_help)
+        test_row = QWidget(notify_card)
+        test_layout = QHBoxLayout(test_row)
+        test_layout.setContentsMargins(0, 0, 0, 0)
+        test_layout.setSpacing(8)
+        self.pushplus_test_btn = PushButton("测试推送", test_row)
+        test_layout.addWidget(self.pushplus_test_btn)
+        self.pushplus_test_status = CaptionLabel("", test_row)
+        self.pushplus_test_status.setWordWrap(True)
+        test_layout.addWidget(self.pushplus_test_status, 1)
+        notify_form.addRow(self._field_label("", notify_card), test_row)
 
         # ── 高级卡片 ──
         adv_card, adv_form = self._build_group_card(content, "高级", "settingsAdvCard")
@@ -441,6 +477,13 @@ class SettingsPanel(QWidget):
         self.web_toggle_btn.clicked.connect(self._on_web_toggle)
         self.web_host.editingFinished.connect(self._auto_save)
         self.web_port.valueChanged.connect(self._auto_save)
+        self.pushplus_enabled.toggled.connect(self._auto_save)
+        self.pushplus_token.editingFinished.connect(self._auto_save)
+        self.pushplus_token_link.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://www.pushplus.plus/"))
+        )
+        self.pushplus_test_btn.clicked.connect(self._on_pushplus_test)
+        self.pushplus_test_finished.connect(self._on_pushplus_test_finished)
         # 高级
         self.delay_min.valueChanged.connect(self._auto_save)
         self.delay_max.valueChanged.connect(self._auto_save)
@@ -494,6 +537,8 @@ class SettingsPanel(QWidget):
             # Web
             c.web.host = str(self.web_host.text() or "0.0.0.0").strip()
             c.web.port = int(self.web_port.value())
+            c.notification.enabled = bool(self.pushplus_enabled.isChecked())
+            c.notification.pushplus_token = str(self.pushplus_token.text() or "").strip()
             # 高级
             d_min, d_max = float(self.delay_min.value()), float(self.delay_max.value())
             c.safety.random_delay_min = min(d_min, d_max)
@@ -518,6 +563,42 @@ class SettingsPanel(QWidget):
             self.config_changed.emit(c)
         finally:
             self._loading -= 1
+
+    def _on_pushplus_test(self) -> None:
+        token = str(self.pushplus_token.text() or "").strip()
+        if not token:
+            self.pushplus_test_status.setText("请先填写 Token")
+            return
+
+        config = self.config
+        config_path = pathlib.Path(str(getattr(config, "_config_path", "") or "config.json"))
+        instance_id = config_path.parent.parent.name if config_path.parent.name == "configs" else "default"
+        title, content = format_seed_shortage_message(
+            instance_id,
+            str(self.crop.currentData() or "未设置"),
+            str(self.secondary_crop.currentData() or "未设置"),
+            str(self.tertiary_crop.currentData() or "未设置"),
+            test=True,
+        )
+        self.pushplus_test_btn.setEnabled(False)
+        self.pushplus_test_status.setText("正在发送测试消息…")
+
+        def send() -> None:
+            try:
+                success, message = send_pushplus(token, title, content)
+            except Exception as exc:
+                success, message = False, f"请求失败 ({type(exc).__name__})"
+            try:
+                self.pushplus_test_finished.emit(config, success, message)
+            except RuntimeError:
+                pass  # 面板关闭期间完成请求，无需再更新界面
+
+        threading.Thread(target=send, name="pushplus-test", daemon=True).start()
+
+    def _on_pushplus_test_finished(self, config: object, success: bool, message: str) -> None:
+        self.pushplus_test_btn.setEnabled(True)
+        if config is self.config:
+            self.pushplus_test_status.setText(f"{'提交成功' if success else '发送失败'}：{message}")
 
     # ── 种植策略联动 ────────────────────────────────────────
 
@@ -741,6 +822,8 @@ class SettingsPanel(QWidget):
         self._update_web_ui(c.web.enabled)
         self.web_host.setText(str(c.web.host or "0.0.0.0"))
         self.web_port.setValue(int(c.web.port))
+        self.pushplus_enabled.setChecked(bool(c.notification.enabled))
+        self.pushplus_token.setText(str(c.notification.pushplus_token or ""))
         # 高级
         self.delay_min.setValue(float(c.safety.random_delay_min))
         self.delay_max.setValue(float(c.safety.random_delay_max))

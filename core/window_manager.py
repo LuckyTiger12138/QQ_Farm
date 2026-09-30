@@ -3,7 +3,9 @@ import ctypes
 import ctypes.wintypes
 import os
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from loguru import logger
 
@@ -11,6 +13,7 @@ import pygetwindow as gw
 from PyQt6.QtCore import QCoreApplication
 
 from models.config import WindowPosition
+from core.qq_client_recovery import QQClientRecovery, get_window_pid, list_qq_processes, resolve_qq_client
 
 
 @dataclass
@@ -25,11 +28,134 @@ class WindowInfo:
 
 class WindowManager:
     _all_claimed_hwnds: set[int] = set()  # 类级共享：所有实例已占用的窗口句柄
+    _launch_lock = threading.Lock()  # 关闭/启动/选择账号在所有实例间串行执行
 
     def __init__(self):
         self._cached_window: WindowInfo | None = None
         self._pinned_hwnd: int | None = None  # 锁定的窗口句柄，防止多实例串台
         self._select_account_handled: set[int] = set()  # 已处理过的选择账号窗口 hwnd
+        self._select_account_attempted_at: dict[int, float] = {}
+        self._pending_resource_prompt: int | None = None
+        self.last_launch_error = ""
+        self.stopped: Callable[[], bool] = lambda: False
+        self.qq_recovery_allowed: Callable[[], bool] = lambda: False
+        self.qq_restart_wait_seconds: Callable[[], int] = lambda: 30
+        self.notify: Callable[[str], None] = logger.info
+
+    @classmethod
+    def launch_in_progress(cls) -> bool:
+        """窗口监控在任一实例启动/恢复期间暂缓判断，避免重复关闭窗口。"""
+        return cls._launch_lock.locked()
+
+    def _wait_for_launch(self, seconds: float) -> bool:
+        """启动等待可随停止按钮中断，GUI 线程启动时仍处理界面事件。"""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self.stopped():
+                return False
+            QCoreApplication.processEvents()
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        return not self.stopped()
+
+    def _launch_and_wait(
+        self, title_keyword: str, shortcut_path: str, account_keyword: str,
+    ) -> list:
+        """等待农场启动；确认为资源下载弹窗时，最多恢复一次 QQ 后重试。"""
+        restarted_qq_pid: int | None = None
+        for attempt in range(2):
+            if self.stopped():
+                self.last_launch_error = "已停止启动"
+                return []
+            existing_hwnds = {int(w._hWnd) for w in gw.getAllWindows()}
+            existing_hwnds.discard(self._pending_resource_prompt)
+            existing_game_hwnds = {int(w._hWnd) for w in self._list_all_windows(title_keyword)}
+            self._select_account_handled.clear()
+            self._select_account_attempted_at.clear()
+            if not self.launch_game(shortcut_path):
+                self.last_launch_error = "游戏快捷方式启动失败"
+                return []
+            logger.info("等待游戏启动（最多 30 秒）...")
+            deadline = time.monotonic() + 30
+            next_prompt_check = 0.0
+            account_selected = False
+            account_grace_extended = False
+            while time.monotonic() < deadline:
+                if not self._wait_for_launch(0.5):
+                    self.last_launch_error = "已停止启动"
+                    return []
+                prompt = None
+                if time.monotonic() >= next_prompt_check:
+                    next_prompt_check = time.monotonic() + 2
+                    try:
+                        prompt = QQClientRecovery.find_resource_prompt(existing_hwnds)
+                    except Exception as exc:
+                        logger.debug(f"QQ 资源弹窗识别暂不可用: {type(exc).__name__}")
+                if prompt:
+                    logger.warning(f"资源下载弹窗已识别，进入 QQ 恢复流程: hwnd={prompt}")
+                    self._pending_resource_prompt = prompt
+                    self.last_launch_error = "QQ 小程序资源下载异常，请检查 QQ 登录状态"
+                    if attempt:
+                        self.notify("✗ QQ 重启后仍出现资源下载弹窗，本轮停止恢复，避免循环重启")
+                        return []
+                    if not self.qq_recovery_allowed():
+                        self.notify("✗ 检测到资源下载弹窗；自动恢复或重启任务未启用，请手动重启 QQ")
+                        return []
+                    if not account_selected:
+                        self.last_launch_error = "QQ 恢复前未确认目标账号，取消农场重启"
+                        self.notify(f"✗ {self.last_launch_error}")
+                        return []
+                    restarted_qq_pid = QQClientRecovery.restart_for_prompt(prompt, self.stopped, self.notify)
+                    if not restarted_qq_pid:
+                        return []
+                    self._pending_resource_prompt = None
+                    self._pinned_hwnd = None
+                    self._cached_window = None
+                    self._all_claimed_hwnds.intersection_update({
+                        hwnd for hwnd in self._all_claimed_hwnds
+                        if ctypes.windll.user32.IsWindow(ctypes.wintypes.HWND(hwnd))
+                    })
+                    wait_seconds = max(1, min(120, self.qq_restart_wait_seconds()))
+                    if not self._wait_for_launch(wait_seconds):
+                        self.last_launch_error = "QQ 已重开，农场启动已停止"
+                        return []
+                    break
+                if account_keyword:
+                    if self._handle_select_account(existing_hwnds, account_keyword):
+                        account_selected = True
+                        if not account_grace_extended:
+                            # QQ 账号确认后，资源弹窗可能延迟数分钟才出现。
+                            deadline = max(deadline, time.monotonic() + 300)
+                            account_grace_extended = True
+                            logger.info("账号已确认，资源弹窗监测窗口延长至 5 分钟")
+                if self.stopped():
+                    self.last_launch_error = "已停止启动"
+                    return []
+                windows = [
+                    w for w in self._list_all_windows(title_keyword)
+                    if int(w._hWnd) not in existing_game_hwnds
+                    and int(w._hWnd) not in self._all_claimed_hwnds
+                ]
+                if windows:
+                    if account_keyword and not (account_selected or restarted_qq_pid):
+                        logger.warning("发现农场窗口，但目标 QQ 账号尚未确认；拒绝绑定该窗口")
+                        continue
+                    if restarted_qq_pid:
+                        processes = list_qq_processes()
+                        windows = [
+                            window for window in windows
+                            if (owner := resolve_qq_client(get_window_pid(int(window._hWnd)), processes))
+                            and owner.pid == restarted_qq_pid
+                        ]
+                        if not windows:
+                            logger.warning("新农场窗口不属于刚重启的 QQ，拒绝绑定")
+                            continue
+                    self.last_launch_error = ""
+                    return windows
+            else:
+                self.last_launch_error = "等待农场启动超时，请确认对应 QQ 账号已登录"
+                self.notify(f"✗ {self.last_launch_error}")
+                return []
+        return []
 
     def launch_game(self, shortcut_path: str) -> bool:
         """通过快捷方式启动游戏"""
@@ -70,7 +196,7 @@ class WindowManager:
         Returns:
             bool: 是否找到并处理了选择账号窗口
         """
-        if not keyword:
+        if not keyword or self.stopped():
             return False
 
         target = None
@@ -91,8 +217,11 @@ class WindowManager:
             return False
 
         hwnd = int(getattr(target, '_hWnd', 0) or 0)
+        now = time.monotonic()
+        if now - self._select_account_attempted_at.get(hwnd, -10.0) < 2:
+            return False
+        self._select_account_attempted_at[hwnd] = now
         logger.info(f"检测到选择账号窗口: hwnd={hwnd} {target.width}x{target.height}")
-        self._select_account_handled.add(hwnd)
 
         from core.screen_capture import ScreenCapture
         sc = ScreenCapture()
@@ -117,10 +246,13 @@ class WindowManager:
         # 激活窗口到前台（Electron 窗口必须前台才能接收点击）
         ctypes.windll.user32.ShowWindow(hwnd, 9)
         ctypes.windll.user32.SetForegroundWindow(hwnd)
-        time.sleep(0.5)
+        if not self._wait_for_launch(0.5):
+            return False
 
         for item in items:
             if keyword in item.text:
+                if self.stopped():
+                    return False
                 tw = int(getattr(target, 'width', 0) or 0)
                 cx = int(tw * 0.12)
                 cy = int(sum(p[1] for p in item.box) / 4)
@@ -128,16 +260,20 @@ class WindowManager:
                 abs_y = int(target.top) + cy
                 logger.info(f"选择账号: 匹配 '{keyword}' → 点击 ({abs_x}, {abs_y})")
                 self._click_screen(abs_x, abs_y)
-                time.sleep(1.0)
-
-                self._click_confirm(hwnd, target)
+                if not self._wait_for_launch(1.0):
+                    return False
+                if not self._click_confirm(hwnd, target):
+                    return False
+                self._select_account_handled.add(hwnd)
                 return True
 
         logger.warning(f"选择账号: 未找到包含 '{keyword}' 的账号")
         return False
 
-    def _click_confirm(self, hwnd: int, target) -> None:
+    def _click_confirm(self, hwnd: int, target: gw.Win32Window) -> bool:
         """点击选择账号窗口的确定按钮"""
+        if self.stopped():
+            return False
         from core.screen_capture import ScreenCapture
         sc = ScreenCapture()
         img = sc.capture((0, 0, 0, 0), hwnd=hwnd)
@@ -156,15 +292,20 @@ class WindowManager:
                         abs_x = int(target.left) + cx
                         abs_y = int(target.top) + cy
                         logger.info(f"点击确定: ({abs_x}, {abs_y})")
+                        if self.stopped():
+                            return False
                         self._click_screen(abs_x, abs_y)
-                        return
+                        return True
             except Exception as e:
                 logger.debug(f"确定按钮 OCR 失败: {e}")
 
         fx = int(target.left) + int(target.width * 0.5)
         fy = int(target.top) + int(target.height * 0.85)
         logger.info(f"点击确定(兜底坐标): ({fx}, {fy})")
+        if self.stopped():
+            return False
         self._click_screen(fx, fy)
+        return True
 
     def _click_screen(self, x: int, y: int) -> None:
         """在屏幕绝对坐标处模拟左键点击"""
@@ -190,7 +331,53 @@ class WindowManager:
             logger.error(f"验证 hwnd {hwnd} 失败: {e}")
         return None
 
-    def find_window(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto", select_account_keyword: str = "", saved_hwnd: int = 0) -> WindowInfo | None:
+    def find_window(
+        self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False,
+        shortcut_path: str = "", select_rule: str = "auto",
+        select_account_keyword: str = "", saved_hwnd: int = 0,
+        force_restart: bool = False,
+    ) -> WindowInfo | None:
+        """串行查找/启动窗口；强制重启也在同一把锁内关闭旧窗口。"""
+        if not self._launch_lock.acquire(blocking=False):
+            self.last_launch_error = "其他实例正在启动或恢复 QQ，稍后重试"
+            return None
+        try:
+            self.last_launch_error = ""
+            if auto_launch and self.stopped():
+                self.last_launch_error = "已停止启动"
+                return None
+            if force_restart:
+                old_hwnd = self._pinned_hwnd
+                if old_hwnd and self._verify_and_pin_window(old_hwnd, title_keyword):
+                    ctypes.windll.user32.PostMessageW(ctypes.wintypes.HWND(old_hwnd), 0x0010, 0, 0)
+                    deadline = time.monotonic() + 5
+                    while ctypes.windll.user32.IsWindow(ctypes.wintypes.HWND(old_hwnd)):
+                        if time.monotonic() >= deadline or not self._wait_for_launch(0.1):
+                            self.last_launch_error = "旧游戏窗口未关闭或任务已停止"
+                            return None
+                self._all_claimed_hwnds.discard(old_hwnd)
+                self._pinned_hwnd = None
+                self._cached_window = None
+                saved_hwnd = 0
+                if auto_launch and shortcut_path:
+                    windows = self._launch_and_wait(title_keyword, shortcut_path, select_account_keyword)
+                    if not windows:
+                        return None
+                    window = windows[0]
+                    self._pinned_hwnd = int(window._hWnd)
+                    self._all_claimed_hwnds.add(self._pinned_hwnd)
+                    return self._create_window_info(window)
+            return self._find_window_locked(
+                title_keyword, auto_launch, shortcut_path, select_rule, select_account_keyword, saved_hwnd,
+            )
+        except Exception as exc:
+            self.last_launch_error = f"查找或重启窗口失败: {type(exc).__name__}"
+            logger.exception(self.last_launch_error)
+            return None
+        finally:
+            self._launch_lock.release()
+
+    def _find_window_locked(self, title_keyword: str = "QQ 经典农场", auto_launch: bool = False, shortcut_path: str = "", select_rule: str = "auto", select_account_keyword: str = "", saved_hwnd: int = 0) -> WindowInfo | None:
         """通过标题关键词和选择规则查找窗口，可选自动启动游戏
 
         Args:
@@ -226,11 +413,6 @@ class WindowManager:
             # 2. 列出所有匹配窗口
             windows = self._list_all_windows(title_keyword)
 
-            # 记录所有已有窗口（用于启动后排除旧窗口，必须在过滤前计算）
-            existing_game_hwnds: set[int] = {
-                int(getattr(w, '_hWnd', 0) or 0) for w in windows
-            }
-
             # 2.5 多实例模式：过滤掉已被其他实例占用的窗口
             if not self._pinned_hwnd:
                 claimed_by_others = self._all_claimed_hwnds - {self._pinned_hwnd}
@@ -249,29 +431,10 @@ class WindowManager:
             if not windows:
                 # 如果还是没找到且启用了自动启动
                 if auto_launch and shortcut_path:
-                    existing_qq_hwnds = self._get_qq_hwnds()
                     logger.info(f"未找到窗口 '{title_keyword}'，尝试启动游戏...")
-                    if self.launch_game(shortcut_path):
-                        # 等待游戏启动（最多 30 秒）
-                        logger.info("等待游戏启动（最多 30 秒）...")
-                        for i in range(60):
-                            time.sleep(0.5)
-                            QCoreApplication.processEvents()
-                            if select_account_keyword:
-                                self._handle_select_account(existing_qq_hwnds, select_account_keyword)
-                            windows = self._list_all_windows(title_keyword)
-                            if existing_game_hwnds:
-                                windows = [
-                                    w for w in windows
-                                    if int(getattr(w, '_hWnd', 0) or 0)
-                                    not in existing_game_hwnds
-                                ]
-                            if windows:
-                                break
-                        else:
-                            all_titles = [w.title for w in gw.getAllWindows() if w.title.strip()]
-                            logger.warning(f"等待超时，当前窗口列表：{all_titles}")
-                            return None
+                    windows = self._launch_and_wait(title_keyword, shortcut_path, select_account_keyword)
+                    if not windows:
+                        return None
                 else:
                     logger.warning(f"未找到包含 '{title_keyword}' 的窗口")
                     return None

@@ -117,8 +117,8 @@ class Navigator:
             btn = self._find(dets, btn_names)
             if btn:
                 logger.info(f"导航: {current.cn_name} → {next_page.cn_name}")
-                self.click(btn.x + btn.w // 2, btn.y + btn.h // 2,
-                           f"导航到{next_page.cn_name}")
+                # detect_targeted 返回的 x/y 已是模板中心，直接点击
+                self.click(btn.x, btn.y, f"导航到{next_page.cn_name}")
                 time.sleep(1.0)
             else:
                 logger.debug(f"导航: 找不到按钮 {btn_names}，尝试关闭弹窗")
@@ -152,7 +152,7 @@ class Navigator:
             return False
         btn = self._find(dets, self._POPUP_TEMPLATES)
         if btn:
-            self.click(btn.x + btn.w // 2, btn.y + btn.h // 2, "关闭弹窗")
+            self.click(btn.x, btn.y, "关闭弹窗")
             time.sleep(0.3)
             return True
         return False

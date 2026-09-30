@@ -83,8 +83,9 @@ class RecoveryConfig(BaseModel):
 
 
 class NotificationConfig(BaseModel):
-    """异常通知配置（先保留配置入口，具体通道后续接入）"""
+    """消息通知配置。"""
     enabled: bool = False
+    pushplus_token: str = ""
     exception_notify_enabled: bool = False
     win_toast_enabled: bool = True
     onepush_config: str = ""
